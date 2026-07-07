@@ -196,5 +196,7 @@ SIMPLE_JWT = {
 WINEAPI_BASE_URL = os.getenv("WINEAPI_BASE_URL", "https://api.wineapi.io")
 WINEAPI_KEY = os.getenv("WINEAPI_KEY", "")
 WINEAPI_TIMEOUT = int(os.getenv("WINEAPI_TIMEOUT", "15"))
+# L'identification par photo d'étiquette (vision) est bien plus lente : timeout dédié.
+WINEAPI_IMAGE_TIMEOUT = int(os.getenv("WINEAPI_IMAGE_TIMEOUT", "45"))
 # Appelle /wines/{id} après identification pour récupérer cépages/appellation/notes.
 WINEAPI_ENRICH_DETAIL = os.getenv("WINEAPI_ENRICH_DETAIL", "True") == "True"

@@ -54,6 +54,11 @@ class NormalizeTests(SimpleTestCase):
         self.assertEqual(normalize.guess_couleur("Vin blanc sec"), "BLANC")
         self.assertEqual(normalize.guess_couleur("boisson"), "AUTRE")
 
+    def test_parse_vintage(self):
+        self.assertEqual(normalize.parse_vintage("Château X 2018"), 2018)
+        self.assertEqual(normalize.parse_vintage(None, "Cuvée 1998 Réserve"), 1998)
+        self.assertIsNone(normalize.parse_vintage("sans année", ""))
+
 
 def _fake_urlopen(payload_bytes):
     """Contexte manager imitant urllib.request.urlopen (.read())."""
@@ -93,6 +98,14 @@ class OpenFoodFactsProviderTests(SimpleTestCase):
     def test_reseau_indisponible_est_un_miss(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.URLError("réseau coupé")
         self.assertIsNone(self.provider.lookup_by_barcode("3760012345678"))
+
+    @patch("apps.catalog.enrichment.openfoodfacts.urllib.request.urlopen")
+    def test_millesime_parse_depuis_le_nom(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_urlopen(
+            b'{"status": 1, "product": {"product_name": "Ch\\u00e2teau X 2018", "code": "1"}}'
+        )
+        wine = self.provider.lookup_by_barcode("1")
+        self.assertEqual(wine.millesime, 2018)
 
 
 class UpsertCuveeTests(TestCase):
@@ -194,6 +207,7 @@ class ScanCodeBarresViewTests(APITestCase):
         wine = NormalizedWine(
             domaine_nom="Dom Externe", cuvee_nom="Cuvée Externe",
             couleur="ROUGE", code_barres="3760012345888", source="openfoodfacts",
+            millesime=2019,
         )
         mock_providers.return_value = [_FakeProvider(wine=wine)]
 
@@ -201,6 +215,7 @@ class ScanCodeBarresViewTests(APITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["source"], "openfoodfacts")
+        self.assertEqual(resp.data["millesime"], 2019)  # préremplissage du millésime
         self.assertTrue(resp.data["created"])
         # Mise en cache locale vérifiée : la cuvée est désormais en base.
         self.assertTrue(Cuvee.objects.filter(code_barres="3760012345888").exists())
@@ -426,6 +441,14 @@ class WineApiProviderTests(SimpleTestCase):
     def test_reponse_sans_wine_renvoie_none(self, mock_urlopen):
         mock_urlopen.return_value = _fake_urlopen(b'{"confidence": 0.2}')
         self.assertIsNone(self.provider.lookup_by_text("inconnu"))
+
+    @override_settings(WINEAPI_IMAGE_TIMEOUT=45, WINEAPI_ENRICH_DETAIL=False)
+    @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")
+    def test_lookup_by_image_utilise_le_timeout_image(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_urlopen(b'{"wine": {"id": 1, "name": "X", "type": "red"}}')
+        self.provider.lookup_by_image(b"img", "image/jpeg")
+        # urlopen(req, timeout=WINEAPI_IMAGE_TIMEOUT) — la vision doit utiliser le timeout long.
+        self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 45)
 
     @override_settings(WINEAPI_ENRICH_DETAIL=False)
     @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")

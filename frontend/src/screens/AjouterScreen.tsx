@@ -8,6 +8,7 @@ import type { Couleur, Cuvee, Domaine, Statut } from '../types'
 type Seg = 'bouteille' | 'emplacement' | 'cave'
 interface IdentifyResult {
   cuvee: Cuvee
+  millesime?: number | null
   confidence?: number | null
   infos?: { region?: string | null }
 }
@@ -52,8 +53,8 @@ function BottleForm({ onDone }: { onDone: () => void }) {
   const formRef = useRef<HTMLFormElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const rafRef = useRef<number>(0)
+  const controlsRef = useRef<{ stop: () => void } | null>(null)
+  const millesimeRef = useRef<HTMLInputElement>(null)
 
   const [cuveeId, setCuveeId] = useState('')
   const [couleur, setCouleur] = useState<Couleur>('ROUGE')
@@ -66,6 +67,7 @@ function BottleForm({ onDone }: { onDone: () => void }) {
     refresh()
     setCuveeId(String(res.cuvee.id))
     if (res.cuvee.couleur) setCouleur(res.cuvee.couleur)
+    if (res.millesime && millesimeRef.current) millesimeRef.current.value = String(res.millesime)
     const conf = res.confidence != null ? ` · ${Math.round(res.confidence * 100)}%` : ''
     const reg = res.infos?.region ? ` (${res.infos.region})` : ''
     toast(`${srcLabel}${conf} : ${res.cuvee.domaine_nom} — ${res.cuvee.nom}${reg}`, 'ok')
@@ -85,9 +87,8 @@ function BottleForm({ onDone }: { onDone: () => void }) {
   }
 
   function stopScan() {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    streamRef.current?.getTracks().forEach((t) => t.stop())
-    streamRef.current = null
+    controlsRef.current?.stop()
+    controlsRef.current = null
     setScanning(false)
   }
 
@@ -99,41 +100,30 @@ function BottleForm({ onDone }: { onDone: () => void }) {
     else toast('Code-barres invalide.', 'err')
   }
 
+  // ZXing : décodage caméra universel (contrairement à BarcodeDetector, absent de
+  // beaucoup de navigateurs). Import dynamique pour ne pas alourdir le bundle initial.
   async function startScan() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const Detector = (window as any).BarcodeDetector
-    if (!Detector) return manualEntry()
-    let formats: string[] = []
-    try {
-      formats = await Detector.getSupportedFormats()
-    } catch { /* ignore */ }
-    const wanted = ['ean_13', 'ean_8', 'upc_a', 'upc_e'].filter((f) => formats.includes(f))
-    if (!wanted.length) return manualEntry()
-    const detector = new Detector({ formats: wanted })
-    try {
-      streamRef.current = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-    } catch {
-      toast('Caméra indisponible (autorisation refusée, ou HTTPS requis).', 'err')
-      return manualEntry()
-    }
     setScanning(true)
-    const video = videoRef.current!
-    video.srcObject = streamRef.current
-    await video.play()
-    const tick = async () => {
-      if (!streamRef.current) return
-      try {
-        const codes = await detector.detect(video)
-        if (codes.length && codes[0].rawValue) {
-          const ean = codes[0].rawValue as string
-          stopScan()
-          resolveBarcode(ean)
-          return
-        }
-      } catch { /* frame ignorée */ }
-      rafRef.current = requestAnimationFrame(tick)
+    try {
+      const { BrowserMultiFormatReader } = await import('@zxing/browser')
+      const reader = new BrowserMultiFormatReader()
+      controlsRef.current = await reader.decodeFromConstraints(
+        { video: { facingMode: 'environment' } },
+        videoRef.current!,
+        (result, _err, controls) => {
+          if (result) {
+            controls.stop()
+            controlsRef.current = null
+            setScanning(false)
+            resolveBarcode(result.getText())
+          }
+        },
+      )
+    } catch {
+      setScanning(false)
+      toast('Caméra indisponible — saisie manuelle.', 'err')
+      manualEntry()
     }
-    rafRef.current = requestAnimationFrame(tick)
   }
 
   async function onFile() {
@@ -270,6 +260,9 @@ function BottleForm({ onDone }: { onDone: () => void }) {
               🔎
             </button>
           </div>
+          <button onClick={manualEntry} className="w-full mt-2 text-xs text-muted underline">
+            saisir le code-barres à la main
+          </button>
         </>
       )}
 
@@ -342,7 +335,7 @@ function BottleForm({ onDone }: { onDone: () => void }) {
         </div>
         <div className="grid grid-cols-2 gap-2.5">
           <Field label="Millésime" hint="facultatif">
-            <input name="millesime" type="number" inputMode="numeric" placeholder="2018" className={inputCls} />
+            <input ref={millesimeRef} name="millesime" type="number" inputMode="numeric" placeholder="2018" className={inputCls} />
           </Field>
           <Field label="Emplacement" hint="facultatif">
             <select name="emplacement" className={inputCls} defaultValue="">

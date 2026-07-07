@@ -73,7 +73,12 @@ class ScanCodeBarresView(APIView):
                 continue
             cuvee, _ = upsert_cuvee(wine)
             return Response(
-                {"source": wine.source, "created": True, "cuvee": CuveeSerializer(cuvee).data}
+                {
+                    "source": wine.source,
+                    "created": True,
+                    "millesime": wine.millesime,
+                    "cuvee": CuveeSerializer(cuvee).data,
+                }
             )
 
         # --- Scénario 3 : échec total ---
@@ -129,6 +134,7 @@ class IdentifierVinView(APIView):
                 {
                     "source": wine.source,
                     "created": created,
+                    "millesime": wine.millesime,
                     "confidence": wine.raw.get("confidence"),
                     "cuvee": CuveeSerializer(cuvee).data,
                     "infos": {
@@ -183,6 +189,7 @@ class ScanEtiquetteView(APIView):
                 {
                     "source": wine.source,
                     "created": created,
+                    "millesime": wine.millesime,
                     "confidence": wine.raw.get("confidence"),
                     "cuvee": CuveeSerializer(cuvee).data,
                     "infos": {

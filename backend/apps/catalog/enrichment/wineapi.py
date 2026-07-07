@@ -65,13 +65,14 @@ class WineApiProvider(EnrichmentProvider):
             "Accept": "application/json",
             "Content-Type": f"multipart/form-data; boundary={boundary}",
         }
-        return self._open("POST", path, body, headers)
+        # L'identification par image (vision) est bien plus lente que le texte.
+        return self._open("POST", path, body, headers, timeout=settings.WINEAPI_IMAGE_TIMEOUT)
 
-    def _open(self, method: str, path: str, data: bytes | None, headers: dict):
+    def _open(self, method: str, path: str, data: bytes | None, headers: dict, timeout: int | None = None):
         url = settings.WINEAPI_BASE_URL.rstrip("/") + path
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=settings.WINEAPI_TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or settings.WINEAPI_TIMEOUT) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             # Erreurs à faire remonter clairement (cf. spec : 401 / 429).
