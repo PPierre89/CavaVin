@@ -70,9 +70,10 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 
 # Database
-# Uses Postgres when POSTGRES_HOST is set (Docker/production), otherwise
-# falls back to a local SQLite file so the project runs with zero external
-# services during day-to-day development.
+# Uses Postgres when POSTGRES_HOST is set, otherwise falls back to SQLite —
+# ce qui permet aussi un déploiement mono-conteneur (aucun service DB séparé).
+# En conteneur, SQLITE_PATH pointe vers un volume persistant (ex: /data/db.sqlite3)
+# pour survivre à une recréation du conteneur.
 if os.getenv("POSTGRES_HOST"):
     DATABASES = {
         "default": {
@@ -88,7 +89,7 @@ else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
+            "NAME": os.getenv("SQLITE_PATH") or (BASE_DIR / "db.sqlite3"),
         }
     }
 
