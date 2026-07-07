@@ -85,29 +85,15 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 
 
-# Database
-# Uses Postgres when POSTGRES_HOST is set, otherwise falls back to SQLite —
-# ce qui permet aussi un déploiement mono-conteneur (aucun service DB séparé).
+# Database — SQLite (aucun service externe ; déploiement mono-conteneur).
 # En conteneur, SQLITE_PATH pointe vers un volume persistant (ex: /data/db.sqlite3)
-# pour survivre à une recréation du conteneur.
-if os.getenv("POSTGRES_HOST"):
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.getenv("POSTGRES_DB", "cave_a_vin"),
-            "USER": os.getenv("POSTGRES_USER", "cave_a_vin"),
-            "PASSWORD": os.getenv("POSTGRES_PASSWORD", ""),
-            "HOST": os.getenv("POSTGRES_HOST", "db"),
-            "PORT": os.getenv("POSTGRES_PORT", "5432"),
-        }
+# pour survivre à une recréation du conteneur ; en local, défaut backend/db.sqlite3.
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": os.getenv("SQLITE_PATH") or (BASE_DIR / "db.sqlite3"),
     }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": os.getenv("SQLITE_PATH") or (BASE_DIR / "db.sqlite3"),
-        }
-    }
+}
 
 
 AUTH_PASSWORD_VALIDATORS = [
