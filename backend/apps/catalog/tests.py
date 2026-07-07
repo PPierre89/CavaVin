@@ -1,8 +1,9 @@
+import json
 import urllib.error
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -10,6 +11,7 @@ from rest_framework.test import APITestCase
 from .enrichment import EnrichmentError, NormalizedWine
 from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
+from .enrichment.wineapi import WineApiProvider
 from .ingest import upsert_cuvee
 from .models import Cepage, Cuvee, Domaine
 
@@ -216,3 +218,104 @@ class IdentifierVinViewTests(APITestCase):
         mock_providers.return_value = [_FakeProvider(wine=None)]
         resp = self.client.post(self.url, {"query": "Vin fantôme"})
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+
+def _http_error(code):
+    return urllib.error.HTTPError("https://api.test/x", code, "err", None, None)
+
+
+@override_settings(
+    WINEAPI_KEY="cle-de-test",
+    WINEAPI_BASE_URL="https://api.test",
+    WINEAPI_TIMEOUT=5,
+)
+class WineApiProviderTests(SimpleTestCase):
+    """Client HTTP wineapi.io : activation, erreurs remontées, mapping (urlopen mocké)."""
+
+    def setUp(self):
+        self.provider = WineApiProvider()
+
+    def test_enabled_suit_la_presence_de_cle(self):
+        self.assertTrue(self.provider.enabled)
+        with override_settings(WINEAPI_KEY=""):
+            self.assertFalse(self.provider.enabled)
+
+    @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")
+    def test_429_leve_une_erreur_remontable(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(429)
+        with self.assertRaises(EnrichmentError) as ctx:
+            self.provider._request("POST", "/identify/text", {"query": "x"})
+        self.assertEqual(ctx.exception.status, 429)
+
+    @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")
+    def test_401_leve_une_erreur_502(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(401)
+        with self.assertRaises(EnrichmentError) as ctx:
+            self.provider._request("GET", "/wines/1")
+        self.assertEqual(ctx.exception.status, 502)  # clé invalide = erreur serveur
+
+    @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")
+    def test_5xx_est_un_miss_silencieux(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(500)
+        self.assertIsNone(self.provider._request("GET", "/wines/1"))
+
+    @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")
+    def test_reseau_indisponible_est_un_miss(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("réseau coupé")
+        self.assertIsNone(self.provider._request("GET", "/wines/1"))
+
+    @override_settings(WINEAPI_ENRICH_DETAIL=False)
+    @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")
+    def test_lookup_by_text_mappe_le_resultat(self, mock_urlopen):
+        payload = json.dumps({
+            "confidence": 0.9,
+            "wine": {
+                "id": 42, "name": "Chateau Petrus 2015", "type": "red",
+                "vintage": 2015, "region": {"name": "Pomerol", "country": "France"},
+            },
+            "suggestions": [{"name": "Petrus 2016"}],
+        }).encode("utf-8")
+        mock_urlopen.return_value = _fake_urlopen(payload)
+
+        wine = self.provider.lookup_by_text("Petrus")
+
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.cuvee_nom, "Chateau Petrus")  # millésime retiré
+        self.assertEqual(wine.couleur, "ROUGE")
+        self.assertEqual(wine.millesime, 2015)
+        self.assertEqual(wine.appellation, "Pomerol")
+        self.assertEqual(wine.source, "wineapi")
+        self.assertIn("Petrus 2016", wine.raw["suggestions"])
+
+    @override_settings(WINEAPI_ENRICH_DETAIL=True)
+    @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")
+    def test_lookup_enrichit_via_appel_detail(self, mock_urlopen):
+        identify = json.dumps({"wine": {"id": 7, "name": "Cuvée", "type": "white"}}).encode("utf-8")
+        detail = json.dumps({
+            "id": 7, "name": "Cuvée Prestige 2018", "type": "white",
+            "winery": {"name": "Domaine Test"},
+            "appellation": {"name": "Chablis"},
+            "grapes": [{"name": "Chardonnay"}],
+            "scores": [{"score": 92}, {"score": 88}],
+            "region": {"name": "Bourgogne", "country": "France"},
+            "vintage": 2018,
+        }).encode("utf-8")
+        # 1er appel = POST /identify/text, 2e appel = GET /wines/7 (enrichissement).
+        mock_urlopen.side_effect = [_fake_urlopen(identify), _fake_urlopen(detail)]
+
+        wine = self.provider.lookup_by_text("Cuvée")
+
+        self.assertEqual(mock_urlopen.call_count, 2)
+        self.assertEqual(wine.domaine_nom, "Domaine Test")
+        self.assertEqual(wine.cuvee_nom, "Cuvée Prestige")  # nom du détail, millésime retiré
+        self.assertEqual(wine.couleur, "BLANC")
+        self.assertEqual(wine.appellation, "Chablis")
+        self.assertEqual(wine.cepages, ["Chardonnay"])
+        self.assertEqual(wine.millesime, 2018)
+        self.assertEqual(wine.raw["note"], 92)  # meilleur score
+
+    @override_settings(WINEAPI_ENRICH_DETAIL=False)
+    @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")
+    def test_reponse_sans_wine_renvoie_none(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_urlopen(b'{"confidence": 0.2}')
+        self.assertIsNone(self.provider.lookup_by_text("inconnu"))
