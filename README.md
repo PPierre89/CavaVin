@@ -31,12 +31,24 @@ en cascade :
 2. **Fournisseurs d'enrichissement activés** — cascade des providers ; le premier hit est normalisé,
    **mis en cache en base locale**, puis renvoyé (`source: "openfoodfacts"`, `created: true`).
 3. **Échec total** — `404 { "detail": "Vin non reconnu par son code-barres" }` ; côté mobile, l'app
-   basculera sur le scan d'étiquette (US 03, à venir).
+   propose alors le scan d'étiquette (US 03, ci-dessous).
 
 Côté mobile, le bouton **📷 Scanner le code-barres** utilise l'API native `BarcodeDetector`
 (caméra arrière) quand elle est disponible, et bascule sinon sur une **saisie manuelle**. ⚠️ La caméra
 exige un contexte sécurisé : elle fonctionne sur `http://localhost` mais nécessite **HTTPS** sur un
 vrai téléphone via IP LAN.
+
+### Scan d'étiquette (US 02/03)
+
+`POST /api/scan-etiquette/` avec un upload multipart (champ `image`, JPEG/PNG ≤ 10 Mo) — identifie
+le vin à partir d'une **photo de l'étiquette** via `POST /identify/image` de wineapi.io (pas d'OCR à
+héberger). Le hit est normalisé et **mis en cache local** comme pour le texte, et la réponse a la même
+forme que `/api/identifier-vin/` (`confidence`, `infos`, `suggestions`). Échec →
+`404 "Vin non identifié sur l'étiquette"`.
+
+Côté mobile, le bouton **🏷️ Photographier l'étiquette** ouvre directement la caméra arrière
+(`<input type="file" capture="environment">` — fonctionne partout, pas d'API caméra requise) et
+pré-remplit le formulaire d'ajout, exactement comme le scan de code-barres.
 
 ### Identification par texte / wineapi.io (US 04)
 
@@ -64,12 +76,6 @@ code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` 
 
 ### Pas encore fait (roadmap)
 
-- Scan d'étiquette (US 02/03) : deux voies possibles —
-  (a) OCR souverain sur conteneur (ex. Tesseract sur NAS via `OCR_ENDPOINT_URL`) → texte → `POST
-  /api/identifier-vin/` déjà en place ; (b) **plus simple** : `POST /identify/image` de wineapi.io
-  (photo d'étiquette JPEG/PNG ≤10 Mo) identifie directement, sans conteneur OCR à héberger. Note : le
-  dataset X-Wines est **tabulaire** (pas d'images) — il ne sert pas à *entraîner* l'OCR mais peut
-  servir de **corpus de rapprochement flou**.
 - Mode hors-ligne avec synchronisation asynchrone.
 - Moteur de recommandation mets-vins (LLM) et calcul algorithmique d'apogée.
 - Valorisation financière (cote en temps réel) et tableaux de bord statistiques.

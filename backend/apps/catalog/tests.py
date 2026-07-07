@@ -5,6 +5,7 @@ from io import StringIO
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
@@ -17,6 +18,7 @@ from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.wineapi import WineApiProvider
 from .ingest import upsert_cuvee
 from .models import Cepage, Cuvee, Domaine
+from .serializers import ScanEtiquetteSerializer
 
 User = get_user_model()
 
@@ -147,6 +149,11 @@ class _FakeProvider:
             raise self._error
         return self._wine
 
+    def lookup_by_image(self, data, content_type):
+        if self._error:
+            raise self._error
+        return self._wine
+
 
 class ScanCodeBarresViewTests(APITestCase):
     """US 01 — POST /api/scan-code-barres/ : cache local, cascade externe, échec."""
@@ -221,6 +228,62 @@ class IdentifierVinViewTests(APITestCase):
         mock_providers.return_value = [_FakeProvider(wine=None)]
         resp = self.client.post(self.url, {"query": "Vin fantôme"})
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class ScanEtiquetteViewTests(APITestCase):
+    """US 02/03 — POST /api/scan-etiquette/ : upload validé, cascade image, échec."""
+
+    def setUp(self):
+        self.url = reverse("scan-etiquette")
+        self.client.force_authenticate(User.objects.create_user("alice", password="x"))
+
+    def _photo(self, name="etiquette.jpg", content_type="image/jpeg", size=1024):
+        return SimpleUploadedFile(name, b"x" * size, content_type=content_type)
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_hit_identifie_et_met_en_cache(self, mock_providers):
+        wine = NormalizedWine(
+            domaine_nom="Dom Photo", cuvee_nom="Cuvée Photo", couleur="ROUGE",
+            source="wineapi", reference_externe_id="wine-77",
+            raw={"confidence": 0.87, "region": "Pomerol"},
+        )
+        mock_providers.return_value = [_FakeProvider(wine=wine)]
+
+        resp = self.client.post(self.url, {"image": self._photo()}, format="multipart")
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["source"], "wineapi")
+        self.assertEqual(resp.data["confidence"], 0.87)
+        self.assertTrue(Cuvee.objects.filter(reference_externe_id="wine-77").exists())
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_echec_total_404(self, mock_providers):
+        mock_providers.return_value = [_FakeProvider(wine=None)]
+        resp = self.client.post(self.url, {"image": self._photo()}, format="multipart")
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_erreur_fournisseur_remontee(self, mock_providers):
+        mock_providers.return_value = [
+            _FakeProvider(error=EnrichmentError(429, "Quota wineapi.io atteint, réessaie plus tard."))
+        ]
+        resp = self.client.post(self.url, {"image": self._photo()}, format="multipart")
+        self.assertEqual(resp.status_code, 429)
+
+    def test_image_trop_lourde_400(self):
+        gros = self._photo(size=ScanEtiquetteSerializer.MAX_SIZE + 1)
+        resp = self.client.post(self.url, {"image": gros}, format="multipart")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("image", resp.data)
+
+    def test_mauvais_format_400(self):
+        pdf = self._photo(name="doc.pdf", content_type="application/pdf")
+        resp = self.client.post(self.url, {"image": pdf}, format="multipart")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_sans_fichier_400(self):
+        resp = self.client.post(self.url, {}, format="multipart")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
 
 def _http_error(code):
@@ -322,6 +385,28 @@ class WineApiProviderTests(SimpleTestCase):
     def test_reponse_sans_wine_renvoie_none(self, mock_urlopen):
         mock_urlopen.return_value = _fake_urlopen(b'{"confidence": 0.2}')
         self.assertIsNone(self.provider.lookup_by_text("inconnu"))
+
+    @override_settings(WINEAPI_ENRICH_DETAIL=False)
+    @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")
+    def test_lookup_by_image_envoie_du_multipart(self, mock_urlopen):
+        payload = json.dumps({
+            "confidence": 0.8,
+            "wine": {"id": 9, "name": "Photo Wine 2020", "type": "red"},
+        }).encode("utf-8")
+        mock_urlopen.return_value = _fake_urlopen(payload)
+
+        wine = self.provider.lookup_by_image(b"fausse-image-jpeg", "image/jpeg")
+
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.cuvee_nom, "Photo Wine")  # millésime retiré
+        self.assertEqual(wine.couleur, "ROUGE")
+        # La requête envoyée est bien un POST multipart vers /identify/image
+        # contenant les octets de l'image.
+        req = mock_urlopen.call_args[0][0]
+        self.assertTrue(req.full_url.endswith("/identify/image"))
+        self.assertIn("multipart/form-data; boundary=", req.headers["Content-type"])
+        self.assertIn(b"fausse-image-jpeg", req.data)
+        self.assertIn(b'name="image"; filename="etiquette.jpg"', req.data)
 
 
 class EnsureSuperuserCommandTests(TestCase):

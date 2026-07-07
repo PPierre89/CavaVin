@@ -313,6 +313,8 @@
         <p class="muted" style="text-align:center; margin:8px 0 0;">Vise le code-barres au dos de la bouteille</p>
         <button type="button" class="ghost" id="btn-scan-cancel" style="width:100%; margin-top:8px;">Annuler</button>
       </div>
+      <button type="button" class="primary" id="btn-scan-etiquette" style="margin-top:8px;">🏷️ Photographier l'étiquette</button>
+      <input type="file" id="etiquette-file" accept="image/jpeg,image/png" capture="environment" style="display:none;">
       <div style="display:flex; gap:8px; margin-top:10px;">
         <input id="search-name" placeholder="ou rechercher par nom (ex: Petrus 2015)" style="flex:1;">
         <button type="button" class="ghost" id="btn-search-name" style="flex:0 0 auto; width:auto; padding:13px 16px;">🔎</button>
@@ -989,8 +991,8 @@ async function resolveBarcode(ean) {
     toast(`Vin reconnu (${src}) : ${c.domaine_nom} — ${c.nom}`, 'ok');
   } catch (e) {
     if (e.status === 404) {
-      // Scénario 3 : bascule vers le scan d'étiquette (US 03, à venir).
-      toast("Vin non reconnu par son code-barres. Le scan d'étiquette arrivera en US 03.", 'err');
+      // Scénario 3 : bascule vers le scan d'étiquette (US 03).
+      toast("Vin non reconnu par son code-barres. Essaie 🏷️ Photographier l'étiquette.", 'err');
     } else {
       toast(errMsg(e, 'Erreur pendant la recherche.'), 'err');
     }
@@ -1049,28 +1051,61 @@ async function startBarcodeScan() {
 document.getElementById('btn-scan').addEventListener('click', startBarcodeScan);
 document.getElementById('btn-scan-cancel').addEventListener('click', stopBarcodeScan);
 
+/* ---------- Identification (US 02/03/04) : pré-remplissage commun ---------- */
+function applyIdentifiedCuvee(res) {
+  const c = res.cuvee;
+  if (!state.cuvees.find(x => x.id === c.id)) state.cuvees.push(c);
+  renderCuveeSelect();
+  document.getElementById('bt-cuvee').value = c.id;
+  toggleNewCuvee();
+  document.getElementById('bt-domaine-nom').value = '';
+  document.getElementById('bt-cuvee-nom').value = '';
+  if (c.couleur) document.getElementById('bt-couleur').value = c.couleur;
+  const conf = res.confidence != null ? ' · ' + Math.round(res.confidence * 100) + '%' : '';
+  const reg = res.infos && res.infos.region ? ' (' + res.infos.region + ')' : '';
+  toast(`Identifié${conf} : ${c.domaine_nom} — ${c.nom}${reg}`, 'ok');
+}
+
 /* ---------- Recherche / identification par nom (US 04, wineapi.io) ---------- */
 async function resolveByText(query) {
   const q = (query || '').trim();
   if (q.length < 2) { toast('Saisis au moins 2 caractères.', 'err'); return; }
   try {
     const res = await api('POST', '/api/identifier-vin/', { query: q });
-    const c = res.cuvee;
-    if (!state.cuvees.find(x => x.id === c.id)) state.cuvees.push(c);
-    renderCuveeSelect();
-    document.getElementById('bt-cuvee').value = c.id;
-    toggleNewCuvee();
-    document.getElementById('bt-domaine-nom').value = '';
-    document.getElementById('bt-cuvee-nom').value = '';
-    if (c.couleur) document.getElementById('bt-couleur').value = c.couleur;
-    const conf = res.confidence != null ? ' · ' + Math.round(res.confidence * 100) + '%' : '';
-    const reg = res.infos && res.infos.region ? ' (' + res.infos.region + ')' : '';
-    toast(`Identifié${conf} : ${c.domaine_nom} — ${c.nom}${reg}`, 'ok');
+    applyIdentifiedCuvee(res);
   } catch (e) {
     if (e.status === 404) toast("Vin non identifié. Vérifie l'orthographe ou ajoute-le manuellement.", 'err');
     else toast(errMsg(e, "Erreur pendant l'identification."), 'err');
   }
 }
+
+/* ---------- Scan d'étiquette (US 02/03, wineapi.io /identify/image) ---------- */
+const etiquetteInput = document.getElementById('etiquette-file');
+document.getElementById('btn-scan-etiquette').addEventListener('click', () => etiquetteInput.click());
+etiquetteInput.addEventListener('change', async () => {
+  const f = etiquetteInput.files[0];
+  etiquetteInput.value = ''; // permet de re-sélectionner la même photo
+  if (!f) return;
+  if (f.size > 10 * 1024 * 1024) { toast('Photo trop lourde (10 Mo maximum).', 'err'); return; }
+  toast('Identification de l\'étiquette en cours…', 'ok');
+  const fd = new FormData();
+  fd.append('image', f, f.name || 'etiquette.jpg');
+  try {
+    // fetch direct (pas api()) : FormData, le navigateur fixe le Content-Type multipart.
+    const res = await fetch('/api/scan-etiquette/', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-CSRFToken': getCookie('csrftoken') },
+      body: fd,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) { const err = new Error('API error'); err.status = res.status; err.data = data; throw err; }
+    applyIdentifiedCuvee(data);
+  } catch (e) {
+    if (e.status === 404) toast("Vin non identifié sur l'étiquette. Essaie une photo plus nette et cadrée, ou la recherche par nom.", 'err');
+    else toast(errMsg(e, "Erreur pendant l'identification de l'étiquette."), 'err');
+  }
+});
 
 document.getElementById('btn-search-name').addEventListener('click', () => {
   resolveByText(document.getElementById('search-name').value);
