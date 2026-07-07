@@ -15,7 +15,23 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-dev-key-change-me")
 
 DEBUG = os.getenv("DJANGO_DEBUG", "True") == "True"
 
-ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+ALLOWED_HOSTS = [
+    h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()
+]
+
+# Origines de confiance pour la vérification CSRF — nécessaire pour les POST
+# (login admin, frontend) servis via un domaine proxifié en HTTPS (accès distant
+# UGREEN, reverse proxy…). Format : "https://mon.domaine", séparés par des virgules ;
+# le joker de sous-domaine est accepté ("https://*.ugdocker.link").
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
+]
+
+# Derrière un reverse proxy qui termine le TLS, se fier à l'en-tête X-Forwarded-Proto
+# pour que Django sache que la requête d'origine est en HTTPS. Activer via
+# DJANGO_TRUST_PROXY_SSL=True.
+if os.getenv("DJANGO_TRUST_PROXY_SSL", "False") == "True":
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 
 INSTALLED_APPS = [
