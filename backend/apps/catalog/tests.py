@@ -5,6 +5,7 @@ from io import StringIO
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -133,6 +134,19 @@ class UpsertCuveeTests(TestCase):
         cuvee, _ = upsert_cuvee(w)
         self.assertEqual(cuvee.couleur, Cuvee.Couleur.AUTRE)
 
+    def test_robuste_aux_doublons_preexistants(self):
+        """Des doublons en base (ex: scans concurrents passés) ne doivent pas faire
+        planter les scans suivants : on retourne le plus ancien, sans exception."""
+        domaine = Domaine.objects.create(nom="Dom")
+        c1 = Cuvee.objects.create(domaine=domaine, nom="A", couleur="ROUGE", code_barres="555")
+        Cuvee.objects.create(domaine=domaine, nom="B", couleur="ROUGE", code_barres="555")
+
+        cuvee, created = upsert_cuvee(
+            NormalizedWine(domaine_nom="Dom", cuvee_nom="Peu importe", code_barres="555")
+        )
+        self.assertFalse(created)
+        self.assertEqual(cuvee.pk, c1.pk)  # le plus ancien gagne
+
 
 class _FakeProvider:
     """Provider factice pour piloter la cascade des vues sans réseau."""
@@ -159,6 +173,7 @@ class ScanCodeBarresViewTests(APITestCase):
     """US 01 — POST /api/scan-code-barres/ : cache local, cascade externe, échec."""
 
     def setUp(self):
+        cache.clear()  # remet à zéro le compteur de throttle entre les tests
         self.url = reverse("scan-code-barres")
         self.client.force_authenticate(User.objects.create_user("alice", password="x"))
 
@@ -201,6 +216,7 @@ class IdentifierVinViewTests(APITestCase):
     """US 04 — POST /api/identifier-vin/ : cache local, erreur remontée, échec."""
 
     def setUp(self):
+        cache.clear()  # remet à zéro le compteur de throttle entre les tests
         self.url = reverse("identifier-vin")
         self.client.force_authenticate(User.objects.create_user("alice", password="x"))
 
@@ -234,6 +250,7 @@ class ScanEtiquetteViewTests(APITestCase):
     """US 02/03 — POST /api/scan-etiquette/ : upload validé, cascade image, échec."""
 
     def setUp(self):
+        cache.clear()  # remet à zéro le compteur de throttle entre les tests
         self.url = reverse("scan-etiquette")
         self.client.force_authenticate(User.objects.create_user("alice", password="x"))
 
@@ -284,6 +301,30 @@ class ScanEtiquetteViewTests(APITestCase):
     def test_sans_fichier_400(self):
         resp = self.client.post(self.url, {}, format="multipart")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class EnrichmentThrottleTests(APITestCase):
+    """Les endpoints d'enrichissement sont limités (protège le quota wineapi)."""
+
+    def setUp(self):
+        cache.clear()
+        self.client.force_authenticate(User.objects.create_user("alice", password="x"))
+
+    # DRF capture DEFAULT_THROTTLE_RATES à l'import (attribut de classe) :
+    # override_settings est sans effet, on patche l'attribut directement.
+    @patch.dict(
+        "rest_framework.throttling.SimpleRateThrottle.THROTTLE_RATES",
+        {"enrichment": "2/min"},
+    )
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_429_au_dela_de_la_limite(self, mock_providers):
+        mock_providers.return_value = []
+        url = reverse("identifier-vin")
+        for _ in range(2):
+            resp = self.client.post(url, {"query": "abc"})
+            self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        resp = self.client.post(url, {"query": "abc"})
+        self.assertEqual(resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
 
 def _http_error(code):

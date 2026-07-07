@@ -1,6 +1,7 @@
 from rest_framework import status, viewsets
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from .enrichment import EnrichmentError, get_enabled_providers
@@ -50,6 +51,8 @@ class ScanCodeBarresView(APIView):
     """
 
     serializer_class = ScanCodeBarresSerializer
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "enrichment"
 
     def post(self, request):
         serializer = ScanCodeBarresSerializer(data=request.data)
@@ -92,6 +95,8 @@ class IdentifierVinView(APIView):
     """
 
     serializer_class = IdentifierVinSerializer
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "enrichment"
 
     def post(self, request):
         serializer = IdentifierVinSerializer(data=request.data)
@@ -157,6 +162,8 @@ class ScanEtiquetteView(APIView):
 
     parser_classes = [MultiPartParser, FormParser]
     serializer_class = ScanEtiquetteSerializer
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "enrichment"
 
     def post(self, request):
         serializer = ScanEtiquetteSerializer(data=request.data)

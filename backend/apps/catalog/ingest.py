@@ -30,20 +30,23 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
     else:
         lookup = {"domaine": domaine, "nom": wine.cuvee_nom}
 
-    cuvee, created = Cuvee.objects.get_or_create(
-        defaults={
-            "domaine": domaine,
-            "nom": wine.cuvee_nom,
-            "couleur": couleur,
-            "appellation": wine.appellation,
-            "code_barres": wine.code_barres,
-            "reference_externe_id": wine.reference_externe_id,
-        },
-        **lookup,
-    )
+    # filter().first() plutôt que get_or_create : ces clés n'ont pas de contrainte
+    # unique en base, et get_or_create lèverait MultipleObjectsReturned (donc 500
+    # sur tous les scans suivants) si un doublon existait déjà.
+    cuvee = Cuvee.objects.filter(**lookup).order_by("pk").first()
+    if cuvee is not None:
+        return cuvee, False
 
-    if created and wine.cepages:
+    cuvee = Cuvee.objects.create(
+        domaine=domaine,
+        nom=wine.cuvee_nom,
+        couleur=couleur,
+        appellation=wine.appellation,
+        code_barres=wine.code_barres,
+        reference_externe_id=wine.reference_externe_id,
+    )
+    if wine.cepages:
         cepages = [Cepage.objects.get_or_create(nom=nom)[0] for nom in wine.cepages]
         cuvee.cepages.set(cepages)
 
-    return cuvee, created
+    return cuvee, True
