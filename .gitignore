@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 backend/db.sqlite3
 backend/staticfiles/
+# SPA React buildé (copié dans l'image par le Dockerfile ; jamais commité)
+backend/spa/
 # Bind mounts créés par docker-compose (SQLite + statiques) si lancé depuis le repo.
 /data/
 /staticfiles_data/

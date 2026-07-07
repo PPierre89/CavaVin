@@ -18,6 +18,7 @@ from apps.catalog.views import (
 )
 from apps.cellars.views import CaveViewSet, EmplacementViewSet
 from apps.inventory.views import BouteilleViewSet, MouvementStockViewSet
+from .auth import RegisterView
 from .views import index
 
 router = DefaultRouter()
@@ -37,6 +38,7 @@ urlpatterns = [
     path("api/identifier-vin/", IdentifierVinView.as_view(), name="identifier-vin"),
     path("api/scan-etiquette/", ScanEtiquetteView.as_view(), name="scan-etiquette"),
     path("api/auth/", include("rest_framework.urls")),
+    path("api/auth/register/", RegisterView.as_view(), name="register"),
     path("api/auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/auth/token/verify/", TokenVerifyView.as_view(), name="token_verify"),

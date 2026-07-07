@@ -81,11 +81,23 @@ code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` 
 - Valorisation financière (cote en temps réel) et tableaux de bord statistiques.
 - Carnet de dégustation (notes, curseurs acidité/tanin/fruit) et partage de cave en lecture seule.
 
-## Mini frontend (mobile-first)
+## Frontend — SPA React + Tailwind (mobile-first)
 
-Une page unique (`backend/templates/index.html`, servie sur `/`), pensée pour un usage à 90 %
-mobile avec une direction artistique inspirée d'Oeni (thème sombre aubergine, accents dorés,
-typographie serif pour les titres) :
+Le front est une **application React (Vite + TypeScript + Tailwind v4)** dans `frontend/`, direction
+artistique **« allée des vins »** (bordeaux, crème, or ; verre givré ; serif Cormorant Garamond),
+pensée pour un usage à 90 % mobile (optimisée Pixel 9). Authentification **JWT** (écran de
+connexion / inscription).
+
+**Développement** : `cd frontend && npm install && npm run dev` (Vite sur `:5173`, proxifie l'API
+vers Django `:8000`). Lancer Django en parallèle (`python manage.py runserver`).
+
+**Production** : le SPA est **buildé et servi par Django/WhiteNoise** dans le même conteneur — le
+`Dockerfile` multi-stage build `frontend/` (Node) puis copie `dist/` dans `spa/` ; la vue `/` renvoie
+`spa/index.html` et WhiteNoise sert les assets. Aucun serveur front séparé.
+
+L'ancien template vanilla (`backend/templates/index.html`) reste comme fallback si le build est absent.
+
+### Fonctionnalités de l'interface :
 
 - **Navigation par onglets en bas d'écran** (Ma cave / Ajouter / Journal), zone tactile large,
   safe-areas iOS gérées.

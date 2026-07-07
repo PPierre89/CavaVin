@@ -1,0 +1,15 @@
+# Contexte de build = racine ; on exclut tout ce qui est lourd ou régénéré.
+**/node_modules
+**/__pycache__
+**/*.pyc
+frontend/dist
+backend/db.sqlite3
+backend/staticfiles
+backend/spa
+venv
+.git
+.github
+data
+staticfiles_data
+*.log
+.env

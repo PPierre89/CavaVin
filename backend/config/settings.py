@@ -136,6 +136,13 @@ STORAGES = {
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
 }
 
+# SPA React (Vite) : le build est copié dans backend/spa/ par le Dockerfile.
+# WhiteNoise sert ses assets (/assets/...) directement à la racine ; la vue index
+# renvoie spa/index.html. En dev, on utilise le serveur Vite (:5173) à la place.
+SPA_DIR = BASE_DIR / "spa"
+if SPA_DIR.exists():
+    WHITENOISE_ROOT = SPA_DIR
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
@@ -164,6 +171,7 @@ REST_FRAMEWORK = {
     # (scan code-barres, identification texte, scan d'étiquette).
     "DEFAULT_THROTTLE_RATES": {
         "enrichment": "30/min",
+        "auth": "10/min",
     },
 }
 

@@ -1,0 +1,68 @@
+@import 'tailwindcss';
+
+/* ---------- Design system "allée des vins" ---------- */
+@theme {
+  --color-wine: #a83a5b;
+  --color-wine-soft: #c4657f;
+  --color-wine-deep: #7c2740;
+  --color-gold: #cda86a;
+  --color-gold-soft: #9c7f4d;
+  --color-ink: #f4ede2;
+  --color-muted: #b6a597;
+  --color-bg: #1b1512;
+
+  /* Couleurs de vin (alvéoles, stats, légende) */
+  --color-rouge: #8e2f45;
+  --color-rougevif: #c15571;
+  --color-blanc: #e6d491;
+  --color-rose: #e8a0b4;
+  --color-bulles: #d9b653;
+  --color-autre: #9aa0ab;
+  --color-ok: #6cae82;
+  --color-alerte: #d8695f;
+
+  --font-serif: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+  --font-sans: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+html {
+  color-scheme: dark;
+}
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  background:
+    radial-gradient(135% 72% at 50% -8%, rgba(168, 58, 91, 0.18), transparent 58%),
+    radial-gradient(120% 68% at 50% 118%, rgba(205, 168, 106, 0.1), transparent 60%),
+    linear-gradient(180deg, #1d1613 0%, #140f0c 100%);
+  background-attachment: fixed;
+}
+
+/* Cartes en verre givré, réutilisées partout via la classe .glass */
+@utility glass {
+  background: rgba(43, 34, 30, 0.62);
+  -webkit-backdrop-filter: saturate(1.2) blur(14px);
+  backdrop-filter: saturate(1.2) blur(14px);
+  border: 1px solid rgba(205, 168, 106, 0.16);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
+}
+
+input,
+select,
+textarea {
+  font-family: var(--font-sans);
+}
+select option {
+  color: #1b1512;
+}
+/* Masque la scrollbar des chips horizontales */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
