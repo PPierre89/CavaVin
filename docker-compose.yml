@@ -17,13 +17,13 @@ services:
       # Base SQLite stockée sur le volume `data` -> persiste à la recréation du conteneur.
       SQLITE_PATH: /data/db.sqlite3
     volumes:
-      - data:/data
-      - staticfiles_data:/app/staticfiles
+      # Bind mounts relatifs au dossier du compose : la base SQLite et les fichiers
+      # statiques restent visibles dans le dossier du projet (sauvegarde = copier le
+      # dossier). Les répertoires sont créés au premier démarrage.
+      - ./data:/data
+      - ./staticfiles_data:/app/staticfiles
     ports:
-      - "8000:8000"
+      # Port hôte configurable (mets APP_PORT=4173 dans .env si 8000 est déjà pris sur le NAS).
+      - "${APP_PORT:-8000}:8000"
     env_file:
       - .env
-
-volumes:
-  data:
-  staticfiles_data:
