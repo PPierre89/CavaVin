@@ -15,14 +15,15 @@ services:
       retries: 5
 
   api:
-    build: ./backend
+    # Image publiée automatiquement sur ghcr.io à chaque merge sur main
+    # (voir .github/workflows/docker.yml). Aucun build local requis sur le NAS :
+    # `docker compose pull && docker compose up -d` suffit.
+    image: ghcr.io/ppierre89/cavavin:latest
     restart: unless-stopped
-    # collectstatic tourne à chaque démarrage (rapide) pour peupler le volume
-    # staticfiles_data même quand ./backend:/app masque celui construit dans
-    # l'image (utile pour un simple `git pull` + redémarrage sans rebuild).
+    # migrate + collectstatic à chaque démarrage : la base est mise à jour et le
+    # volume staticfiles_data (re)peuplé à partir du code embarqué dans l'image.
     command: sh -c "python manage.py migrate && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3"
     volumes:
-      - ./backend:/app
       - staticfiles_data:/app/staticfiles
     ports:
       - "8000:8000"
