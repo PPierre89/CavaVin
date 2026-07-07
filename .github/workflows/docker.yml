@@ -40,11 +40,12 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
 
-      # Contexte = ./backend (le Dockerfile y copie requirements.txt puis le code).
+      # Contexte = racine du repo (le Dockerfile multi-stage build frontend/ + backend/).
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
+          context: .
+          file: ./backend/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

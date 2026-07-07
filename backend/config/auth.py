@@ -1,0 +1,48 @@
+from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from rest_framework import generics, permissions, serializers
+from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
+from rest_framework_simplejwt.tokens import RefreshToken
+
+User = get_user_model()
+
+
+class RegisterSerializer(serializers.ModelSerializer):
+    """Inscription : crée un compte et renvoie directement une paire de tokens JWT."""
+
+    password = serializers.CharField(write_only=True, validators=[validate_password])
+
+    class Meta:
+        model = User
+        fields = ["username", "email", "password"]
+        extra_kwargs = {"email": {"required": False}}
+
+    def create(self, validated_data):
+        return User.objects.create_user(
+            username=validated_data["username"],
+            email=validated_data.get("email", ""),
+            password=validated_data["password"],
+        )
+
+
+class RegisterView(generics.CreateAPIView):
+    serializer_class = RegisterSerializer
+    permission_classes = [permissions.AllowAny]
+    # Limite les tentatives de création de compte (anti-abus).
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        refresh = RefreshToken.for_user(user)
+        return Response(
+            {
+                "username": user.username,
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+            },
+            status=201,
+        )
