@@ -161,39 +161,48 @@ python manage.py runserver
 
 ```bash
 cp .env.example .env
-docker compose up --build
+docker compose up
 ```
 
-L'API sera exposée sur http://localhost:8000/ avec Postgres comme base de données. Le conteneur
-applique les migrations et régénère les fichiers statiques (admin, Swagger — servis par
+Compose tire l'image publiée `ghcr.io/ppierre89/cavavin:latest` (aucun build local). L'API sera
+exposée sur http://localhost:8000/ avec Postgres comme base de données. Le conteneur applique les
+migrations et régénère les fichiers statiques (admin, Swagger — servis par
 [WhiteNoise](https://whitenoise.readthedocs.io/), pas besoin de nginx) à chaque démarrage.
+
+> Si le package ghcr est privé, authentifie d'abord Docker :
+> `echo <TON_PAT> | docker login ghcr.io -u PPierre89 --password-stdin`. Une fois le package rendu
+> public, aucune authentification n'est nécessaire.
 
 ## Déploiement sur un NAS (Docker)
 
-1. **Récupérer le projet sur le NAS** — via Git (si disponible dans ton gestionnaire de conteneurs/
-   paquets), ou en copiant le dossier `cave-a-vin/` par SMB/SFTP.
-2. **Configurer l'environnement** :
-   ```bash
-   cp .env.example .env
-   ```
-   Puis éditer `.env` :
+L'image est **construite et publiée automatiquement** sur `ghcr.io/ppierre89/cavavin:latest` à chaque
+merge sur `main` (voir `.github/workflows/docker.yml`). Le NAS n'a donc **pas besoin du code source**
+ni de construire quoi que ce soit : deux fichiers suffisent.
+
+1. **Copier deux fichiers sur le NAS** (par SMB/SFTP, ou les recréer à la main) :
+   - `docker-compose.yml`
+   - `.env` (à partir de `.env.example` du dépôt)
+2. **Configurer `.env`** :
    - `DJANGO_SECRET_KEY` : génère une vraie valeur, ex. `python3 -c "import secrets; print(secrets.token_urlsafe(50))"`.
    - `DJANGO_ALLOWED_HOSTS` : ajoute l'IP ou le nom d'hôte du NAS (ex. `192.168.1.50,mon-nas.local`),
      sinon Django refusera les requêtes venant d'un autre appareil que `localhost`.
    - `DJANGO_DEBUG` : laisser vide/absent pour garder le défaut sûr (`False`) en Docker.
    - `POSTGRES_PASSWORD` : change le mot de passe par défaut.
    - `WINEAPI_KEY` : optionnel, pour l'identification de vin par texte (US 04).
+   > Si le package ghcr est privé, authentifie Docker sur le NAS :
+   > `echo <TON_PAT> | docker login ghcr.io -u PPierre89 --password-stdin`.
 3. **Démarrer** (via l'interface Docker/Container Manager de ton NAS, ou en SSH) :
    ```bash
-   docker compose up -d --build
+   docker compose up -d
    ```
+   Compose tire l'image publiée, applique les migrations et régénère les fichiers statiques au démarrage.
 4. **Créer le premier compte** :
    ```bash
    docker compose exec api python manage.py createsuperuser
    ```
 5. Accéder depuis un navigateur (PC ou mobile sur le même réseau) : `http://<ip-du-nas>:8000/`.
 
-**Mises à jour** : `git pull` (ou re-copie des fichiers) puis `docker compose up -d --build` — les
+**Mises à jour** : `docker compose pull && docker compose up -d` — récupère la dernière image publiée ;
 migrations et fichiers statiques se réappliquent automatiquement au redémarrage.
 
 **HTTPS** : ce compose sert du HTTP simple, adapté à un accès réseau local. Si tu exposes l'app sur
