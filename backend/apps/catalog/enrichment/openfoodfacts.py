@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 
 from .base import EnrichmentProvider, NormalizedWine
-from .normalize import clean, guess_couleur
+from .normalize import clean, guess_couleur, parse_vintage
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,9 @@ class OpenFoodFactsProvider(EnrichmentProvider):
             domaine_nom=domaine_nom,
             cuvee_nom=cuvee_nom,
             couleur=guess_couleur(product_name, categories, labels),
+            # OFF ne distingue pas les millésimes, mais l'année figure souvent dans
+            # le nom ("... 2018") : on la propose pour préremplir la saisie.
+            millesime=parse_vintage(product_name, product.get("generic_name")),
             code_barres=ean,
             source=self.name,
             reference_externe_id=str(product.get("code") or ean),

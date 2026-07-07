@@ -61,6 +61,17 @@ def couleur_from_type(wine_type: str) -> str:
     return TYPE_COULEUR.get((wine_type or "").strip().lower(), "AUTRE")
 
 
+def parse_vintage(*texts) -> int | None:
+    """Extrait un millésime (année 19xx/20xx) d'un ou plusieurs champs texte, sinon None."""
+    for t in texts:
+        if not t:
+            continue
+        match = re.search(r"\b(?:19|20)\d{2}\b", str(t))
+        if match:
+            return int(match.group(0))
+    return None
+
+
 def guess_couleur(*texts) -> str:
     """
     Devine la couleur à partir de champs texte libres (nom, catégories, labels).
