@@ -133,13 +133,14 @@ cave-a-vin/
 │   │   └── inventory/   # Bouteille (stock), MouvementStock — mouvements
 │   ├── requirements.txt
 │   └── Dockerfile
-├── docker-compose.yml    # api (Django/gunicorn) + db (Postgres)
+├── docker-compose.yml    # app tout-en-un (Django/gunicorn + SQLite)
 └── .env.example
 ```
 
-La base de données bascule automatiquement sur **SQLite en local** (zéro dépendance externe pour
-développer) et sur **Postgres** dès que la variable d'environnement `POSTGRES_HOST` est présente
-(c'est le cas sous Docker Compose) — voir `backend/config/settings.py`.
+La base de données bascule automatiquement : **SQLite** par défaut (zéro dépendance externe — c'est ce
+qu'utilise le déploiement mono-conteneur), et **Postgres** dès que la variable d'environnement
+`POSTGRES_HOST` est présente. En conteneur, `SQLITE_PATH` place le fichier SQLite sur un volume
+persistant — voir `backend/config/settings.py`.
 
 ## Lancer en local (sans Docker)
 
@@ -164,10 +165,11 @@ cp .env.example .env
 docker compose up
 ```
 
-Compose tire l'image publiée `ghcr.io/ppierre89/cavavin:latest` (aucun build local). L'API sera
-exposée sur http://localhost:8000/ avec Postgres comme base de données. Le conteneur applique les
-migrations et régénère les fichiers statiques (admin, Swagger — servis par
-[WhiteNoise](https://whitenoise.readthedocs.io/), pas besoin de nginx) à chaque démarrage.
+Compose tire l'image publiée `ghcr.io/ppierre89/cavavin:latest` (aucun build local). **Un seul
+conteneur** : Django/gunicorn avec SQLite (aucun service base séparé). L'API est exposée sur
+http://localhost:8000/. Le conteneur applique les migrations et régénère les fichiers statiques (admin,
+Swagger — servis par [WhiteNoise](https://whitenoise.readthedocs.io/), pas besoin de nginx) à chaque
+démarrage.
 
 > Si le package ghcr est privé, authentifie d'abord Docker :
 > `echo <TON_PAT> | docker login ghcr.io -u PPierre89 --password-stdin`. Une fois le package rendu
@@ -187,18 +189,19 @@ ni de construire quoi que ce soit : deux fichiers suffisent.
    - `DJANGO_ALLOWED_HOSTS` : ajoute l'IP ou le nom d'hôte du NAS (ex. `192.168.1.50,mon-nas.local`),
      sinon Django refusera les requêtes venant d'un autre appareil que `localhost`.
    - `DJANGO_DEBUG` : laisser vide/absent pour garder le défaut sûr (`False`) en Docker.
-   - `POSTGRES_PASSWORD` : change le mot de passe par défaut.
    - `WINEAPI_KEY` : optionnel, pour l'identification de vin par texte (US 04).
+   > Les variables `POSTGRES_*` ne servent pas au déploiement mono-conteneur (SQLite) — sans effet.
    > Si le package ghcr est privé, authentifie Docker sur le NAS :
    > `echo <TON_PAT> | docker login ghcr.io -u PPierre89 --password-stdin`.
 3. **Démarrer** (via l'interface Docker/Container Manager de ton NAS, ou en SSH) :
    ```bash
    docker compose up -d
    ```
-   Compose tire l'image publiée, applique les migrations et régénère les fichiers statiques au démarrage.
+   Un seul conteneur démarre (Django + SQLite), applique les migrations et régénère les statiques. La
+   base SQLite est stockée dans le volume Docker `data` (persiste aux redémarrages et mises à jour).
 4. **Créer le premier compte** :
    ```bash
-   docker compose exec api python manage.py createsuperuser
+   docker compose exec app python manage.py createsuperuser
    ```
 5. Accéder depuis un navigateur (PC ou mobile sur le même réseau) : `http://<ip-du-nas>:8000/`.
 
