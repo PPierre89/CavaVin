@@ -1,8 +1,11 @@
 import json
+import os
 import urllib.error
+from io import StringIO
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
@@ -319,3 +322,30 @@ class WineApiProviderTests(SimpleTestCase):
     def test_reponse_sans_wine_renvoie_none(self, mock_urlopen):
         mock_urlopen.return_value = _fake_urlopen(b'{"confidence": 0.2}')
         self.assertIsNone(self.provider.lookup_by_text("inconnu"))
+
+
+class EnsureSuperuserCommandTests(TestCase):
+    """Commande ensure_superuser : création depuis l'environnement, idempotente."""
+
+    @patch.dict(os.environ, {
+        "DJANGO_SUPERUSER_USERNAME": "boss",
+        "DJANGO_SUPERUSER_PASSWORD": "un-mot-de-passe",
+        "DJANGO_SUPERUSER_EMAIL": "boss@example.com",
+    })
+    def test_cree_le_superuser_puis_idempotent(self):
+        User = get_user_model()
+        call_command("ensure_superuser", stdout=StringIO())
+
+        u = User.objects.get(username="boss")
+        self.assertTrue(u.is_superuser)
+        self.assertTrue(u.is_staff)
+        self.assertEqual(u.email, "boss@example.com")
+
+        # Second appel : ni doublon, ni erreur.
+        call_command("ensure_superuser", stdout=StringIO())
+        self.assertEqual(User.objects.filter(username="boss").count(), 1)
+
+    @patch.dict(os.environ, {"DJANGO_SUPERUSER_USERNAME": "", "DJANGO_SUPERUSER_PASSWORD": ""})
+    def test_sans_variables_ne_cree_rien(self):
+        call_command("ensure_superuser", stdout=StringIO())
+        self.assertFalse(get_user_model().objects.filter(is_superuser=True).exists())
