@@ -137,10 +137,9 @@ cave-a-vin/
 └── .env.example
 ```
 
-La base de données bascule automatiquement : **SQLite** par défaut (zéro dépendance externe — c'est ce
-qu'utilise le déploiement mono-conteneur), et **Postgres** dès que la variable d'environnement
-`POSTGRES_HOST` est présente. En conteneur, `SQLITE_PATH` place le fichier SQLite sur un volume
-persistant — voir `backend/config/settings.py`.
+La base de données est **SQLite** (zéro dépendance externe, adapté au déploiement mono-conteneur). En
+conteneur, `SQLITE_PATH` place le fichier SQLite sur un volume persistant — voir
+`backend/config/settings.py`.
 
 ## Lancer en local (sans Docker)
 
@@ -190,7 +189,6 @@ ni de construire quoi que ce soit : deux fichiers suffisent.
      sinon Django refusera les requêtes venant d'un autre appareil que `localhost`.
    - `DJANGO_DEBUG` : laisser vide/absent pour garder le défaut sûr (`False`) en Docker.
    - `WINEAPI_KEY` : optionnel, pour l'identification de vin par texte (US 04).
-   > Les variables `POSTGRES_*` ne servent pas au déploiement mono-conteneur (SQLite) — sans effet.
    > Si le package ghcr est privé, authentifie Docker sur le NAS :
    > `echo <TON_PAT> | docker login ghcr.io -u PPierre89 --password-stdin`.
 3. **Démarrer** (via l'interface Docker/Container Manager de ton NAS, ou en SSH) :
