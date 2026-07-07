@@ -3,5 +3,8 @@ __pycache__/
 *.pyc
 backend/db.sqlite3
 backend/staticfiles/
+# Bind mounts créés par docker-compose (SQLite + statiques) si lancé depuis le repo.
+/data/
+/staticfiles_data/
 .env
 *.log
