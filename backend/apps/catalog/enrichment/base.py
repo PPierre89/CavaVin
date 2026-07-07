@@ -53,3 +53,7 @@ class EnrichmentProvider(ABC):
     def lookup_by_text(self, query: str) -> NormalizedWine | None:
         """Recherche par texte libre / sortie OCR (US 03/04). None si non supporté / non trouvé."""
         return None
+
+    def lookup_by_image(self, data: bytes, content_type: str) -> NormalizedWine | None:
+        """Identification par photo d'étiquette (US 02/03). None si non supporté / non trouvé."""
+        return None

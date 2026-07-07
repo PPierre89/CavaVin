@@ -36,6 +36,22 @@ class IdentifierVinSerializer(serializers.Serializer):
     query = serializers.CharField(min_length=2, trim_whitespace=True)
 
 
+class ScanEtiquetteSerializer(serializers.Serializer):
+    """Valide l'upload d'une photo d'étiquette (US 02/03) : JPEG/PNG, 10 Mo max."""
+
+    MAX_SIZE = 10 * 1024 * 1024  # limite wineapi.io
+    CONTENT_TYPES = {"image/jpeg", "image/png"}
+
+    image = serializers.FileField()
+
+    def validate_image(self, f):
+        if f.size > self.MAX_SIZE:
+            raise serializers.ValidationError("Image trop lourde (10 Mo maximum).")
+        if (f.content_type or "").lower() not in self.CONTENT_TYPES:
+            raise serializers.ValidationError("Format non supporté (JPEG ou PNG attendu).")
+        return f
+
+
 class CuveeSerializer(serializers.ModelSerializer):
     domaine_nom = serializers.CharField(source="domaine.nom", read_only=True)
     cepages_noms = serializers.SlugRelatedField(

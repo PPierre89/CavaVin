@@ -4,6 +4,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
+import uuid
 
 from django.conf import settings
 
@@ -40,12 +41,34 @@ class WineApiProvider(EnrichmentProvider):
         return bool(settings.WINEAPI_KEY)
 
     def _request(self, method: str, path: str, payload: dict | None = None):
-        url = settings.WINEAPI_BASE_URL.rstrip("/") + path
         headers = {"X-API-Key": settings.WINEAPI_KEY, "Accept": "application/json"}
         data = None
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
+        return self._open(method, path, data, headers)
+
+    def _request_multipart(self, path: str, field: str, filename: str, data: bytes, content_type: str):
+        """POST multipart/form-data (upload d'image) via la stdlib, sans dépendance."""
+        boundary = "----cavavin" + uuid.uuid4().hex
+        body = (
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'
+                f"Content-Type: {content_type}\r\n\r\n"
+            ).encode("utf-8")
+            + data
+            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+        headers = {
+            "X-API-Key": settings.WINEAPI_KEY,
+            "Accept": "application/json",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        }
+        return self._open("POST", path, body, headers)
+
+    def _open(self, method: str, path: str, data: bytes | None, headers: dict):
+        url = settings.WINEAPI_BASE_URL.rstrip("/") + path
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=settings.WINEAPI_TIMEOUT) as resp:
@@ -65,6 +88,18 @@ class WineApiProvider(EnrichmentProvider):
 
     def lookup_by_text(self, query: str) -> NormalizedWine | None:
         result = self._request("POST", "/identify/text", {"query": query})
+        return self._from_identify_result(result)
+
+    def lookup_by_image(self, data: bytes, content_type: str) -> NormalizedWine | None:
+        """US 02/03 — identification par photo d'étiquette (JPEG/PNG ≤ 10 Mo)."""
+        ext = "png" if "png" in (content_type or "") else "jpg"
+        result = self._request_multipart(
+            "/identify/image", "image", f"etiquette.{ext}", data, content_type
+        )
+        return self._from_identify_result(result)
+
+    def _from_identify_result(self, result) -> NormalizedWine | None:
+        """Réponse commune de /identify/text et /identify/image -> NormalizedWine."""
         if not result:
             return None
         wine = result.get("wine")

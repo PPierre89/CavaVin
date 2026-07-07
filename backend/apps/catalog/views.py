@@ -1,4 +1,5 @@
 from rest_framework import status, viewsets
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -12,6 +13,7 @@ from .serializers import (
     DomaineSerializer,
     IdentifierVinSerializer,
     ScanCodeBarresSerializer,
+    ScanEtiquetteSerializer,
 )
 
 
@@ -139,5 +141,56 @@ class IdentifierVinView(APIView):
         # --- Échec total ---
         return Response(
             {"source": None, "detail": "Vin non identifié"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+
+class ScanEtiquetteView(APIView):
+    """
+    US 02/03 — Identification d'un vin à partir d'une photo d'étiquette,
+    via `POST /identify/image` de wineapi.io (JPEG/PNG ≤ 10 Mo).
+
+    Cascade des fournisseurs image activés -> normalisation, persistance locale
+    (même pipeline que le scan code-barres et l'identification texte), réponse
+    enrichie. Échec -> 404 'Vin non identifié sur l'étiquette'.
+    """
+
+    parser_classes = [MultiPartParser, FormParser]
+    serializer_class = ScanEtiquetteSerializer
+
+    def post(self, request):
+        serializer = ScanEtiquetteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        image = serializer.validated_data["image"]
+        data = image.read()
+
+        for provider in get_enabled_providers():
+            try:
+                wine = provider.lookup_by_image(data, image.content_type)
+            except EnrichmentError as exc:
+                return Response({"detail": exc.message}, status=exc.status)
+            if not wine:
+                continue
+            cuvee, created = upsert_cuvee(wine)
+            return Response(
+                {
+                    "source": wine.source,
+                    "created": created,
+                    "confidence": wine.raw.get("confidence"),
+                    "cuvee": CuveeSerializer(cuvee).data,
+                    "infos": {
+                        "region": wine.raw.get("region"),
+                        "pays": wine.raw.get("country"),
+                        "note": wine.raw.get("note"),
+                        "alcool": wine.raw.get("alcool"),
+                        "prix": wine.raw.get("prix"),
+                        "description": wine.raw.get("description"),
+                    },
+                    "suggestions": wine.raw.get("suggestions") or [],
+                }
+            )
+
+        return Response(
+            {"source": None, "detail": "Vin non identifié sur l'étiquette"},
             status=status.HTTP_404_NOT_FOUND,
         )

@@ -14,6 +14,7 @@ from apps.catalog.views import (
     DomaineViewSet,
     IdentifierVinView,
     ScanCodeBarresView,
+    ScanEtiquetteView,
 )
 from apps.cellars.views import CaveViewSet, EmplacementViewSet
 from apps.inventory.views import BouteilleViewSet, MouvementStockViewSet
@@ -34,6 +35,7 @@ urlpatterns = [
     path("api/", include(router.urls)),
     path("api/scan-code-barres/", ScanCodeBarresView.as_view(), name="scan-code-barres"),
     path("api/identifier-vin/", IdentifierVinView.as_view(), name="identifier-vin"),
+    path("api/scan-etiquette/", ScanEtiquetteView.as_view(), name="scan-etiquette"),
     path("api/auth/", include("rest_framework.urls")),
     path("api/auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
