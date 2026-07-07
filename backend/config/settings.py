@@ -195,8 +195,9 @@ SIMPLE_JWT = {
 # provider est automatiquement désactivé si la clé est absente.
 WINEAPI_BASE_URL = os.getenv("WINEAPI_BASE_URL", "https://api.wineapi.io")
 WINEAPI_KEY = os.getenv("WINEAPI_KEY", "")
-WINEAPI_TIMEOUT = int(os.getenv("WINEAPI_TIMEOUT", "15"))
+WINEAPI_TIMEOUT = int(os.getenv("WINEAPI_TIMEOUT", "30"))
 # L'identification par photo d'étiquette (vision) est bien plus lente : timeout dédié.
+# Doit rester < timeout worker gunicorn (120 s) pour ne pas faire tuer le worker.
 WINEAPI_IMAGE_TIMEOUT = int(os.getenv("WINEAPI_IMAGE_TIMEOUT", "45"))
 # Appelle /wines/{id} après identification pour récupérer cépages/appellation/notes.
 WINEAPI_ENRICH_DETAIL = os.getenv("WINEAPI_ENRICH_DETAIL", "True") == "True"

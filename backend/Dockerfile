@@ -30,4 +30,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=4)"
 
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
+# --timeout 120 + --threads 4 : tolère les appels d'enrichissement wineapi lents
+# (sinon le worker est tué à 30 s par défaut). NB : docker-compose surcharge cette
+# commande — garder les deux alignés.
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--threads", "4", "--timeout", "120"]
