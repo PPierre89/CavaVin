@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#191220">
+<title>Cave à Vin</title>
+<style>
+  :root {
+    --bg: #191220;
+    --bg-soft: #221a2b;
+    --card: #2a2135;
+    --card-2: #332941;
+    --border: #3d3150;
+    --ink: #f2ebe3;
+    --muted: #a99bb5;
+    --gold: #cfa45f;
+    --gold-soft: #8a6d3f;
+    --rouge: #8e2f45;
+    --rouge-vif: #b04a63;
+    --blanc: #e6d491;
+    --rose: #e8a0b4;
+    --bulles: #d9b653;
+    --autre: #8d93a0;
+    --ok: #56b77f;
+    --alerte: #d95757;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html { color-scheme: dark; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    margin: 0;
+    padding-bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+  h1, h2, h3, .brand { font-family: Georgia, "Times New Roman", serif; font-weight: 600; }
+
+  /* ---------- Header ---------- */
+  header {
+    position: sticky; top: 0; z-index: 20;
+    background: linear-gradient(180deg, #241a2e 0%, rgba(25,18,32,0.96) 100%);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    padding: calc(12px + env(safe-area-inset-top)) 18px 12px;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  header .brand { margin: 0; font-size: 1.25rem; color: var(--gold); letter-spacing: 0.5px; }
+  header .user { font-size: 0.78rem; color: var(--muted); }
+  header .user a { color: var(--gold); text-decoration: none; }
+
+  main { max-width: 640px; margin: 0 auto; padding: 14px 14px 24px; }
+
+  /* ---------- Onglets ---------- */
+  .tab { display: none; }
+  .tab.active { display: block; }
+
+  nav.bottom {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+    display: flex; justify-content: space-around; align-items: stretch;
+    background: rgba(30,22,40,0.97);
+    backdrop-filter: blur(10px);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  nav.bottom button {
+    flex: 1; background: none; border: none; color: var(--muted);
+    padding: 10px 0 8px; font-size: 0.68rem; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  nav.bottom button .ico { font-size: 1.35rem; line-height: 1; }
+  nav.bottom button.active { color: var(--gold); }
+
+  /* ---------- Cartes & sections ---------- */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .card h2 { margin: 0 0 12px; font-size: 1.02rem; color: var(--gold); }
+  .muted { color: var(--muted); font-size: 0.85rem; }
+
+  /* ---------- Stats ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
+  .stat {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 6px; text-align: center;
+  }
+  .stat .n { font-size: 1.25rem; font-family: Georgia, serif; color: var(--ink); }
+  .stat .l { font-size: 0.62rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin-top: 2px; }
+  .stat.s-rouge .n { color: var(--rouge-vif); }
+  .stat.s-blanc .n { color: var(--blanc); }
+  .stat.s-bulles .n { color: var(--bulles); }
+
+  /* ---------- Sélecteur de cave (chips) ---------- */
+  .chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 10px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip {
+    flex: 0 0 auto; padding: 9px 16px; border-radius: 999px;
+    background: var(--card); border: 1px solid var(--border);
+    color: var(--muted); font-size: 0.85rem; cursor: pointer;
+  }
+  .chip.active { background: var(--gold); border-color: var(--gold); color: #241a10; font-weight: 600; }
+
+  /* ---------- Emplacements & alvéoles ---------- */
+  .node {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 13px 14px; margin-bottom: 12px;
+  }
+  .node .node { background: var(--card-2); margin: 10px 0 0; }
+  .node-header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .node-header .titre { font-size: 0.92rem; font-weight: 600; }
+  .node-header .type { color: var(--gold); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.8px; display: block; margin-bottom: 2px; }
+  .node-header .cap { color: var(--muted); font-size: 0.75rem; white-space: nowrap; }
+  .slots { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 11px; }
+
+  .slot {
+    width: 38px; height: 38px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.72rem; font-weight: 700; color: #fff;
+    border: 3px solid transparent; cursor: pointer;
+    box-shadow: inset 0 -3px 6px rgba(0,0,0,0.35);
+  }
+  .slot.vide {
+    border: 2px dashed var(--border); background: transparent;
+    box-shadow: none; cursor: default;
+  }
+  .slot.statut-A_BOIRE { border-color: var(--ok); }
+  .slot.statut-DEPASSE { border-color: var(--alerte); }
+  .slot[data-couleur="ROUGE"] { background: radial-gradient(circle at 32% 30%, #a84a62, var(--rouge)); }
+  .slot[data-couleur="BLANC"] { background: radial-gradient(circle at 32% 30%, #f2e6b8, var(--blanc)); color: #5b4b1f; }
+  .slot[data-couleur="ROSE"]  { background: radial-gradient(circle at 32% 30%, #f5c3d1, var(--rose)); color: #6b1f3a; }
+  .slot[data-couleur="BULLES"]{ background: radial-gradient(circle at 32% 30%, #ecd07a, var(--bulles)); color: #4a3b06; }
+  .slot[data-couleur="AUTRE"] { background: radial-gradient(circle at 32% 30%, #a6acb8, var(--autre)); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 14px; font-size: 0.72rem; color: var(--muted); margin: 4px 2px 12px; }
+  .legend .sw { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+
+  /* ---------- Non placées ---------- */
+  .unplaced-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 0.85rem;
+  }
+  .unplaced-row:last-child { border-bottom: none; }
+  .unplaced-row .slot { width: 30px; height: 30px; flex: 0 0 auto; font-size: 0; }
+  .unplaced-row .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ---------- Formulaires ---------- */
+  label { display: block; font-size: 0.75rem; margin: 12px 0 5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  label .req { color: var(--gold); }
+  label .opt { color: #6d6178; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  input, select, textarea {
+    width: 100%; font-size: 16px; padding: 13px 14px;
+    border-radius: 12px; border: 1px solid var(--border);
+    background: var(--bg-soft); color: var(--ink);
+  }
+  textarea { font-family: inherit; resize: vertical; }
+  input::placeholder, textarea::placeholder { color: #6d6178; }
+  .section-title {
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1.2px;
+    color: var(--gold); margin: 18px 0 2px; padding-bottom: 5px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-title:first-child { margin-top: 0; }
+  button.primary {
+    width: 100%; margin-top: 18px; padding: 15px;
+    background: linear-gradient(180deg, var(--gold), #b78c47);
+    color: #241a10; border: none; border-radius: 12px;
+    font-size: 1rem; font-weight: 700; cursor: pointer;
+  }
+  button.primary:active { transform: scale(0.985); }
+  button.danger { background: linear-gradient(180deg, var(--rouge-vif), var(--rouge)); color: #fff; }
+  button.ghost {
+    background: none; border: 1px solid var(--border); color: var(--muted);
+    padding: 10px 14px; border-radius: 12px; font-size: 0.85rem; cursor: pointer;
+  }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .segments { display: flex; background: var(--bg-soft); border-radius: 12px; padding: 4px; margin-bottom: 6px; }
+  .segments button {
+    flex: 1; border: none; background: none; color: var(--muted);
+    padding: 10px 4px; border-radius: 9px; font-size: 0.85rem; cursor: pointer;
+  }
+  .segments button.active { background: var(--card-2); color: var(--gold); font-weight: 600; }
+  .seg-panel { display: none; }
+  .seg-panel.active { display: block; }
+
+  /* ---------- Journal ---------- */
+  .mvt {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 2px; border-bottom: 1px solid var(--border);
+  }
+  .mvt:last-child { border-bottom: none; }
+  .mvt .badge {
+    flex: 0 0 auto; width: 38px; height: 38px; border-radius: 50%;
+    background: var(--bg-soft); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; font-size: 1rem;
+  }
+  .mvt .info { flex: 1; min-width: 0; }
+  .mvt .t1 { font-size: 0.88rem; }
+  .mvt .t2 { font-size: 0.74rem; color: var(--muted); margin-top: 2px; }
+
+  /* ---------- Bottom sheet ---------- */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(10,6,14,0.6); z-index: 40;
+    opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  .overlay.open { opacity: 1; pointer-events: auto; }
+  .sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+    background: var(--card); border-radius: 22px 22px 0 0;
+    border: 1px solid var(--border); border-bottom: none;
+    padding: 10px 20px calc(24px + env(safe-area-inset-bottom));
+    transform: translateY(105%); transition: transform 0.25s ease;
+    max-height: 82vh; overflow-y: auto;
+  }
+  .sheet.open { transform: translateY(0); }
+  .sheet .grip { width: 42px; height: 4px; border-radius: 2px; background: var(--border); margin: 4px auto 14px; }
+  .sheet h3 { margin: 0; font-size: 1.15rem; }
+  .sheet .sub { color: var(--muted); font-size: 0.85rem; margin: 4px 0 2px; }
+  .sheet .tags { display: flex; gap: 8px; margin: 12px 0 4px; flex-wrap: wrap; }
+  .tag {
+    font-size: 0.72rem; padding: 5px 11px; border-radius: 999px;
+    background: var(--bg-soft); border: 1px solid var(--border); color: var(--muted);
+  }
+  .tag.gold { color: var(--gold); border-color: var(--gold-soft); }
+  .stepper { display: flex; align-items: center; gap: 14px; margin-top: 6px; }
+  .stepper button {
+    width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--border);
+    background: var(--bg-soft); color: var(--ink); font-size: 1.4rem; cursor: pointer;
+  }
+  .stepper .val { font-size: 1.3rem; font-family: Georgia, serif; min-width: 34px; text-align: center; }
+
+  /* ---------- Toast ---------- */
+  .toast {
+    position: fixed; top: calc(14px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%) translateY(-150%);
+    z-index: 60; background: var(--card-2); border: 1px solid var(--border);
+    color: var(--ink); padding: 12px 20px; border-radius: 999px; font-size: 0.85rem;
+    transition: transform 0.25s ease; max-width: 88vw; text-align: center;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.45);
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast.err { border-color: var(--alerte); }
+  .toast.ok { border-color: var(--ok); }
+
+  /* ---------- Login ---------- */
+  .login-card { text-align: center; padding: 40px 20px; }
+  .login-card .glass { font-size: 3rem; }
+  .login-card a.primary {
+    display: inline-block; margin-top: 18px; padding: 14px 34px; text-decoration: none;
+    background: linear-gradient(180deg, var(--gold), #b78c47); color: #241a10;
+    border-radius: 12px; font-weight: 700;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1 class="brand">Cave à Vin</h1>
+  {% if request.user.is_authenticated %}
+    <span class="user">{{ request.user.username }} · <a href="/admin/logout/?next=/">sortir</a></span>
+  {% else %}
+    <span class="user"><a href="/admin/login/?next=/">se connecter</a></span>
+  {% endif %}
+</header>
+
+<main>
+
+{% if not request.user.is_authenticated %}
+  <div class="card login-card">
+    <div class="glass">🍷</div>
+    <h2>Votre cave, dans votre poche</h2>
+    <p class="muted">Connectez-vous pour visualiser vos bouteilles, gérer vos emplacements et suivre vos dégustations.</p>
+    <a class="primary" href="/admin/login/?next=/">Se connecter</a>
+  </div>
+{% else %}
+
+  <!-- ============ ONGLET CAVE ============ -->
+  <div class="tab active" id="tab-cave">
+    <div class="stats" id="stats"></div>
+    <div class="chips" id="cave-chips"></div>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--rouge);"></span>Rouge</span>
+      <span><span class="sw" style="background:var(--blanc);"></span>Blanc</span>
+      <span><span class="sw" style="background:var(--rose);"></span>Rosé</span>
+      <span><span class="sw" style="background:var(--bulles);"></span>Bulles</span>
+      <span><span class="sw" style="border:2px solid var(--ok); background:none;"></span>À boire</span>
+      <span><span class="sw" style="border:2px solid var(--alerte); background:none;"></span>Dépassé</span>
+    </div>
+    <div id="cave-tree"></div>
+    <div class="card" id="card-non-placees" style="display:none;">
+      <h2>En attente de placement</h2>
+      <div id="non-placees"></div>
+    </div>
+  </div>
+
+  <!-- ============ ONGLET AJOUTER ============ -->
+  <div class="tab" id="tab-ajouter">
+    <div class="segments" id="segments">
+      <button data-seg="bouteille" class="active">Bouteille</button>
+      <button data-seg="emplacement">Emplacement</button>
+      <button data-seg="cave">Cave</button>
+    </div>
+
+    <div class="card seg-panel active" id="seg-bouteille">
+      <h2>Ajouter une bouteille</h2>
+      <button type="button" class="primary" id="btn-scan" style="margin-top:0;">📷 Scanner le code-barres</button>
+      <div id="scan-zone" style="display:none; margin-top:12px;">
+        <video id="scan-video" playsinline muted style="width:100%; border-radius:12px; background:#000; aspect-ratio:4/3; object-fit:cover;"></video>
+        <p class="muted" style="text-align:center; margin:8px 0 0;">Vise le code-barres au dos de la bouteille</p>
+        <button type="button" class="ghost" id="btn-scan-cancel" style="width:100%; margin-top:8px;">Annuler</button>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <input id="search-name" placeholder="ou rechercher par nom (ex: Petrus 2015)" style="flex:1;">
+        <button type="button" class="ghost" id="btn-search-name" style="flex:0 0 auto; width:auto; padding:13px 16px;">🔎</button>
+      </div>
+      <form id="form-bouteille" style="margin-top:16px;">
+        <div class="section-title">Le vin</div>
+        <label for="bt-cuvee">Cuvée <span class="req">*</span></label>
+        <select id="bt-cuvee"><option value="">— nouvelle cuvée —</option></select>
+
+        <div id="new-cuvee-block">
+          <div class="row2">
+            <div>
+              <label for="bt-domaine-nom">Domaine <span class="req">*</span></label>
+              <input id="bt-domaine-nom" placeholder="Domaine Leflaive">
+            </div>
+            <div>
+              <label for="bt-cuvee-nom">Nom de cuvée <span class="req">*</span></label>
+              <input id="bt-cuvee-nom" placeholder="Chablis Grand Cru">
+            </div>
+          </div>
+          <div class="row2">
+            <div>
+              <label for="bt-couleur">Couleur <span class="req">*</span></label>
+              <select id="bt-couleur">
+                <option value="ROUGE">Rouge</option>
+                <option value="BLANC">Blanc</option>
+                <option value="ROSE">Rosé</option>
+                <option value="BULLES">Bulles</option>
+                <option value="AUTRE">Autre</option>
+              </select>
+            </div>
+            <div>
+              <label for="bt-appellation">Appellation <span class="opt">facultatif</span></label>
+              <input id="bt-appellation" placeholder="Chablis Grand Cru">
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title">La bouteille</div>
+        <div class="row2">
+          <div>
+            <label for="bt-quantite">Quantité <span class="req">*</span></label>
+            <input id="bt-quantite" type="number" inputmode="numeric" min="1" value="1">
+          </div>
+          <div>
+            <label for="bt-statut">Statut <span class="req">*</span></label>
+            <select id="bt-statut">
+              <option value="A_GARDER">À garder</option>
+              <option value="A_BOIRE">À boire</option>
+              <option value="DEPASSE">Dépassé</option>
+            </select>
+          </div>
+        </div>
+        <div class="row2">
+          <div>
+            <label for="bt-millesime">Millésime <span class="opt">facultatif</span></label>
+            <input id="bt-millesime" type="number" inputmode="numeric" min="1900" max="2100" placeholder="2018">
+          </div>
+          <div>
+            <label for="bt-emplacement">Emplacement <span class="opt">facultatif</span></label>
+            <select id="bt-emplacement"><option value="">— non placée —</option></select>
+          </div>
+        </div>
+        <div class="row2">
+          <div>
+            <label for="bt-prix">Prix d'achat (€) <span class="opt">facultatif</span></label>
+            <input id="bt-prix" type="number" inputmode="decimal" step="0.01" min="0" placeholder="24.90">
+          </div>
+          <div>
+            <label for="bt-date-achat">Date d'achat <span class="opt">facultatif</span></label>
+            <input id="bt-date-achat" type="date">
+          </div>
+        </div>
+        <div class="row2">
+          <div>
+            <label for="bt-apogee-debut">Apogée dès <span class="opt">facultatif</span></label>
+            <input id="bt-apogee-debut" type="number" inputmode="numeric" min="1900" max="2100" placeholder="2024">
+          </div>
+          <div>
+            <label for="bt-apogee-fin">Apogée jusqu'à <span class="opt">facultatif</span></label>
+            <input id="bt-apogee-fin" type="number" inputmode="numeric" min="1900" max="2100" placeholder="2030">
+          </div>
+        </div>
+        <label for="bt-notes">Notes <span class="opt">facultatif</span></label>
+        <textarea id="bt-notes" rows="2" placeholder="Occasion, cadeau, coup de cœur…"></textarea>
+
+        <p class="muted" style="margin:14px 0 0;"><span class="req">*</span> champ obligatoire</p>
+        <button class="primary" type="submit">Ajouter à la cave</button>
+      </form>
+    </div>
+
+    <div class="card seg-panel" id="seg-emplacement">
+      <h2>Ajouter un emplacement</h2>
+      <form id="form-emplacement">
+        <label for="emp-nom">Nom</label>
+        <input id="emp-nom" placeholder="Armoire 1, Clayette 3, B4…" required>
+        <div class="row2">
+          <div>
+            <label for="emp-type">Type</label>
+            <select id="emp-type">
+              <option value="ARMOIRE">Armoire</option>
+              <option value="CASIER">Casier</option>
+              <option value="CLAYETTE">Clayette</option>
+              <option value="CAISSE">Caisse bois</option>
+              <option value="CASE">Case individuelle</option>
+            </select>
+          </div>
+          <div>
+            <label for="emp-capacite">Capacité</label>
+            <input id="emp-capacite" type="number" inputmode="numeric" min="0" placeholder="optionnel">
+          </div>
+        </div>
+        <label for="emp-parent">À l'intérieur de</label>
+        <select id="emp-parent"><option value="">— Racine de la cave —</option></select>
+        <button class="primary" type="submit">Créer l'emplacement</button>
+      </form>
+    </div>
+
+    <div class="card seg-panel" id="seg-cave">
+      <h2>Nouvelle cave</h2>
+      <form id="form-cave">
+        <label for="cave-nom">Nom</label>
+        <input id="cave-nom" placeholder="Cave principale, Garage…" required>
+        <label for="cave-desc">Description</label>
+        <input id="cave-desc" placeholder="optionnel">
+        <button class="primary" type="submit">Créer la cave</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ ONGLET JOURNAL ============ -->
+  <div class="tab" id="tab-journal">
+    <div class="card">
+      <h2>Derniers mouvements</h2>
+      <div id="mouvements"></div>
+    </div>
+  </div>
+
+{% endif %}
+</main>
+
+{% if request.user.is_authenticated %}
+<nav class="bottom">
+  <button data-tab="cave" class="active"><span class="ico">🍷</span>Ma cave</button>
+  <button data-tab="ajouter"><span class="ico">＋</span>Ajouter</button>
+  <button data-tab="journal"><span class="ico">🕘</span>Journal</button>
+</nav>
+
+<div class="overlay" id="overlay"></div>
+<div class="sheet" id="sheet">
+  <div class="grip"></div>
+  <div id="sheet-content"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+function getCookie(name) {
+  const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+  return v ? decodeURIComponent(v.pop()) : '';
+}
+
+async function api(method, url, body) {
+  const res = await fetch(url, {
+    method,
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let data;
+  try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
+  if (!res.ok) {
+    const err = new Error('API error');
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+async function apiAllPages(url) {
+  let results = [];
+  let next = url;
+  let guard = 0;
+  while (next && guard < 20) {
+    const page = await api('GET', next);
+    if (Array.isArray(page)) { results = results.concat(page); break; }
+    results = results.concat(page.results || []);
+    next = page.next;
+    guard++;
+  }
+  return results;
+}
+
+function errMsg(e, fallback) {
+  const d = e && e.data;
+  if (d) {
+    if (typeof d === 'string') return d;
+    if (d.detail) return d.detail;
+    const first = Object.values(d).flat()[0];
+    if (first) return first;
+  }
+  return fallback;
+}
+
+const COULEUR_LABELS = {ROUGE: 'Rouge', BLANC: 'Blanc', ROSE: 'Rosé', BULLES: 'Bulles', AUTRE: 'Autre'};
+const TYPE_LABELS = {ARMOIRE: 'Armoire', CASIER: 'Casier', CLAYETTE: 'Clayette', CAISSE: 'Caisse bois', CASE: 'Case'};
+const MVT_ICONS = {CONSOMMATION: '🥂', ENTREE: '📥', SORTIE: '📤', AJUSTEMENT: '🔧'};
+const MAX_SLOTS_RENDUS = 96;
+
+let state = { caves: [], caveId: null, emplacements: [], bouteilles: [], cuvees: [] };
+
+state.cuveeColor = function (b) {
+  const cuvee = state.cuvees.find(c => c.id === b.cuvee);
+  return cuvee ? cuvee.couleur : 'AUTRE';
+};
+
+/* ---------- Toast ---------- */
+let toastTimer = null;
+function toast(message, type) {
+  const el = document.getElementById('toast');
+  el.textContent = message;
+  el.className = 'toast show ' + (type || '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = 'toast'; }, 3200);
+}
+
+/* ---------- Navigation par onglets ---------- */
+document.querySelectorAll('nav.bottom button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav.bottom button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    window.scrollTo({top: 0});
+  });
+});
+
+document.querySelectorAll('#segments button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#segments button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.seg-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('seg-' + btn.dataset.seg).classList.add('active');
+  });
+});
+
+/* ---------- Bottom sheet ---------- */
+function openSheet(html) {
+  document.getElementById('sheet-content').innerHTML = html;
+  document.getElementById('overlay').classList.add('open');
+  document.getElementById('sheet').classList.add('open');
+}
+function closeSheet() {
+  document.getElementById('overlay').classList.remove('open');
+  document.getElementById('sheet').classList.remove('open');
+}
+document.getElementById('overlay').addEventListener('click', closeSheet);
+
+function sheetBouteille(b) {
+  const couleur = state.cuveeColor(b);
+  const statutLabels = {A_GARDER: 'À garder', A_BOIRE: 'À boire', DEPASSE: 'Dépassé'};
+  const emplacementOptions = state.emplacements
+    .map(e => `<option value="${e.id}" ${e.id === b.emplacement ? 'selected' : ''}>${e.chemin}</option>`)
+    .join('');
+  openSheet(`
+    <h3>${b.cuvee_nom}</h3>
+    <div class="sub">${b.domaine_nom}${b.millesime ? ' · ' + b.millesime : ''}</div>
+    <div class="tags">
+      <span class="tag gold">${COULEUR_LABELS[couleur] || couleur}</span>
+      <span class="tag">${statutLabels[b.statut] || b.statut}</span>
+      <span class="tag">× ${b.quantite} en stock</span>
+      ${b.emplacement_chemin ? `<span class="tag">📍 ${b.emplacement_chemin}</span>` : '<span class="tag">non placée</span>'}
+    </div>
+
+    <label>Consommer</label>
+    <div class="stepper">
+      <button type="button" id="st-moins">−</button>
+      <span class="val" id="st-val">1</span>
+      <button type="button" id="st-plus">＋</button>
+    </div>
+    <label for="sh-occasion">Occasion</label>
+    <input id="sh-occasion" placeholder="Dîner entre amis, anniversaire…">
+    <button class="primary danger" id="sh-consommer">🥂 Consommer</button>
+
+    <label for="sh-deplacer" style="margin-top:22px;">Déplacer vers</label>
+    <select id="sh-deplacer">
+      <option value="">— non placée —</option>
+      ${emplacementOptions}
+    </select>
+    <button class="primary" id="sh-deplacer-btn" style="margin-top:12px;">Déplacer</button>
+  `);
+
+  let qte = 1;
+  const val = document.getElementById('st-val');
+  document.getElementById('st-moins').addEventListener('click', () => { if (qte > 1) val.textContent = --qte; });
+  document.getElementById('st-plus').addEventListener('click', () => { if (qte < b.quantite) val.textContent = ++qte; });
+
+  document.getElementById('sh-consommer').addEventListener('click', async () => {
+    try {
+      await api('POST', `/api/bouteilles/${b.id}/consommer/`, {
+        quantite: qte,
+        occasion: document.getElementById('sh-occasion').value || '',
+      });
+      closeSheet();
+      toast(`Santé ! ${qte} bouteille(s) consommée(s) 🥂`, 'ok');
+      await refreshCaveData();
+    } catch (e) {
+      toast(errMsg(e, 'Impossible de consommer.'), 'err');
+    }
+  });
+
+  document.getElementById('sh-deplacer-btn').addEventListener('click', async () => {
+    const cible = document.getElementById('sh-deplacer').value;
+    try {
+      await api('PATCH', `/api/bouteilles/${b.id}/`, {emplacement: cible ? parseInt(cible, 10) : null});
+      closeSheet();
+      toast('Bouteille déplacée.', 'ok');
+      await refreshCaveData();
+    } catch (e) {
+      toast(errMsg(e, 'Impossible de déplacer.'), 'err');
+    }
+  });
+}
+
+/* ---------- Chargement des données ---------- */
+async function loadCaves() {
+  state.caves = await apiAllPages('/api/caves/');
+  if (state.caves.length && (!state.caveId || !state.caves.find(c => c.id === state.caveId))) {
+    state.caveId = state.caves[0].id;
+  }
+  renderCaveChips();
+  await refreshCaveData();
+}
+
+async function refreshCaveData() {
+  const emplacementsUrl = state.caveId ? `/api/emplacements/?cave=${state.caveId}` : null;
+  const [emplacements, bouteilles, cuvees, mouvementsPage] = await Promise.all([
+    emplacementsUrl ? apiAllPages(emplacementsUrl) : Promise.resolve([]),
+    apiAllPages('/api/bouteilles/'),
+    apiAllPages('/api/cuvees/'),
+    api('GET', '/api/mouvements/?ordering=-date'),
+  ]);
+  state.emplacements = emplacements;
+  state.bouteilles = bouteilles;
+  state.cuvees = cuvees;
+  renderStats();
+  renderCuveeSelect();
+  renderEmplacementSelects();
+  renderTree();
+  renderNonPlacees();
+  renderMouvements((mouvementsPage.results || mouvementsPage).slice(0, 20));
+}
+
+/* ---------- Rendus ---------- */
+function renderStats() {
+  const actives = state.bouteilles.filter(b => b.quantite > 0);
+  const total = actives.reduce((s, b) => s + b.quantite, 0);
+  const parCouleur = {};
+  actives.forEach(b => {
+    const c = state.cuveeColor(b);
+    parCouleur[c] = (parCouleur[c] || 0) + b.quantite;
+  });
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="n">${total}</div><div class="l">Bouteilles</div></div>
+    <div class="stat s-rouge"><div class="n">${parCouleur.ROUGE || 0}</div><div class="l">Rouges</div></div>
+    <div class="stat s-blanc"><div class="n">${parCouleur.BLANC || 0}</div><div class="l">Blancs</div></div>
+    <div class="stat s-bulles"><div class="n">${(parCouleur.BULLES || 0) + (parCouleur.ROSE || 0) + (parCouleur.AUTRE || 0)}</div><div class="l">Autres</div></div>
+  `;
+}
+
+function renderCaveChips() {
+  const el = document.getElementById('cave-chips');
+  el.innerHTML = '';
+  state.caves.forEach(c => {
+    const chip = document.createElement('button');
+    chip.className = 'chip' + (c.id === state.caveId ? ' active' : '');
+    chip.textContent = c.nom;
+    chip.addEventListener('click', async () => {
+      state.caveId = c.id;
+      renderCaveChips();
+      await refreshCaveData();
+    });
+    el.appendChild(chip);
+  });
+  const plus = document.createElement('button');
+  plus.className = 'chip';
+  plus.textContent = '＋ cave';
+  plus.addEventListener('click', () => {
+    document.querySelector('nav.bottom button[data-tab="ajouter"]').click();
+    document.querySelector('#segments button[data-seg="cave"]').click();
+  });
+  el.appendChild(plus);
+}
+
+function renderCuveeSelect() {
+  const select = document.getElementById('bt-cuvee');
+  select.innerHTML = '<option value="">— nouvelle cuvée —</option>';
+  state.cuvees.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = `${c.domaine_nom} — ${c.nom} (${COULEUR_LABELS[c.couleur] || c.couleur})`;
+    select.appendChild(opt);
+  });
+  if (typeof toggleNewCuvee === 'function') toggleNewCuvee();
+}
+
+function renderEmplacementSelects() {
+  ['emp-parent', 'bt-emplacement'].forEach((id, i) => {
+    const select = document.getElementById(id);
+    select.innerHTML = i === 0
+      ? '<option value="">— Racine de la cave —</option>'
+      : '<option value="">— non placée —</option>';
+    state.emplacements.forEach(e => {
+      const opt = document.createElement('option');
+      opt.value = e.id;
+      opt.textContent = e.chemin;
+      select.appendChild(opt);
+    });
+  });
+}
+
+function bottlesFor(emplacementId) {
+  return state.bouteilles.filter(b => b.emplacement === emplacementId && b.quantite > 0);
+}
+
+function slotFor(b) {
+  const slot = document.createElement('div');
+  slot.className = `slot statut-${b.statut}`;
+  slot.dataset.couleur = state.cuveeColor(b);
+  slot.title = `${b.domaine_nom} — ${b.cuvee_nom} ${b.millesime || ''}`;
+  slot.addEventListener('click', () => sheetBouteille(b));
+  return slot;
+}
+
+function buildTree(parentId) {
+  return state.emplacements
+    .filter(e => e.parent === parentId)
+    .map(e => ({node: e, children: buildTree(e.id)}));
+}
+
+function renderNode(entry) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'node';
+
+  const header = document.createElement('div');
+  header.className = 'node-header';
+  const occupation = entry.node.occupation_actuelle;
+  const cap = entry.node.capacite;
+  header.innerHTML =
+    `<div><span class="type">${TYPE_LABELS[entry.node.type_emplacement] || entry.node.type_emplacement}</span>` +
+    `<span class="titre">${entry.node.nom}</span></div>` +
+    `<span class="cap">${occupation}${cap ? ' / ' + cap : ''} btl</span>`;
+  wrapper.appendChild(header);
+
+  const bottles = bottlesFor(entry.node.id);
+  if (bottles.length || cap) {
+    const slots = document.createElement('div');
+    slots.className = 'slots';
+    let rendus = 0;
+    bottles.forEach(b => {
+      for (let i = 0; i < b.quantite && rendus < MAX_SLOTS_RENDUS; i++, rendus++) {
+        slots.appendChild(slotFor(b));
+      }
+    });
+    if (cap) {
+      for (let i = rendus; i < cap && rendus < MAX_SLOTS_RENDUS; i++, rendus++) {
+        const vide = document.createElement('div');
+        vide.className = 'slot vide';
+        slots.appendChild(vide);
+      }
+    }
+    wrapper.appendChild(slots);
+  }
+
+  entry.children.forEach(child => wrapper.appendChild(renderNode(child)));
+  return wrapper;
+}
+
+function renderTree() {
+  const container = document.getElementById('cave-tree');
+  container.innerHTML = '';
+  if (!state.caves.length) {
+    container.innerHTML = '<div class="card"><p class="muted">Aucune cave. Crée ta première cave depuis l\'onglet Ajouter.</p></div>';
+    return;
+  }
+  const roots = buildTree(null);
+  if (!roots.length) {
+    container.innerHTML = '<div class="card"><p class="muted">Aucun emplacement dans cette cave — ajoute une armoire ou un casier depuis l\'onglet Ajouter.</p></div>';
+    return;
+  }
+  roots.forEach(r => container.appendChild(renderNode(r)));
+}
+
+function renderNonPlacees() {
+  const card = document.getElementById('card-non-placees');
+  const container = document.getElementById('non-placees');
+  container.innerHTML = '';
+  const unplaced = state.bouteilles.filter(b => !b.emplacement && b.quantite > 0);
+  card.style.display = unplaced.length ? 'block' : 'none';
+  unplaced.forEach(b => {
+    const row = document.createElement('div');
+    row.className = 'unplaced-row';
+    const slot = slotFor(b);
+    row.appendChild(slot);
+    const label = document.createElement('span');
+    label.className = 'lbl';
+    label.textContent = `${b.domaine_nom} — ${b.cuvee_nom} ${b.millesime || ''} × ${b.quantite}`;
+    row.appendChild(label);
+    const btn = document.createElement('button');
+    btn.className = 'ghost';
+    btn.textContent = 'Placer';
+    btn.addEventListener('click', () => sheetBouteille(b));
+    row.appendChild(btn);
+    container.appendChild(row);
+  });
+}
+
+function renderMouvements(mouvements) {
+  const container = document.getElementById('mouvements');
+  container.innerHTML = '';
+  if (!mouvements.length) {
+    container.innerHTML = '<p class="muted">Aucun mouvement pour le moment. Les consommations apparaîtront ici.</p>';
+    return;
+  }
+  mouvements.forEach(m => {
+    const bouteille = state.bouteilles.find(b => b.id === m.bouteille);
+    const nom = bouteille ? `${bouteille.cuvee_nom}${bouteille.millesime ? ' ' + bouteille.millesime : ''}` : `Bouteille #${m.bouteille}`;
+    const date = new Date(m.date).toLocaleDateString('fr-FR', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
+    const row = document.createElement('div');
+    row.className = 'mvt';
+    row.innerHTML =
+      `<div class="badge">${MVT_ICONS[m.type_mouvement] || '•'}</div>` +
+      `<div class="info"><div class="t1">${nom} · × ${m.quantite}</div>` +
+      `<div class="t2">${date}${m.occasion ? ' — ' + m.occasion : ''}</div></div>`;
+    container.appendChild(row);
+  });
+}
+
+/* ---------- Formulaires ---------- */
+async function findOrCreateDomaine(nom) {
+  const existing = await api('GET', `/api/domaines/?search=${encodeURIComponent(nom)}`);
+  const list = existing.results || existing;
+  const match = list.find(d => d.nom.toLowerCase() === nom.toLowerCase());
+  if (match) return match.id;
+  const created = await api('POST', '/api/domaines/', {nom});
+  return created.id;
+}
+
+document.getElementById('form-cave').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const nom = document.getElementById('cave-nom').value.trim();
+  if (!nom) return;
+  try {
+    const cave = await api('POST', '/api/caves/', {
+      nom,
+      description: document.getElementById('cave-desc').value.trim(),
+    });
+    document.getElementById('form-cave').reset();
+    state.caveId = cave.id;
+    toast('Cave créée.', 'ok');
+    document.querySelector('nav.bottom button[data-tab="cave"]').click();
+    await loadCaves();
+  } catch (err) {
+    toast(errMsg(err, 'Erreur lors de la création.'), 'err');
+  }
+});
+
+document.getElementById('form-emplacement').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!state.caveId) { toast('Crée d\'abord une cave.', 'err'); return; }
+  const nom = document.getElementById('emp-nom').value.trim();
+  if (!nom) return;
+  const parent = document.getElementById('emp-parent').value;
+  const capacite = document.getElementById('emp-capacite').value;
+  try {
+    await api('POST', '/api/emplacements/', {
+      cave: state.caveId,
+      nom,
+      type_emplacement: document.getElementById('emp-type').value,
+      parent: parent ? parseInt(parent, 10) : null,
+      capacite: capacite ? parseInt(capacite, 10) : null,
+    });
+    document.getElementById('form-emplacement').reset();
+    toast('Emplacement ajouté.', 'ok');
+    document.querySelector('nav.bottom button[data-tab="cave"]').click();
+    await refreshCaveData();
+  } catch (err) {
+    toast(errMsg(err, 'Erreur lors de l\'ajout.'), 'err');
+  }
+});
+
+// Masque le bloc "nouvelle cuvée" quand une cuvée existante est sélectionnée.
+function toggleNewCuvee() {
+  const isNew = !document.getElementById('bt-cuvee').value;
+  document.getElementById('new-cuvee-block').style.display = isNew ? 'block' : 'none';
+}
+document.getElementById('bt-cuvee').addEventListener('change', toggleNewCuvee);
+
+document.getElementById('form-bouteille').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const val = (id) => document.getElementById(id).value.trim();
+  const cuveeId = document.getElementById('bt-cuvee').value;
+  const domaineNom = val('bt-domaine-nom');
+  const cuveeNom = val('bt-cuvee-nom');
+  const millesime = val('bt-millesime');
+  const quantite = val('bt-quantite') || '1';
+  const emplacement = document.getElementById('bt-emplacement').value;
+  const prix = val('bt-prix');
+  const dateAchat = val('bt-date-achat');
+  const apogeeDebut = val('bt-apogee-debut');
+  const apogeeFin = val('bt-apogee-fin');
+  const notes = val('bt-notes');
+
+  if (apogeeDebut && apogeeFin && parseInt(apogeeDebut, 10) > parseInt(apogeeFin, 10)) {
+    toast("L'apogée de début doit précéder celle de fin.", 'err');
+    return;
+  }
+
+  try {
+    let finalCuveeId = cuveeId ? parseInt(cuveeId, 10) : null;
+    if (!finalCuveeId) {
+      if (!domaineNom || !cuveeNom) {
+        toast('Choisis une cuvée existante, ou renseigne domaine + nom de cuvée.', 'err');
+        return;
+      }
+      const domaineId = await findOrCreateDomaine(domaineNom);
+      const cuvee = await api('POST', '/api/cuvees/', {
+        domaine: domaineId,
+        nom: cuveeNom,
+        couleur: document.getElementById('bt-couleur').value,
+        appellation: val('bt-appellation'),
+      });
+      finalCuveeId = cuvee.id;
+    }
+    await api('POST', '/api/bouteilles/', {
+      cuvee: finalCuveeId,
+      millesime: millesime ? parseInt(millesime, 10) : null,
+      quantite: parseInt(quantite, 10),
+      emplacement: emplacement ? parseInt(emplacement, 10) : null,
+      statut: document.getElementById('bt-statut').value,
+      prix_achat: prix ? parseFloat(prix) : null,
+      date_achat: dateAchat || null,
+      apogee_debut: apogeeDebut ? parseInt(apogeeDebut, 10) : null,
+      apogee_fin: apogeeFin ? parseInt(apogeeFin, 10) : null,
+      notes: notes,
+    });
+    document.getElementById('form-bouteille').reset();
+    toggleNewCuvee();
+    toast('Bouteille ajoutée à la cave. 🍷', 'ok');
+    document.querySelector('nav.bottom button[data-tab="cave"]').click();
+    await refreshCaveData();
+  } catch (err) {
+    toast(errMsg(err, 'Erreur lors de l\'ajout de la bouteille.'), 'err');
+  }
+});
+
+/* ---------- Scan code-barres (US 01) ---------- */
+let scanStream = null;
+let scanRAF = null;
+
+async function resolveBarcode(ean) {
+  try {
+    const res = await api('POST', '/api/scan-code-barres/', { code_barres: ean });
+    const c = res.cuvee;
+    if (!state.cuvees.find(x => x.id === c.id)) state.cuvees.push(c);
+    renderCuveeSelect();
+    document.getElementById('bt-cuvee').value = c.id;
+    toggleNewCuvee();
+    document.getElementById('bt-domaine-nom').value = '';
+    document.getElementById('bt-cuvee-nom').value = '';
+    if (c.couleur) document.getElementById('bt-couleur').value = c.couleur;
+    const src = res.source === 'local' ? 'déjà en base' : 'Open Food Facts';
+    toast(`Vin reconnu (${src}) : ${c.domaine_nom} — ${c.nom}`, 'ok');
+  } catch (e) {
+    if (e.status === 404) {
+      // Scénario 3 : bascule vers le scan d'étiquette (US 03, à venir).
+      toast("Vin non reconnu par son code-barres. Le scan d'étiquette arrivera en US 03.", 'err');
+    } else {
+      toast(errMsg(e, 'Erreur pendant la recherche.'), 'err');
+    }
+  }
+}
+
+function stopBarcodeScan() {
+  if (scanRAF) { cancelAnimationFrame(scanRAF); scanRAF = null; }
+  if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+  document.getElementById('scan-zone').style.display = 'none';
+}
+
+function manualBarcodeEntry() {
+  const ean = prompt('Ton navigateur ne gère pas le scan caméra. Saisis le code-barres (8 à 14 chiffres) :', '');
+  if (ean === null) return;
+  const v = ean.trim();
+  if (/^\d{8,14}$/.test(v)) resolveBarcode(v);
+  else toast('Code-barres invalide.', 'err');
+}
+
+async function startBarcodeScan() {
+  if (!('BarcodeDetector' in window)) { manualBarcodeEntry(); return; }
+  let formats = [];
+  try { formats = await window.BarcodeDetector.getSupportedFormats(); } catch (e) { /* ignore */ }
+  const wanted = ['ean_13', 'ean_8', 'upc_a', 'upc_e'].filter(f => formats.includes(f));
+  if (!wanted.length) { manualBarcodeEntry(); return; }
+
+  const detector = new window.BarcodeDetector({ formats: wanted });
+  const video = document.getElementById('scan-video');
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  } catch (e) {
+    toast('Caméra indisponible (autorisation refusée, ou HTTPS requis sur mobile).', 'err');
+    manualBarcodeEntry();
+    return;
+  }
+  video.srcObject = scanStream;
+  await video.play();
+  document.getElementById('scan-zone').style.display = 'block';
+
+  const tick = async () => {
+    if (!scanStream) return;
+    try {
+      const codes = await detector.detect(video);
+      if (codes.length && codes[0].rawValue) {
+        stopBarcodeScan();
+        await resolveBarcode(codes[0].rawValue);
+        return;
+      }
+    } catch (e) { /* erreurs par frame ignorées */ }
+    scanRAF = requestAnimationFrame(tick);
+  };
+  scanRAF = requestAnimationFrame(tick);
+}
+
+document.getElementById('btn-scan').addEventListener('click', startBarcodeScan);
+document.getElementById('btn-scan-cancel').addEventListener('click', stopBarcodeScan);
+
+/* ---------- Recherche / identification par nom (US 04, wineapi.io) ---------- */
+async function resolveByText(query) {
+  const q = (query || '').trim();
+  if (q.length < 2) { toast('Saisis au moins 2 caractères.', 'err'); return; }
+  try {
+    const res = await api('POST', '/api/identifier-vin/', { query: q });
+    const c = res.cuvee;
+    if (!state.cuvees.find(x => x.id === c.id)) state.cuvees.push(c);
+    renderCuveeSelect();
+    document.getElementById('bt-cuvee').value = c.id;
+    toggleNewCuvee();
+    document.getElementById('bt-domaine-nom').value = '';
+    document.getElementById('bt-cuvee-nom').value = '';
+    if (c.couleur) document.getElementById('bt-couleur').value = c.couleur;
+    const conf = res.confidence != null ? ' · ' + Math.round(res.confidence * 100) + '%' : '';
+    const reg = res.infos && res.infos.region ? ' (' + res.infos.region + ')' : '';
+    toast(`Identifié${conf} : ${c.domaine_nom} — ${c.nom}${reg}`, 'ok');
+  } catch (e) {
+    if (e.status === 404) toast("Vin non identifié. Vérifie l'orthographe ou ajoute-le manuellement.", 'err');
+    else toast(errMsg(e, "Erreur pendant l'identification."), 'err');
+  }
+}
+
+document.getElementById('btn-search-name').addEventListener('click', () => {
+  resolveByText(document.getElementById('search-name').value);
+});
+document.getElementById('search-name').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); resolveByText(document.getElementById('search-name').value); }
+});
+
+loadCaves();
+</script>
+{% endif %}
+</body>
+</html>

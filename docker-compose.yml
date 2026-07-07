@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cave_a_vin}
+      POSTGRES_USER: ${POSTGRES_USER:-cave_a_vin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cave_a_vin}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cave_a_vin}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    # collectstatic tourne à chaque démarrage (rapide) pour peupler le volume
+    # staticfiles_data même quand ./backend:/app masque celui construit dans
+    # l'image (utile pour un simple `git pull` + redémarrage sans rebuild).
+    command: sh -c "python manage.py migrate && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3"
+    volumes:
+      - ./backend:/app
+      - staticfiles_data:/app/staticfiles
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Ces valeurs peuvent être surchargées depuis .env ; DEBUG=False et
+      # ALLOWED_HOSTS restrictif sont les défauts sûrs pour un déploiement réel.
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-please-generate-a-real-secret}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-False}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-cave_a_vin}
+      POSTGRES_USER: ${POSTGRES_USER:-cave_a_vin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cave_a_vin}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  staticfiles_data:

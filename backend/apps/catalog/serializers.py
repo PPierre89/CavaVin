@@ -1,0 +1,58 @@
+from rest_framework import serializers
+
+from .models import Cepage, Cuvee, Domaine
+
+
+class DomaineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Domaine
+        fields = ["id", "nom", "region", "pays", "site_web"]
+        extra_kwargs = {
+            # `region` participates in a UniqueConstraint with `nom`. DRF's unique
+            # validator forces the field to be present in validated_data regardless
+            # of `required`, so it needs a `default` too or omitting it 400s.
+            "region": {"required": False, "default": ""},
+        }
+
+
+class CepageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cepage
+        fields = ["id", "nom"]
+
+
+class ScanCodeBarresSerializer(serializers.Serializer):
+    """Valide un code-barres EAN/UPC (8 à 14 chiffres)."""
+
+    code_barres = serializers.RegexField(
+        r"^\d{8,14}$",
+        error_messages={"invalid": "Code-barres invalide (8 à 14 chiffres attendus)."},
+    )
+
+
+class IdentifierVinSerializer(serializers.Serializer):
+    """Valide une requête d'identification texte (US 04)."""
+
+    query = serializers.CharField(min_length=2, trim_whitespace=True)
+
+
+class CuveeSerializer(serializers.ModelSerializer):
+    domaine_nom = serializers.CharField(source="domaine.nom", read_only=True)
+    cepages_noms = serializers.SlugRelatedField(
+        source="cepages", slug_field="nom", many=True, read_only=True
+    )
+
+    class Meta:
+        model = Cuvee
+        fields = [
+            "id",
+            "domaine",
+            "domaine_nom",
+            "nom",
+            "appellation",
+            "couleur",
+            "cepages",
+            "cepages_noms",
+            "code_barres",
+            "reference_externe_id",
+        ]
