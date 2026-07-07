@@ -15,6 +15,16 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-dev-key-change-me")
 
 DEBUG = os.getenv("DJANGO_DEBUG", "True") == "True"
 
+# Garde-fou : la clé de dev ne doit jamais tourner en production (signature des
+# sessions/tokens prévisible). On avertit sans bloquer le démarrage.
+if not DEBUG and SECRET_KEY == "django-insecure-dev-key-change-me":
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "DJANGO_SECRET_KEY n'est pas définie : la clé de développement est utilisée "
+        "en production. Définis une vraie valeur dans .env."
+    )
+
 ALLOWED_HOSTS = [
     h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()
 ]
@@ -92,6 +102,16 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": os.getenv("SQLITE_PATH") or (BASE_DIR / "db.sqlite3"),
+        "OPTIONS": {
+            # Plusieurs workers gunicorn écrivent dans la même base : WAL permet
+            # lecteurs et écrivain simultanés, et le timeout évite les erreurs
+            # "database is locked" immédiates en attendant le verrou.
+            "timeout": 20,
+            "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+            # Prend le verrou d'écriture dès le début de la transaction plutôt
+            # qu'au premier write — évite les deadlocks de promotion de verrou.
+            "transaction_mode": "IMMEDIATE",
+        },
     }
 }
 
@@ -137,8 +157,14 @@ REST_FRAMEWORK = {
         # Session auth keeps the browser-based mini frontend (which reuses the
         # Django admin login) and the Swagger "Authorize" flow working.
         "rest_framework.authentication.SessionAuthentication",
-        "rest_framework.authentication.BasicAuthentication",
+        # (BasicAuthentication retirée : inutilisée, et enverrait les identifiants
+        # en clair à chaque requête sur un déploiement LAN en HTTP.)
     ],
+    # Limite les endpoints qui consomment le quota wineapi / Open Food Facts
+    # (scan code-barres, identification texte, scan d'étiquette).
+    "DEFAULT_THROTTLE_RATES": {
+        "enrichment": "30/min",
+    },
 }
 
 SPECTACULAR_SETTINGS = {

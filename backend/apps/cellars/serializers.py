@@ -35,6 +35,16 @@ class EmplacementSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"parent": "L'emplacement parent doit appartenir à la même cave."}
             )
+        # Anti-cycle : un emplacement ne peut être ni son propre parent, ni un
+        # descendant de lui-même — sinon chemin() / __str__ bouclent à l'infini.
+        if parent and self.instance:
+            node = parent
+            while node is not None:
+                if node.pk == self.instance.pk:
+                    raise serializers.ValidationError(
+                        {"parent": "Ce parent créerait un cycle dans l'arborescence."}
+                    )
+                node = node.parent
         return attrs
 
 
