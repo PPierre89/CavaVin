@@ -1,9 +1,16 @@
+from decimal import ROUND_HALF_UP, Decimal
+
+from django.db.models import DecimalField, ExpressionWrapper, F, Max, Min, Sum
 from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from apps.inventory.models import Bouteille
+
+from . import sommellerie
 from .enrichment import EnrichmentError, get_enabled_providers
 from .enrichment.normalize import strip_vintage
 from .ingest import upsert_cuvee
@@ -36,6 +43,71 @@ class CuveeViewSet(viewsets.ModelViewSet):
     serializer_class = CuveeSerializer
     search_fields = ["nom", "domaine__nom", "appellation", "code_barres"]
     filterset_fields = ["couleur", "domaine"]
+
+    @action(detail=True, methods=["get"])
+    def fiche(self, request, pk=None):
+        """Fiche vin consolidée : référentiel + conseil de dégustation (public)
+        + prix d'achat moyen et millésimes en stock (propres à l'utilisateur)."""
+        cuvee = self.get_object()
+        conseil = sommellerie.conseil_pour_couleur(cuvee.couleur)
+
+        user = request.user
+        bouteilles = (
+            Bouteille.objects.filter(proprietaire=user, cuvee=cuvee)
+            if user.is_authenticated
+            else Bouteille.objects.none()
+        )
+
+        # Prix d'achat moyen pondéré par les quantités (lignes sans prix ignorées).
+        # ExpressionWrapper : le produit Decimal × entier exige un output_field explicite.
+        ligne_valeur = ExpressionWrapper(
+            F("prix_achat") * F("quantite"),
+            output_field=DecimalField(max_digits=12, decimal_places=2),
+        )
+        chiffres = bouteilles.filter(prix_achat__isnull=False).aggregate(
+            montant=Sum(ligne_valeur),
+            nb=Sum("quantite"),
+        )
+        prix_moyen = None
+        if chiffres["nb"]:
+            prix_moyen = (chiffres["montant"] / chiffres["nb"]).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+
+        # Millésimes en stock, regroupés (une cuvée peut avoir plusieurs lignes
+        # par millésime, à des emplacements différents).
+        millesimes = list(
+            bouteilles.filter(quantite__gt=0)
+            .values("millesime")
+            .annotate(
+                quantite=Sum("quantite"),
+                apogee_debut=Min("apogee_debut"),
+                apogee_fin=Max("apogee_fin"),
+            )
+            .order_by(F("millesime").desc(nulls_last=True))
+        )
+
+        return Response(
+            {
+                "cuvee": {
+                    "id": cuvee.id,
+                    "nom": cuvee.nom,
+                    "appellation": cuvee.appellation,
+                    "couleur": cuvee.couleur,
+                    "domaine_nom": cuvee.domaine.nom,
+                    "cepages": list(cuvee.cepages.values_list("nom", flat=True)),
+                },
+                "conseil_degustation": {
+                    "temperature": conseil.temperature,
+                    "carafage": conseil.carafage,
+                },
+                "profil_gustatif": [vars(axe) for axe in conseil.gustatif],
+                "accords_mets": [vars(accord) for accord in conseil.accords],
+                "prix_achat_moyen": str(prix_moyen) if prix_moyen is not None else None,
+                "millesimes": millesimes,
+                "stock_total": sum(m["quantite"] for m in millesimes),
+            }
+        )
 
 
 class ScanCodeBarresView(APIView):

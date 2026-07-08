@@ -17,6 +17,7 @@ from .enrichment import EnrichmentError, NormalizedWine
 from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.wineapi import WineApiProvider
+from . import sommellerie
 from .ingest import upsert_cuvee
 from .models import Cepage, Cuvee, Domaine
 from .serializers import ScanEtiquetteSerializer
@@ -498,3 +499,90 @@ class EnsureSuperuserCommandTests(TestCase):
     def test_sans_variables_ne_cree_rien(self):
         call_command("ensure_superuser", stdout=StringIO())
         self.assertFalse(get_user_model().objects.filter(is_superuser=True).exists())
+
+
+class SommellerieTests(SimpleTestCase):
+    """Conseils de dégustation dérivés de la couleur — logique pure, sans BDD."""
+
+    def test_conseil_par_couleur(self):
+        rouge = sommellerie.conseil_pour_couleur("ROUGE")
+        self.assertEqual(rouge.temperature, "16-18")
+        self.assertEqual(rouge.carafage, "1h-2h")
+        self.assertEqual(len(rouge.gustatif), 3)
+        self.assertTrue(rouge.accords)
+
+        blanc = sommellerie.conseil_pour_couleur("BLANC")
+        self.assertEqual(blanc.carafage, "Non requis")
+
+    def test_couleur_inconnue_retombe_sur_autre(self):
+        inconnu = sommellerie.conseil_pour_couleur("MAUVE")
+        autre = sommellerie.conseil_pour_couleur("AUTRE")
+        self.assertEqual(inconnu, autre)
+
+    def test_axes_gustatifs_bornes(self):
+        for couleur in ("ROUGE", "BLANC", "ROSE", "BULLES", "AUTRE"):
+            for axe in sommellerie.conseil_pour_couleur(couleur).gustatif:
+                self.assertGreaterEqual(axe.valeur, 0)
+                self.assertLessEqual(axe.valeur, 1)
+
+
+class FicheCuveeTests(APITestCase):
+    """Endpoint /api/cuvees/{id}/fiche/ : conseil public + stock par utilisateur."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="alice", password="x")
+        self.domaine = Domaine.objects.create(nom="Château Cantemerle")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine,
+            nom="Grand Cru Classé",
+            appellation="Haut-Médoc",
+            couleur=Cuvee.Couleur.ROUGE,
+        )
+        self.cuvee.cepages.add(
+            Cepage.objects.create(nom="Cabernet Sauvignon"),
+            Cepage.objects.create(nom="Merlot"),
+        )
+        self.url = reverse("cuvee-fiche", args=[self.cuvee.pk])
+
+    def _ajoute_bouteille(self, **kwargs):
+        from apps.inventory.models import Bouteille
+
+        defaults = dict(proprietaire=self.user, cuvee=self.cuvee, quantite=1)
+        defaults.update(kwargs)
+        return Bouteille.objects.create(**defaults)
+
+    def test_conseil_public_sans_authentification(self):
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["conseil_degustation"]["temperature"], "16-18")
+        self.assertEqual(resp.data["cuvee"]["cepages"], ["Cabernet Sauvignon", "Merlot"])
+        # Aucune donnée privée pour un visiteur anonyme.
+        self.assertIsNone(resp.data["prix_achat_moyen"])
+        self.assertEqual(resp.data["millesimes"], [])
+
+    def test_prix_moyen_pondere_et_millesimes(self):
+        self._ajoute_bouteille(millesime=2019, quantite=10, prix_achat="20.00")
+        self._ajoute_bouteille(millesime=2019, quantite=2, prix_achat="50.00")
+        self._ajoute_bouteille(millesime=2016, quantite=3, prix_achat=None)
+        self.client.force_authenticate(self.user)
+
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        # (10*20 + 2*50) / 12 = 25.00 ; la ligne sans prix est ignorée.
+        self.assertEqual(str(resp.data["prix_achat_moyen"]), "25.00")
+        self.assertEqual(resp.data["stock_total"], 15)
+        # Millésimes regroupés et triés du plus récent au plus ancien.
+        millesimes = resp.data["millesimes"]
+        self.assertEqual([m["millesime"] for m in millesimes], [2019, 2016])
+        self.assertEqual(millesimes[0]["quantite"], 12)
+
+    def test_stock_cloisonne_par_utilisateur(self):
+        bob = User.objects.create_user(username="bob", password="x")
+        self._ajoute_bouteille(millesime=2019, quantite=5, prix_achat="30.00")
+        self.client.force_authenticate(bob)
+
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        # Bob ne voit pas le stock d'Alice.
+        self.assertEqual(resp.data["millesimes"], [])
+        self.assertIsNone(resp.data["prix_achat_moyen"])

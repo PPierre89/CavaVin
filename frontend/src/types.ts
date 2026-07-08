@@ -31,6 +31,7 @@ export interface Cuvee {
   nom: string
   appellation: string
   couleur: Couleur
+  cepages_noms: string[]
 }
 
 export interface Bouteille {
@@ -43,6 +44,42 @@ export interface Bouteille {
   emplacement_chemin: string | null
   quantite: number
   statut: Statut
+  prix_achat: string | null
+  apogee_debut: number | null
+  apogee_fin: number | null
+}
+
+/* ---------- Fiche vin consolidée (GET /api/cuvees/{id}/fiche/) ---------- */
+export interface AxeGustatif {
+  gauche: string
+  droite: string
+  valeur: number
+}
+export interface Accord {
+  nom: string
+  emoji: string
+}
+export interface FicheMillesime {
+  millesime: number | null
+  quantite: number
+  apogee_debut: number | null
+  apogee_fin: number | null
+}
+export interface FicheCuvee {
+  cuvee: {
+    id: number
+    nom: string
+    appellation: string
+    couleur: Couleur
+    domaine_nom: string
+    cepages: string[]
+  }
+  conseil_degustation: { temperature: string; carafage: string }
+  profil_gustatif: AxeGustatif[]
+  accords_mets: Accord[]
+  prix_achat_moyen: string | null
+  millesimes: FicheMillesime[]
+  stock_total: number
 }
 
 export interface Mouvement {

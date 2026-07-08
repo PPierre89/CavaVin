@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { api } from '../api'
 import { useData } from '../data'
-import { COULEUR_LABELS, type Bouteille, type Couleur } from '../types'
-import { AVIS_INDICATIFS, PROFIL_INDICATIF, QUALITE_COULEURS } from './ficheData'
+import { COULEUR_LABELS, type Bouteille, type Couleur, type FicheCuvee } from '../types'
 
 /* ------------------------------------------------------------------ *
- *  Fiche vin plein écran — reproduit la vue détaillée d'un vin :
- *  hero, millésimes, notes & avis, conseil de dégustation, qualité,
- *  caractéristiques gustatives, cépages, mets adaptés, stock, avis.
+ *  Fiche vin plein écran — vue détaillée d'un vin.
  *
- *  Le référentiel (couleur, appellation, domaine, millésimes en stock)
- *  vient des données réelles de la cave. Les sections œnologiques
- *  riches (profil gustatif, cépages, accords mets-vins, cote…) sont
- *  indicatives (voir ficheData.ts) et les emplacements « Oeni+ » sont
- *  à débloquer, comme sur les maquettes.
+ *  Toutes les données affichées viennent du backend :
+ *   - référentiel + conseil de dégustation + profil gustatif + accords
+ *     mets-vins + cépages + prix d'achat moyen via GET /cuvees/{id}/fiche/ ;
+ *   - millésimes en stock, apogée et emplacement via la cave de l'utilisateur.
+ *
+ *  Les cartes « Oeni+ » (maturité, valeur actuelle) et l'historique de prix
+ *  restent des emplacements premium à débloquer, comme sur les maquettes.
  * ------------------------------------------------------------------ */
 
 const HERO_BG: Record<Couleur, string> = {
@@ -28,34 +28,25 @@ const goldBtnCls = 'w-full py-3.5 rounded-2xl font-bold text-white bg-gradient-t
 const addBtnCls = 'w-full py-3.5 rounded-2xl border border-dashed border-gold/25 text-muted text-sm'
 const roundBtnCls = 'w-11 h-11 grid place-items-center rounded-full glass'
 
-function Stars({ note, size = 16 }: { note: number; size?: number }) {
-  return (
-    <span className="inline-flex items-center gap-0.5" aria-label={`${note} sur 5`}>
-      {[0, 1, 2, 3, 4].map((i) => {
-        const fill = Math.max(0, Math.min(1, note - i))
-        return (
-          <span key={i} className="relative inline-block" style={{ width: size, height: size }}>
-            <span className="absolute inset-0 text-gold/25" style={{ fontSize: size, lineHeight: 1 }}>
-              ★
-            </span>
-            <span
-              className="absolute inset-0 overflow-hidden text-gold"
-              style={{ width: `${fill * 100}%`, fontSize: size, lineHeight: 1 }}
-            >
-              ★
-            </span>
-          </span>
-        )
-      })}
-    </span>
-  )
+/** Formate une fenêtre d'apogée (« 2024-2035 », « dès 2024 », « avant 2035 »). */
+function formatApogee(debut: number | null, fin: number | null): string | null {
+  if (debut && fin) return `${debut}-${fin}`
+  if (debut) return `dès ${debut}`
+  if (fin) return `avant ${fin}`
+  return null
+}
+
+/** Formate un prix « 25.00 » -> « 25,00 € ». */
+function formatPrix(prix: string | null): string {
+  if (prix == null) return '-- €'
+  return `${Number(prix).toFixed(2).replace('.', ',')} €`
 }
 
 /* Carte du bandeau de valeur : soit une vraie valeur, soit un verrou « Oeni+ ». */
 function InfoCard({ label, value, locked }: { label: string; value?: string; locked?: boolean }) {
   return (
     <div className="glass rounded-2xl px-3.5 py-3">
-      {locked ? (
+      {locked || !value ? (
         <div className="flex items-center gap-1.5 font-serif text-[1.15rem] text-gold">
           Oeni+ <span className="text-[0.9rem]">👑</span>
         </div>
@@ -97,12 +88,16 @@ export function FicheVin({
   onOptions: (b: Bouteille) => void
   onRetirer: (b: Bouteille) => void
 }) {
-  const { bouteilles, cuvees, cuveeColor } = useData()
+  const { bouteilles, cuveeColor, mouvements } = useData()
   const couleur = cuveeColor(bouteille)
-  const cuvee = cuvees.find((c) => c.id === bouteille.cuvee)
-  const appellation = cuvee?.appellation || 'Appellation inconnue'
 
-  // Tous les millésimes en stock de cette cuvée, triés du plus récent au plus ancien.
+  const [fiche, setFiche] = useState<FicheCuvee | null>(null)
+  const [selId, setSelId] = useState(bouteille.id)
+  const [tab, setTab] = useState<'millesimes' | 'historique'>('millesimes')
+
+  // Millésimes en stock de cette cuvée (données réelles de la cave), triés du
+  // plus récent au plus ancien. On garde les Bouteille (avec id + apogée) pour
+  // le sélecteur et les actions bas de page.
   const millesimes = useMemo(
     () =>
       bouteilles
@@ -110,12 +105,24 @@ export function FicheVin({
         .sort((a, b) => (b.millesime ?? 0) - (a.millesime ?? 0)),
     [bouteilles, bouteille.cuvee],
   )
-
-  const [selId, setSelId] = useState(bouteille.id)
-  const [tab, setTab] = useState<'millesimes' | 'historique'>('millesimes')
   const selected = millesimes.find((b) => b.id === selId) ?? bouteille
   const totalStock = millesimes.reduce((sum, b) => sum + b.quantite, 0)
   const maxStock = Math.max(1, ...millesimes.map((b) => b.quantite))
+  const apogee = formatApogee(selected.apogee_debut, selected.apogee_fin)
+
+  // Mouvements de stock concernant cette cuvée (onglet Historique).
+  const idsCuvee = useMemo(() => new Set(millesimes.map((b) => b.id)), [millesimes])
+  const historique = mouvements.filter((m) => idsCuvee.has(m.bouteille))
+
+  useEffect(() => {
+    let vivant = true
+    api<FicheCuvee>('GET', `/api/cuvees/${bouteille.cuvee}/fiche/`)
+      .then((data) => vivant && setFiche(data))
+      .catch(() => vivant && setFiche(null))
+    return () => {
+      vivant = false
+    }
+  }, [bouteille.cuvee])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -138,6 +145,8 @@ export function FicheVin({
     }
   }
 
+  const appellation = fiche?.cuvee.appellation || 'Appellation inconnue'
+
   return (
     <div className="fixed inset-0 z-40 overflow-y-auto bg-bg">
       {/* ---------- Hero ---------- */}
@@ -149,14 +158,9 @@ export function FicheVin({
           <button onClick={onClose} aria-label="Retour" className={`${roundBtnCls} text-ink text-xl`}>
             ‹
           </button>
-          <div className="flex gap-2.5">
-            <span className={`${roundBtnCls} text-lg`} title="Assistant">
-              🧑‍🏫
-            </span>
-            <button onClick={share} aria-label="Partager" className={`${roundBtnCls} text-ink text-lg`}>
-              ⤴
-            </button>
-          </div>
+          <button onClick={share} aria-label="Partager" className={`${roundBtnCls} text-ink text-lg`}>
+            ⤴
+          </button>
         </div>
 
         <div className="flex flex-col items-center pt-3 pb-8">
@@ -190,10 +194,26 @@ export function FicheVin({
 
         {tab === 'historique' ? (
           <Section title="Historique">
-            <p className="text-muted text-sm glass rounded-2xl p-4">
-              Retrouvez ici les entrées et sorties de ce vin dans votre cave. (Consultez l'onglet
-              Journal pour l'ensemble des mouvements.)
-            </p>
+            {historique.length === 0 ? (
+              <p className="text-muted text-sm glass rounded-2xl p-4">
+                Aucun mouvement enregistré pour ce vin.
+              </p>
+            ) : (
+              <div className="glass rounded-2xl divide-y divide-gold/10">
+                {historique.map((m) => (
+                  <div key={m.id} className="flex items-center justify-between px-4 py-3 text-sm">
+                    <div>
+                      <div className="text-ink capitalize">{m.type_mouvement.toLowerCase()}</div>
+                      {m.occasion && <div className="text-muted text-xs">{m.occasion}</div>}
+                    </div>
+                    <div className="text-right">
+                      <div className="text-ink">× {m.quantite}</div>
+                      <div className="text-muted text-xs">{new Date(m.date).toLocaleDateString('fr-FR')}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </Section>
         ) : (
           <>
@@ -222,28 +242,10 @@ export function FicheVin({
             {/* ---------- Cartes valeur ---------- */}
             <div className="grid grid-cols-2 gap-2.5 mt-4">
               <InfoCard label="Maturité" locked />
-              <InfoCard label="Date d'apogée" locked />
-              <InfoCard label="Prix d'achat moyen" value="-- €" />
+              <InfoCard label="Date d'apogée" value={apogee ?? undefined} />
+              <InfoCard label="Prix d'achat moyen" value={fiche ? formatPrix(fiche.prix_achat_moyen) : undefined} />
               <InfoCard label="Valeur actuelle" locked />
             </div>
-
-            {/* ---------- Note et avis ---------- */}
-            <Section title="Note et avis du millésime" emoji="⭐">
-              <div className="grid grid-cols-2 gap-2.5">
-                <div className="glass rounded-2xl py-4 text-center">
-                  <div className="font-serif text-[1.6rem] text-ink flex items-center justify-center gap-1">
-                    --/5 <span className="text-gold text-[1.1rem]">★</span>
-                  </div>
-                  <div className="text-[0.72rem] text-muted mt-1">Ma note</div>
-                </div>
-                <div className="glass rounded-2xl py-4 text-center">
-                  <div className="font-serif text-[1.6rem] text-gold flex items-center justify-center gap-1">
-                    {PROFIL_INDICATIF.communaute.note}/5 <span className="text-[1.1rem]">★</span>
-                  </div>
-                  <div className="text-[0.72rem] text-muted mt-1">{PROFIL_INDICATIF.communaute.nb} notes</div>
-                </div>
-              </div>
-            </Section>
 
             {/* ---------- Conseil de dégustation ---------- */}
             <Section title="Conseil de dégustation" emoji="🍷">
@@ -252,7 +254,7 @@ export function FicheVin({
                   <span className="text-2xl">🌡️</span>
                   <div>
                     <div className="font-serif text-[1.3rem] text-ink leading-none">
-                      {PROFIL_INDICATIF.temperature} <span className="text-xs text-muted">°C</span>
+                      {fiche?.conseil_degustation.temperature ?? '…'} <span className="text-xs text-muted">°C</span>
                     </div>
                     <div className="text-[0.72rem] text-muted mt-1">Température</div>
                   </div>
@@ -260,7 +262,9 @@ export function FicheVin({
                 <div className="glass rounded-2xl px-4 py-3.5 flex items-center gap-3">
                   <span className="text-2xl">⏳</span>
                   <div>
-                    <div className="font-serif text-[1.3rem] text-ink leading-none">{PROFIL_INDICATIF.carafage}</div>
+                    <div className="font-serif text-[1.3rem] text-ink leading-none">
+                      {fiche?.conseil_degustation.carafage ?? '…'}
+                    </div>
                     <div className="text-[0.72rem] text-muted mt-1">Carafage</div>
                   </div>
                 </div>
@@ -287,65 +291,52 @@ export function FicheVin({
               <button className={addBtnCls}>✏️ Ajouter une note personnelle</button>
             </Section>
 
-            {/* ---------- Qualité du millésime ---------- */}
-            <Section title="Qualité du millésime :" emoji="🌦️">
-              <div className="flex gap-1.5">
-                {QUALITE_COULEURS.map((c, i) => (
-                  <div
-                    key={c}
-                    className="h-2.5 flex-1 rounded-full transition"
-                    style={{ background: c, opacity: i === PROFIL_INDICATIF.qualite.niveau ? 1 : 0.35 }}
-                  />
-                ))}
-              </div>
-              <div className="text-center text-sm text-ok font-medium mt-2">{PROFIL_INDICATIF.qualite.label}</div>
-            </Section>
-
             {/* ---------- Caractéristique gustative ---------- */}
-            <Section title="Caractéristique gustative" emoji="🍷">
-              <div className="glass rounded-2xl p-4 flex flex-col gap-3.5">
-                {PROFIL_INDICATIF.gustatif.map((row) => (
-                  <div key={row.gauche} className="flex items-center gap-3 text-sm">
-                    <span className="w-16 text-muted text-right shrink-0">{row.gauche}</span>
-                    <div className="flex-1 h-2.5 rounded-full bg-black/30 overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-gold-soft to-gold"
-                        style={{ width: `${row.valeur * 100}%` }}
-                      />
+            {fiche && fiche.profil_gustatif.length > 0 && (
+              <Section title="Caractéristique gustative" emoji="🍷">
+                <div className="glass rounded-2xl p-4 flex flex-col gap-3.5">
+                  {fiche.profil_gustatif.map((row) => (
+                    <div key={row.gauche} className="flex items-center gap-3 text-sm">
+                      <span className="w-16 text-muted text-right shrink-0">{row.gauche}</span>
+                      <div className="flex-1 h-2.5 rounded-full bg-black/30 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-gold-soft to-gold"
+                          style={{ width: `${row.valeur * 100}%` }}
+                        />
+                      </div>
+                      <span className="w-16 text-ink shrink-0">{row.droite}</span>
                     </div>
-                    <span className="w-16 text-ink shrink-0">{row.droite}</span>
-                  </div>
-                ))}
-              </div>
-            </Section>
+                  ))}
+                </div>
+              </Section>
+            )}
 
             {/* ---------- Cépages ---------- */}
-            <Section title="Cépages" emoji="🍇">
-              <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                {PROFIL_INDICATIF.cepages.map((c) => (
-                  <span key={c.nom} className="shrink-0 px-4 py-2.5 rounded-full glass text-sm text-ink">
-                    {c.nom} <span className="text-muted">({c.pct}%)</span>
-                  </span>
-                ))}
-              </div>
-            </Section>
+            {fiche && fiche.cuvee.cepages.length > 0 && (
+              <Section title="Cépages" emoji="🍇">
+                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                  {fiche.cuvee.cepages.map((nom) => (
+                    <span key={nom} className="shrink-0 px-4 py-2.5 rounded-full glass text-sm text-ink">
+                      {nom}
+                    </span>
+                  ))}
+                </div>
+              </Section>
+            )}
 
             {/* ---------- Mets adaptés ---------- */}
-            <Section title="Mets adaptés">
-              <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
-                {PROFIL_INDICATIF.mets.map((m) => (
-                  <div key={m.nom} className="shrink-0 w-40">
-                    <div className="relative h-36 rounded-2xl glass grid place-items-center text-6xl overflow-hidden">
-                      {m.emoji}
-                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-black/55 text-ok text-sm font-bold">
-                        {m.score}%
-                      </span>
+            {fiche && fiche.accords_mets.length > 0 && (
+              <Section title="Mets adaptés">
+                <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+                  {fiche.accords_mets.map((m) => (
+                    <div key={m.nom} className="shrink-0 w-32">
+                      <div className="h-32 rounded-2xl glass grid place-items-center text-6xl">{m.emoji}</div>
+                      <div className="text-center text-sm mt-2 text-ink">{m.nom}</div>
                     </div>
-                    <div className="text-center text-sm mt-2 text-ink">{m.nom}</div>
-                  </div>
-                ))}
-              </div>
-            </Section>
+                  ))}
+                </div>
+              </Section>
+            )}
 
             {/* ---------- Sections premium ---------- */}
             <Section title="Phase de vieillissement">
@@ -373,41 +364,6 @@ export function FicheVin({
                   ))}
                 </div>
               </div>
-            </Section>
-
-            {/* ---------- Avis utilisateurs ---------- */}
-            <Section title="Avis utilisateurs" emoji="👥">
-              {AVIS_INDICATIFS.map((a) => (
-                <div key={`${a.auteur}-${a.date}`} className="mb-3">
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="w-10 h-10 rounded-full grid place-items-center bg-wine/30 text-lg">🧑</span>
-                    <div>
-                      <div className="text-ink font-medium leading-tight">{a.auteur}</div>
-                      <div className="text-muted text-xs">{a.date}</div>
-                    </div>
-                  </div>
-                  <div className="glass rounded-2xl p-4">
-                    <div className="flex items-center justify-between">
-                      <span className="flex items-center gap-1.5 text-ink font-medium">
-                        <span className="text-gold">★</span> Évaluation
-                      </span>
-                      <span className="font-serif text-[1.25rem] text-ink">{a.note}</span>
-                    </div>
-                    <div className="flex items-center justify-between mt-1">
-                      <span className="text-muted text-sm">Millésime {a.millesime}</span>
-                      <Stars note={a.note} />
-                    </div>
-                    <p className="text-sm text-ink/90 mt-3 leading-relaxed">{a.texte}</p>
-                    <div className="flex items-center gap-4 text-muted text-sm mt-3">
-                      <span>🤍 {a.likes}</span>
-                      <span>💬 {a.commentaires}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              <button className="w-full mt-1 py-3 rounded-full border border-gold/20 text-muted text-sm">
-                Voir les autres avis
-              </button>
             </Section>
           </>
         )}
