@@ -87,6 +87,16 @@ class WineApiProvider(EnrichmentProvider):
             logger.warning("wineapi %s %s: %s", method, path, exc)
             return None
 
+    def wine_detail(self, wine_id: str) -> dict | None:
+        """`GET /wines/{id}` — profil complet (notes, corps, accords, prix).
+
+        Renvoie le JSON brut wineapi (ou None si absent / indisponible). Utilisé
+        par la fiche vin pour enrichir un vin déjà identifié
+        (``Cuvee.reference_externe_id``)."""
+        if not wine_id:
+            return None
+        return self._request("GET", f"/wines/{wine_id}")
+
     def lookup_by_text(self, query: str) -> NormalizedWine | None:
         result = self._request("POST", "/identify/text", {"query": query})
         return self._from_identify_result(result)

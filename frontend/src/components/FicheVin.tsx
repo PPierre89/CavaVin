@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api } from '../api'
 import { useData } from '../data'
-import { COULEUR_LABELS, type Bouteille, type Couleur, type FicheCuvee } from '../types'
+import { COULEUR_LABELS, type Bouteille, type Couleur, type FicheCuvee, type PrixMarche } from '../types'
 
 /* ------------------------------------------------------------------ *
  *  Fiche vin plein écran — vue détaillée d'un vin.
@@ -40,6 +40,16 @@ function formatApogee(debut: number | null, fin: number | null): string | null {
 function formatPrix(prix: string | null): string {
   if (prix == null) return '-- €'
   return `${Number(prix).toFixed(2).replace('.', ',')} €`
+}
+
+/** Symbole monétaire à partir d'un code ISO. */
+function devise(code: string): string {
+  return { EUR: '€', USD: '$', GBP: '£' }[code] ?? code
+}
+
+/** Formate une fourchette de prix marché « 38–65 € ». */
+function formatFourchette(p: PrixMarche): string {
+  return `${Math.round(p.min)}–${Math.round(p.max)} ${devise(p.devise)}`
 }
 
 /* Carte du bandeau de valeur : soit une vraie valeur, soit un verrou « Oeni+ ». */
@@ -244,8 +254,31 @@ export function FicheVin({
               <InfoCard label="Maturité" locked />
               <InfoCard label="Date d'apogée" value={apogee ?? undefined} />
               <InfoCard label="Prix d'achat moyen" value={fiche ? formatPrix(fiche.prix_achat_moyen) : undefined} />
-              <InfoCard label="Valeur actuelle" locked />
+              <InfoCard
+                label="Valeur actuelle"
+                value={fiche?.prix_marche ? formatFourchette(fiche.prix_marche) : undefined}
+              />
             </div>
+
+            {/* ---------- Note et avis du millésime ---------- */}
+            {fiche?.note_communaute && (
+              <Section title="Note et avis du millésime" emoji="⭐">
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="glass rounded-2xl py-4 text-center">
+                    <div className="font-serif text-[1.6rem] text-ink flex items-center justify-center gap-1">
+                      --/5 <span className="text-gold text-[1.1rem]">★</span>
+                    </div>
+                    <div className="text-[0.72rem] text-muted mt-1">Ma note</div>
+                  </div>
+                  <div className="glass rounded-2xl py-4 text-center">
+                    <div className="font-serif text-[1.6rem] text-gold flex items-center justify-center gap-1">
+                      {fiche.note_communaute.note}/5 <span className="text-[1.1rem]">★</span>
+                    </div>
+                    <div className="text-[0.72rem] text-muted mt-1">{fiche.note_communaute.nb} notes</div>
+                  </div>
+                </div>
+              </Section>
+            )}
 
             {/* ---------- Conseil de dégustation ---------- */}
             <Section title="Conseil de dégustation" emoji="🍷">
@@ -330,7 +363,14 @@ export function FicheVin({
                 <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
                   {fiche.accords_mets.map((m) => (
                     <div key={m.nom} className="shrink-0 w-32">
-                      <div className="h-32 rounded-2xl glass grid place-items-center text-6xl">{m.emoji}</div>
+                      <div className="relative h-32 rounded-2xl glass grid place-items-center text-6xl">
+                        {m.emoji}
+                        {m.confiance != null && (
+                          <span className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-black/55 text-ok text-sm font-bold">
+                            {Math.round(m.confiance * 100)}%
+                          </span>
+                        )}
+                      </div>
                       <div className="text-center text-sm mt-2 text-ink">{m.nom}</div>
                     </div>
                   ))}
@@ -365,6 +405,29 @@ export function FicheVin({
                 </div>
               </div>
             </Section>
+
+            {/* ---------- Avis (scores critiques wineapi) ---------- */}
+            {fiche && fiche.avis.length > 0 && (
+              <Section title="Avis" emoji="👥">
+                {fiche.avis.map((a) => (
+                  <div key={`${a.reviewer}-${a.date ?? ''}`} className="glass rounded-2xl p-4 mb-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-ink font-medium">{a.reviewer}</span>
+                      {a.score != null && (
+                        <span className="font-serif text-[1.25rem] text-gold">{a.score}</span>
+                      )}
+                    </div>
+                    {(a.score_text || a.date) && (
+                      <div className="text-muted text-sm mt-1">
+                        {a.score_text}
+                        {a.score_text && a.date ? ' · ' : ''}
+                        {a.date ? new Date(a.date).toLocaleDateString('fr-FR') : ''}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </Section>
+            )}
           </>
         )}
       </div>
