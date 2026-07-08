@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from apps.inventory.models import Bouteille
+from apps.inventory.models import Bouteille, NoteDegustation
 
 from . import sommellerie, wine_profile
 from .enrichment import EnrichmentError, get_enabled_providers, wineapi_detail
@@ -107,6 +107,22 @@ class CuveeViewSet(viewsets.ModelViewSet):
             avis = wine_profile.avis_critiques(detail)
             prix_marche = wine_profile.prix_marche(detail)
 
+        # Ma note : entrée la plus récente du carnet de dégustation pour cette cuvée.
+        ma_note = None
+        if user.is_authenticated:
+            derniere = (
+                NoteDegustation.objects.filter(proprietaire=user, cuvee=cuvee)
+                .order_by("-date_degustation", "-cree_le")
+                .first()
+            )
+            if derniere is not None:
+                ma_note = {
+                    "note": str(derniere.note),
+                    "commentaire": derniere.commentaire,
+                    "millesime": derniere.millesime,
+                    "date": derniere.date_degustation,
+                }
+
         return Response(
             {
                 "cuvee": {
@@ -126,6 +142,7 @@ class CuveeViewSet(viewsets.ModelViewSet):
                 "note_communaute": note_communaute,
                 "avis": avis,
                 "prix_marche": prix_marche,
+                "ma_note": ma_note,
                 "prix_achat_moyen": str(prix_moyen) if prix_moyen is not None else None,
                 "millesimes": millesimes,
                 "stock_total": sum(m["quantite"] for m in millesimes),

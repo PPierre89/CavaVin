@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api } from '../api'
 import { useData } from '../data'
 import { COULEUR_LABELS, type Bouteille, type Couleur, type FicheCuvee, type PrixMarche } from '../types'
+import { TastingSheet } from './TastingSheet'
 
 /* ------------------------------------------------------------------ *
  *  Fiche vin plein écran — vue détaillée d'un vin.
@@ -104,6 +105,7 @@ export function FicheVin({
   const [fiche, setFiche] = useState<FicheCuvee | null>(null)
   const [selId, setSelId] = useState(bouteille.id)
   const [tab, setTab] = useState<'millesimes' | 'historique'>('millesimes')
+  const [tasting, setTasting] = useState(false)
 
   // Millésimes en stock de cette cuvée (données réelles de la cave), triés du
   // plus récent au plus ancien. On garde les Bouteille (avec id + apogée) pour
@@ -124,15 +126,15 @@ export function FicheVin({
   const idsCuvee = useMemo(() => new Set(millesimes.map((b) => b.id)), [millesimes])
   const historique = mouvements.filter((m) => idsCuvee.has(m.bouteille))
 
-  useEffect(() => {
-    let vivant = true
+  const reloadFiche = useCallback(() => {
     api<FicheCuvee>('GET', `/api/cuvees/${bouteille.cuvee}/fiche/`)
-      .then((data) => vivant && setFiche(data))
-      .catch(() => vivant && setFiche(null))
-    return () => {
-      vivant = false
-    }
+      .then(setFiche)
+      .catch(() => {})
   }, [bouteille.cuvee])
+
+  useEffect(() => {
+    reloadFiche()
+  }, [reloadFiche])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -261,22 +263,36 @@ export function FicheVin({
             </div>
 
             {/* ---------- Note et avis du millésime ---------- */}
-            {fiche?.note_communaute && (
+            {fiche && (
               <Section title="Note et avis du millésime" emoji="⭐">
                 <div className="grid grid-cols-2 gap-2.5">
-                  <div className="glass rounded-2xl py-4 text-center">
+                  <button
+                    onClick={() => setTasting(true)}
+                    className="glass rounded-2xl py-4 text-center active:scale-[0.98] transition"
+                  >
                     <div className="font-serif text-[1.6rem] text-ink flex items-center justify-center gap-1">
-                      --/5 <span className="text-gold text-[1.1rem]">★</span>
+                      {fiche.ma_note ? `${fiche.ma_note.note}/5` : '--/5'}{' '}
+                      <span className="text-gold text-[1.1rem]">★</span>
                     </div>
-                    <div className="text-[0.72rem] text-muted mt-1">Ma note</div>
-                  </div>
+                    <div className="text-[0.72rem] text-muted mt-1">
+                      {fiche.ma_note ? 'Ma note · modifier' : 'Noter ce vin'}
+                    </div>
+                  </button>
                   <div className="glass rounded-2xl py-4 text-center">
                     <div className="font-serif text-[1.6rem] text-gold flex items-center justify-center gap-1">
-                      {fiche.note_communaute.note}/5 <span className="text-[1.1rem]">★</span>
+                      {fiche.note_communaute ? `${fiche.note_communaute.note}/5` : '—'}{' '}
+                      <span className="text-[1.1rem]">★</span>
                     </div>
-                    <div className="text-[0.72rem] text-muted mt-1">{fiche.note_communaute.nb} notes</div>
+                    <div className="text-[0.72rem] text-muted mt-1">
+                      {fiche.note_communaute ? `${fiche.note_communaute.nb} notes` : 'Communauté'}
+                    </div>
                   </div>
                 </div>
+                {fiche.ma_note?.commentaire && (
+                  <p className="text-sm text-ink/90 mt-2.5 glass rounded-2xl p-3">
+                    « {fiche.ma_note.commentaire} »
+                  </p>
+                )}
               </Section>
             )}
 
@@ -302,7 +318,10 @@ export function FicheVin({
                   </div>
                 </div>
               </div>
-              <button className={`${goldBtnCls} mt-3 flex items-center justify-center gap-2`}>
+              <button
+                onClick={() => setTasting(true)}
+                className={`${goldBtnCls} mt-3 flex items-center justify-center gap-2`}
+              >
                 🍷 Commencer une dégustation
               </button>
             </Section>
@@ -321,7 +340,9 @@ export function FicheVin({
 
             {/* ---------- Notes personnelles ---------- */}
             <Section title="Vos notes personnelles" emoji="✍️">
-              <button className={addBtnCls}>✏️ Ajouter une note personnelle</button>
+              <button onClick={() => setTasting(true)} className={addBtnCls}>
+                ✏️ Ajouter une note personnelle
+              </button>
             </Section>
 
             {/* ---------- Caractéristique gustative ---------- */}
@@ -452,6 +473,15 @@ export function FicheVin({
           Retirer
         </button>
       </div>
+
+      <TastingSheet
+        open={tasting}
+        onClose={() => setTasting(false)}
+        cuveeId={bouteille.cuvee}
+        cuveeNom={bouteille.cuvee_nom}
+        millesime={selected.millesime}
+        onSaved={reloadFiche}
+      />
     </div>
   )
 }

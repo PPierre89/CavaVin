@@ -92,6 +92,7 @@ export interface FicheCuvee {
   note_communaute: { note: number; nb: number } | null
   avis: AvisCritique[]
   prix_marche: PrixMarche | null
+  ma_note: { note: string; commentaire: string; millesime: number | null; date: string } | null
   prix_achat_moyen: string | null
   millesimes: FicheMillesime[]
   stock_total: number
@@ -104,6 +105,22 @@ export interface Mouvement {
   quantite: number
   date: string
   occasion: string
+}
+
+export interface NoteDegustation {
+  id: number
+  cuvee: number
+  cuvee_nom: string
+  domaine_nom: string
+  couleur: Couleur
+  millesime: number | null
+  note: string
+  commentaire: string
+  acidite: number | null
+  tanin: number | null
+  fruit: number | null
+  date_degustation: string
+  cree_le: string
 }
 
 export const COULEUR_LABELS: Record<Couleur, string> = {

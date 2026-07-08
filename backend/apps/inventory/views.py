@@ -5,8 +5,13 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .models import Bouteille, MouvementStock
-from .serializers import BouteilleSerializer, ConsommerSerializer, MouvementStockSerializer
+from .models import Bouteille, MouvementStock, NoteDegustation
+from .serializers import (
+    BouteilleSerializer,
+    ConsommerSerializer,
+    MouvementStockSerializer,
+    NoteDegustationSerializer,
+)
 
 
 class BouteilleViewSet(viewsets.ModelViewSet):
@@ -72,3 +77,17 @@ class MouvementStockViewSet(viewsets.ReadOnlyModelViewSet):
         return MouvementStock.objects.filter(
             bouteille__proprietaire=user
         ).select_related("bouteille__cuvee")
+
+
+class NoteDegustationViewSet(viewsets.ModelViewSet):
+    """Carnet de dégustation de l'utilisateur (données privées, cloisonnées)."""
+
+    serializer_class = NoteDegustationSerializer
+    filterset_fields = ["cuvee", "millesime"]
+    ordering_fields = ["date_degustation", "note", "cree_le"]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_authenticated:
+            return NoteDegustation.objects.none()
+        return NoteDegustation.objects.filter(proprietaire=user).select_related("cuvee__domaine")

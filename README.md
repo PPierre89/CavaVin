@@ -88,10 +88,20 @@ code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` 
   détail est **mis en cache** (6 h) et l'appel est *best-effort* : en cas d'indisponibilité (quota,
   clé absente, vin inconnu), la fiche retombe sur le conseil dérivé de la couleur.
 - **Données privées** (si authentifié, cloisonnées par propriétaire) : **prix d'achat moyen** pondéré
-  par les quantités et **millésimes en stock** (quantité + fenêtre d'apogée agrégée).
+  par les quantités, **millésimes en stock** (quantité + fenêtre d'apogée agrégée) et **`ma_note`**
+  (l'entrée de carnet de dégustation la plus récente pour cette cuvée).
 
 L'endpoint est en lecture publique pour la partie référentiel/conseil (`IsAuthenticatedOrReadOnly`) ;
-les chiffres de stock ne remontent que pour l'utilisateur authentifié.
+les données privées (stock, `ma_note`) ne remontent que pour l'utilisateur authentifié.
+
+### Carnet de dégustation
+
+`NoteDegustation` (app `inventory`, données privées cloisonnées) est un **journal** : plusieurs
+appréciations personnelles sont possibles pour une même cuvée, au fil des dégustations (note /5,
+commentaire, curseurs acidité/tanin/fruit, date). CRUD via `/api/notes-degustation/`
+(filtrable par `cuvee`/`millesime`). Côté fiche vin, « Ma note » reflète l'entrée la plus récente ;
+côté mobile, l'onglet **Carnet** liste toutes les dégustations et « Commencer une dégustation »
+ouvre la saisie.
 
 ### Pas encore fait (roadmap)
 
@@ -99,7 +109,7 @@ les chiffres de stock ne remontent que pour l'utilisateur authentifié.
 - Recommandation mets-vins enrichie (LLM) et calcul algorithmique d'apogée (le conseil actuel est
   dérivé de la couleur).
 - Valorisation financière (cote en temps réel) et qualité du millésime par région/année.
-- Carnet de dégustation (note & avis communautaires par cuvée) et partage de cave en lecture seule.
+- Partage de cave / carnet en lecture seule.
 
 ## Frontend — SPA React + Tailwind (mobile-first)
 
