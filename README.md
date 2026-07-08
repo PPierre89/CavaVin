@@ -74,12 +74,26 @@ Aucune dépendance Python nouvelle (appels via `urllib` stdlib).
 **Config** : la clé wineapi se met dans `.env` (`WINEAPI_KEY=...`, voir `.env.example`) — jamais dans le
 code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` est ignoré par git.
 
+### Fiche vin consolidée
+
+`GET /api/cuvees/{id}/fiche/` renvoie en une requête tout ce dont la fiche vin du frontend a besoin :
+
+- **Référentiel partagé** : nom, appellation, couleur, domaine et **cépages** de la cuvée.
+- **Conseil de dégustation** dérivé de la couleur (`backend/apps/catalog/sommellerie.py`, logique
+  *pure* et testée) : température de service, carafage, profil gustatif type et accords mets-vins.
+- **Données privées** (si authentifié, cloisonnées par propriétaire) : **prix d'achat moyen** pondéré
+  par les quantités et **millésimes en stock** (quantité + fenêtre d'apogée agrégée).
+
+L'endpoint est en lecture publique pour la partie référentiel/conseil (`IsAuthenticatedOrReadOnly`) ;
+les chiffres de stock ne remontent que pour l'utilisateur authentifié.
+
 ### Pas encore fait (roadmap)
 
 - Mode hors-ligne avec synchronisation asynchrone.
-- Moteur de recommandation mets-vins (LLM) et calcul algorithmique d'apogée.
-- Valorisation financière (cote en temps réel) et tableaux de bord statistiques.
-- Carnet de dégustation (notes, curseurs acidité/tanin/fruit) et partage de cave en lecture seule.
+- Recommandation mets-vins enrichie (LLM) et calcul algorithmique d'apogée (le conseil actuel est
+  dérivé de la couleur).
+- Valorisation financière (cote en temps réel) et qualité du millésime par région/année.
+- Carnet de dégustation (note & avis communautaires par cuvée) et partage de cave en lecture seule.
 
 ## Frontend — SPA React + Tailwind (mobile-first)
 
