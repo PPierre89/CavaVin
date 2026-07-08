@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useData } from '../data'
 import { Card } from '../ui'
 import { BottleSheet, Slot } from '../components/bottle'
+import { FicheVin } from '../components/FicheVin'
 import { TYPE_LABELS, type Bouteille, type Emplacement } from '../types'
 
 const MAX_SLOTS = 96
@@ -9,6 +10,7 @@ const MAX_SLOTS = 96
 export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplacement') => void }) {
   const { caves, caveId, setCaveId, emplacements, bouteilles, cuveeColor } = useData()
   const [selected, setSelected] = useState<Bouteille | null>(null)
+  const [fiche, setFiche] = useState<Bouteille | null>(null)
 
   const active = bouteilles.filter((b) => b.quantite > 0)
   const stats = useMemo(() => {
@@ -55,7 +57,7 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
             couleur={cuveeColor(b)}
             statut={b.statut}
             title={`${b.domaine_nom} — ${b.cuvee_nom} ${b.millesime || ''}`}
-            onClick={() => setSelected(b)}
+            onClick={() => setFiche(b)}
           />,
         )
       }
@@ -171,7 +173,7 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
               key={b.id}
               className="flex items-center gap-2.5 py-2.5 border-b border-gold/10 last:border-0 text-sm"
             >
-              <Slot couleur={cuveeColor(b)} statut={b.statut} size={30} onClick={() => setSelected(b)} />
+              <Slot couleur={cuveeColor(b)} statut={b.statut} size={30} onClick={() => setFiche(b)} />
               <span className="flex-1 min-w-0 truncate">
                 {b.domaine_nom} — {b.cuvee_nom} {b.millesime || ''} × {b.quantite}
               </span>
@@ -184,6 +186,15 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
             </div>
           ))}
         </Card>
+      )}
+
+      {fiche && (
+        <FicheVin
+          bouteille={fiche}
+          onClose={() => setFiche(null)}
+          onOptions={(b) => setSelected(b)}
+          onRetirer={(b) => setSelected(b)}
+        />
       )}
 
       <BottleSheet b={selected} onClose={() => setSelected(null)} />
