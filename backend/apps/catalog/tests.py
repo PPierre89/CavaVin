@@ -18,7 +18,7 @@ from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.wineapi import WineApiProvider
 from . import sommellerie, wine_profile
-from .ingest import upsert_cuvee
+from .ingest import enrich_cuvee_from_wineapi, upsert_cuvee
 from .models import Cepage, Cuvee, Domaine
 from .serializers import ScanEtiquetteSerializer
 
@@ -729,3 +729,122 @@ class FicheRafraichirTests(APITestCase):
         self.client.force_authenticate(self.user)
         resp = self.client.post(url)
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+# Détail wineapi complet (sous-ensemble représentatif de GET /wines/{id}).
+_WINEAPI_FULL = {
+    "body": "Full-bodied",
+    "acidity": "Medium",
+    "averageRating": 3.9,
+    "ratingsCount": 26,
+    "classification": "Grand Cru Classé",
+    "description": "Un Médoc élégant et structuré.",
+    "elaborate": "Élevage 18 mois en fûts de chêne.",
+    "alcoholContent": 13.5,
+    "imageUrl": "https://img.example/wine.png",
+    "lwinCode": "1234567",
+    "region": {"id": "r1", "name": "Haut-Médoc", "country": "France"},
+    "priceRange": {"min": 38, "max": 65, "currency": "EUR"},
+    "grapes": [{"id": "g1", "name": "Merlot", "color": "red"}],
+    "pairings": [{"food": "Beef", "confidence": 0.95, "notes": "Grillé"}],
+    "scores": [{"score": 92, "scoreText": "Excellent", "reviewer": "Critic", "reviewDate": "2020-01-01"}],
+}
+
+
+class NormalizeDetailTests(SimpleTestCase):
+    """wine_profile.normalize_detail : aplatissement wineapi -> champs cuvée (pur)."""
+
+    def test_aplati_les_champs(self):
+        d = wine_profile.normalize_detail(_WINEAPI_FULL)
+        self.assertEqual(d["region"], "Haut-Médoc")
+        self.assertEqual(d["pays"], "France")
+        self.assertEqual(d["classification"], "Grand Cru Classé")
+        self.assertEqual(d["corps"], "Full-bodied")
+        self.assertEqual(d["degre_alcool"], 13.5)
+        self.assertEqual(d["image_url"], "https://img.example/wine.png")
+        self.assertEqual(d["note_moyenne"], 3.9)
+        self.assertEqual(d["nb_notes"], 26)
+        self.assertEqual(d["prix_min"], 38)
+        self.assertEqual(d["cepages"], ["Merlot"])
+        self.assertEqual(d["accords"][0]["nom"], "Beef")
+
+    def test_detail_vide_donne_des_valeurs_neutres(self):
+        d = wine_profile.normalize_detail({})
+        self.assertEqual(d["region"], "")
+        self.assertIsNone(d["note_moyenne"])
+        self.assertEqual(d["accords"], [])
+        self.assertEqual(d["cepages"], [])
+
+
+class EnrichCuveeTests(TestCase):
+    """ingest.enrich_cuvee_from_wineapi : persistance sur la cuvée."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Château X")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine, nom="C", couleur="ROUGE", reference_externe_id="w1"
+        )
+
+    def test_persiste_lenrichissement(self):
+        enrich_cuvee_from_wineapi(self.cuvee, _WINEAPI_FULL)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.region, "Haut-Médoc")
+        self.assertEqual(str(self.cuvee.note_moyenne), "3.9")
+        self.assertEqual(self.cuvee.description, "Un Médoc élégant et structuré.")
+        self.assertEqual(self.cuvee.image_url, "https://img.example/wine.png")
+        self.assertEqual(self.cuvee.accords[0]["nom"], "Beef")
+        self.assertEqual(self.cuvee.scores[0]["reviewer"], "Critic")
+        self.assertIsNotNone(self.cuvee.enrichi_le)
+        self.assertTrue(self.cuvee.cepages.filter(nom="Merlot").exists())
+
+    def test_ne_remplace_pas_une_valeur_par_du_vide(self):
+        self.cuvee.description = "Déjà là"
+        self.cuvee.save()
+        enrich_cuvee_from_wineapi(self.cuvee, {"body": "Full-bodied"})  # pas de description
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.description, "Déjà là")  # conservé
+        self.assertEqual(self.cuvee.corps, "Full-bodied")  # ajouté
+
+    def test_upsert_enrichit_via_raw(self):
+        wine = NormalizedWine(
+            domaine_nom="Dom", cuvee_nom="Cuv", reference_externe_id="w2",
+            raw={"wineapi_detail": _WINEAPI_FULL},
+        )
+        cuvee, created = upsert_cuvee(wine)
+        self.assertTrue(created)
+        self.assertEqual(cuvee.classification, "Grand Cru Classé")
+        self.assertIsNotNone(cuvee.enrichi_le)
+
+
+class FicheDepuisBaseTests(APITestCase):
+    """La fiche lit l'enrichissement persisté ; enrichissement paresseux au 1er accès."""
+
+    def setUp(self):
+        cache.clear()
+        self.domaine = Domaine.objects.create(nom="Château X")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine, nom="C", couleur="ROUGE", reference_externe_id="w1"
+        )
+        enrich_cuvee_from_wineapi(self.cuvee, _WINEAPI_FULL)
+
+    @patch("apps.catalog.views.wineapi_detail")
+    def test_fiche_lit_la_base_sans_reseau(self, mock_detail):
+        resp = self.client.get(reverse("cuvee-fiche", args=[self.cuvee.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_detail.assert_not_called()  # déjà enrichi -> aucun appel wineapi
+        self.assertEqual(resp.data["note_communaute"], {"note": 3.9, "nb": 26})
+        self.assertEqual(resp.data["cuvee"]["description"], "Un Médoc élégant et structuré.")
+        self.assertEqual(resp.data["cuvee"]["image_url"], "https://img.example/wine.png")
+        self.assertEqual(resp.data["cuvee"]["classification"], "Grand Cru Classé")
+
+    @patch("apps.catalog.views.wineapi_detail")
+    def test_enrichissement_paresseux_au_premier_acces(self, mock_detail):
+        neuf = Cuvee.objects.create(
+            domaine=self.domaine, nom="Neuf", couleur="ROUGE", reference_externe_id="w9"
+        )
+        mock_detail.return_value = _WINEAPI_FULL
+        resp = self.client.get(reverse("cuvee-fiche", args=[neuf.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_detail.assert_called_once_with("w9")
+        neuf.refresh_from_db()
+        self.assertIsNotNone(neuf.enrichi_le)  # persisté au premier accès

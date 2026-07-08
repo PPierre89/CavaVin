@@ -128,3 +128,49 @@ def prix_marche(detail: dict) -> dict | None:
     if not isinstance(pr, dict) or pr.get("min") is None or pr.get("max") is None:
         return None
     return {"min": pr["min"], "max": pr["max"], "devise": pr.get("currency") or "EUR"}
+
+
+def _texte(valeur) -> str:
+    """Chaîne nettoyée (None -> '')."""
+    return valeur.strip() if isinstance(valeur, str) else ""
+
+
+def _nom(objet) -> str:
+    """Nom d'un objet wineapi {id, name} ou d'une chaîne."""
+    if isinstance(objet, dict):
+        return _texte(objet.get("name"))
+    return _texte(objet)
+
+
+def cepages_noms(detail: dict) -> list[str]:
+    """Noms des cépages (`grapes`)."""
+    return [_nom(g) for g in (detail.get("grapes") or []) if _nom(g)]
+
+
+def normalize_detail(detail: dict) -> dict:
+    """Aplati un détail wineapi (`GET /wines/{id}`) vers les champs persistés sur
+    la cuvée. Fonction pure : renvoie un dict prêt à poser sur le modèle (les
+    valeurs absentes sont `''`, `None` ou `[]`)."""
+    region = detail.get("region") if isinstance(detail.get("region"), dict) else {}
+    note = note_communaute(detail) or {}
+    prix = prix_marche(detail) or {}
+    return {
+        "region": _nom(detail.get("region")),
+        "pays": _texte(region.get("country")),
+        "classification": _texte(detail.get("classification")),
+        "description": _texte(detail.get("description")),
+        "elaborate": _texte(detail.get("elaborate")),
+        "corps": _texte(detail.get("body")),
+        "acidite": _texte(detail.get("acidity")),
+        "degre_alcool": detail.get("alcoholContent"),
+        "image_url": _texte(detail.get("imageUrl")),
+        "lwin_code": _texte(detail.get("lwinCode")),
+        "note_moyenne": note.get("note"),
+        "nb_notes": note.get("nb"),
+        "prix_min": prix.get("min"),
+        "prix_max": prix.get("max"),
+        "devise": prix.get("devise", ""),
+        "accords": accords_mets(detail) or [],
+        "scores": avis_critiques(detail),
+        "cepages": cepages_noms(detail),
+    }

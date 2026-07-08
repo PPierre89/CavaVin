@@ -71,4 +71,31 @@ class CuveeSerializer(serializers.ModelSerializer):
             "cepages_noms",
             "code_barres",
             "reference_externe_id",
+            # Enrichissement wineapi persisté.
+            "region",
+            "pays",
+            "classification",
+            "description",
+            "elaborate",
+            "corps",
+            "acidite",
+            "degre_alcool",
+            "image_url",
+            "lwin_code",
+            "note_moyenne",
+            "nb_notes",
+            "prix_min",
+            "prix_max",
+            "devise",
+            "accords",
+            "scores",
+            "enrichi_le",
+        ]
+        # L'enrichissement est alimenté par wineapi (identification / synchro),
+        # pas par l'API d'écriture directe.
+        read_only_fields = [
+            "region", "pays", "classification", "description", "elaborate",
+            "corps", "acidite", "degre_alcool", "image_url", "lwin_code",
+            "note_moyenne", "nb_notes", "prix_min", "prix_max", "devise",
+            "accords", "scores", "enrichi_le",
         ]

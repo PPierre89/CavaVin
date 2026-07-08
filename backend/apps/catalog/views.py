@@ -20,7 +20,7 @@ from .enrichment import (
     wineapi_detail,
 )
 from .enrichment.normalize import strip_vintage
-from .ingest import upsert_cuvee
+from .ingest import enrich_cuvee_from_wineapi, upsert_cuvee
 from .models import Cepage, Cuvee, Domaine
 from .serializers import (
     CepageSerializer,
@@ -72,12 +72,13 @@ class CepageViewSet(viewsets.ModelViewSet):
     search_fields = ["nom"]
 
 
-def _build_fiche(cuvee, user, detail):
-    """Construit la charge utile de la fiche vin.
+def _build_fiche(cuvee, user):
+    """Construit la charge utile de la fiche vin, à partir des données persistées.
 
-    `detail` est le détail wineapi déjà récupéré (cache ou rafraîchi), ou None.
-    Le stock (prix moyen, millésimes, ma note) n'est renseigné que pour un
-    utilisateur authentifié ; le référentiel et le conseil sont publics.
+    L'enrichissement wineapi (corps, notes, prix, accords, avis...) est lu depuis
+    la cuvée en base — aucun appel réseau ici. Le stock (prix moyen, millésimes,
+    ma note) n'est renseigné que pour un utilisateur authentifié ; le référentiel
+    et le conseil sont publics.
     """
     conseil = sommellerie.conseil_pour_couleur(cuvee.couleur)
     bouteilles = (
@@ -114,18 +115,23 @@ def _build_fiche(cuvee, user, detail):
         .order_by(F("millesime").desc(nulls_last=True))
     )
 
-    # Valeurs par défaut dérivées de la couleur (repli si wineapi indisponible).
-    profil = [vars(axe) for axe in conseil.gustatif]
-    accords = [{**vars(a), "confiance": None} for a in conseil.accords]
+    # Enrichissement wineapi persisté sur la cuvée (repli sur le conseil couleur).
+    profil = wine_profile.profil_gustatif(
+        {"body": cuvee.corps, "acidity": cuvee.acidite},
+        [vars(axe) for axe in conseil.gustatif],
+    )
+    accords = cuvee.accords or [{**vars(a), "confiance": None} for a in conseil.accords]
     note_communaute = None
-    avis = []
+    if cuvee.note_moyenne is not None:
+        note_communaute = {"note": float(cuvee.note_moyenne), "nb": cuvee.nb_notes or 0}
+    avis = cuvee.scores or []
     prix_marche = None
-    if detail:
-        profil = wine_profile.profil_gustatif(detail, profil)
-        accords = wine_profile.accords_mets(detail) or accords
-        note_communaute = wine_profile.note_communaute(detail)
-        avis = wine_profile.avis_critiques(detail)
-        prix_marche = wine_profile.prix_marche(detail)
+    if cuvee.prix_min is not None and cuvee.prix_max is not None:
+        prix_marche = {
+            "min": float(cuvee.prix_min),
+            "max": float(cuvee.prix_max),
+            "devise": cuvee.devise or "EUR",
+        }
 
     # Ma note : entrée la plus récente du carnet de dégustation pour cette cuvée.
     ma_note = None
@@ -151,6 +157,13 @@ def _build_fiche(cuvee, user, detail):
             "couleur": cuvee.couleur,
             "domaine_nom": cuvee.domaine.nom,
             "cepages": list(cuvee.cepages.values_list("nom", flat=True)),
+            "region": cuvee.region,
+            "pays": cuvee.pays,
+            "classification": cuvee.classification,
+            "description": cuvee.description,
+            "elaborate": cuvee.elaborate,
+            "degre_alcool": float(cuvee.degre_alcool) if cuvee.degre_alcool is not None else None,
+            "image_url": cuvee.image_url,
         },
         "conseil_degustation": {
             "temperature": conseil.temperature,
@@ -167,6 +180,7 @@ def _build_fiche(cuvee, user, detail):
         "stock_total": sum(m["quantite"] for m in millesimes),
         # Le vin a une source externe (wineapi) => le bouton de synchro est utile.
         "enrichissable": bool(cuvee.reference_externe_id),
+        "enrichi_le": cuvee.enrichi_le,
     }
 
 
@@ -185,10 +199,16 @@ class CuveeViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def fiche(self, request, pk=None):
-        """Fiche vin consolidée. Le détail wineapi vient du cache (best-effort)."""
+        """Fiche vin consolidée, lue depuis les données persistées (aucun appel
+        réseau). Premier accès à un vin jamais enrichi : enrichissement paresseux
+        unique depuis wineapi (cache), pour bénéficier des données sans attendre
+        une synchro manuelle."""
         cuvee = self.get_object()
-        detail = wineapi_detail(cuvee.reference_externe_id)
-        return Response(_build_fiche(cuvee, request.user, detail))
+        if cuvee.reference_externe_id and cuvee.enrichi_le is None:
+            detail = wineapi_detail(cuvee.reference_externe_id)
+            if detail:
+                enrich_cuvee_from_wineapi(cuvee, detail)
+        return Response(_build_fiche(cuvee, request.user))
 
     @action(detail=True, methods=["post"])
     def rafraichir(self, request, pk=None):
@@ -214,7 +234,8 @@ class CuveeViewSet(viewsets.ModelViewSet):
         cache.set(cle_cooldown, True, settings.WINEAPI_REFRESH_COOLDOWN)
 
         detail = refresh_wineapi_detail(cuvee.reference_externe_id)
-        return Response(_build_fiche(cuvee, request.user, detail))
+        enrich_cuvee_from_wineapi(cuvee, detail)
+        return Response(_build_fiche(cuvee, request.user))
 
 
 class ScanCodeBarresView(APIView):
