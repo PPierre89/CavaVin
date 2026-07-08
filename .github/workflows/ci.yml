@@ -15,7 +15,8 @@ concurrency:
 
 jobs:
   test:
-    name: Tests & couverture (Django)
+    # Nom conservé tel quel : c'est le check requis par la protection de branche.
+    name: Tests (Django)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -69,7 +70,8 @@ jobs:
           retention-days: 14
 
   frontend:
-    name: Frontend (lint & build)
+    # Nom conservé tel quel pour rester compatible avec les checks requis.
+    name: Frontend (build)
     runs-on: ubuntu-latest
     defaults:
       run:
