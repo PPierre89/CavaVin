@@ -25,6 +25,33 @@ from .serializers import (
 )
 
 
+def _local_response(cuvee):
+    """Réponse d'un hit en cache local (aucun enrichissement externe)."""
+    return Response({"source": "local", "created": False, "cuvee": CuveeSerializer(cuvee).data})
+
+
+def _enriched_response(wine, cuvee, created):
+    """Réponse commune aux endpoints d'identification texte/image (wineapi.io)."""
+    return Response(
+        {
+            "source": wine.source,
+            "created": created,
+            "millesime": wine.millesime,
+            "confidence": wine.raw.get("confidence"),
+            "cuvee": CuveeSerializer(cuvee).data,
+            "infos": {
+                "region": wine.raw.get("region"),
+                "pays": wine.raw.get("country"),
+                "note": wine.raw.get("note"),
+                "alcool": wine.raw.get("alcool"),
+                "prix": wine.raw.get("prix"),
+                "description": wine.raw.get("description"),
+            },
+            "suggestions": wine.raw.get("suggestions") or [],
+        }
+    )
+
+
 class DomaineViewSet(viewsets.ModelViewSet):
     queryset = Domaine.objects.all()
     serializer_class = DomaineSerializer
@@ -174,9 +201,7 @@ class ScanCodeBarresView(APIView):
         # --- Scénario 1 : cache local (pas de réseau) ---
         cuvee = Cuvee.objects.select_related("domaine").filter(code_barres=ean).first()
         if cuvee:
-            return Response(
-                {"source": "local", "created": False, "cuvee": CuveeSerializer(cuvee).data}
-            )
+            return _local_response(cuvee)
 
         # --- Scénario 2 : cascade des fournisseurs externes ---
         for provider in get_enabled_providers():
@@ -229,9 +254,7 @@ class IdentifierVinView(APIView):
             .first()
         )
         if cuvee:
-            return Response(
-                {"source": "local", "created": False, "cuvee": CuveeSerializer(cuvee).data}
-            )
+            return _local_response(cuvee)
 
         # --- Cascade des fournisseurs texte (wineapi.io) ---
         for provider in get_enabled_providers():
@@ -242,24 +265,7 @@ class IdentifierVinView(APIView):
             if not wine:
                 continue
             cuvee, created = upsert_cuvee(wine)
-            return Response(
-                {
-                    "source": wine.source,
-                    "created": created,
-                    "millesime": wine.millesime,
-                    "confidence": wine.raw.get("confidence"),
-                    "cuvee": CuveeSerializer(cuvee).data,
-                    "infos": {
-                        "region": wine.raw.get("region"),
-                        "pays": wine.raw.get("country"),
-                        "note": wine.raw.get("note"),
-                        "alcool": wine.raw.get("alcool"),
-                        "prix": wine.raw.get("prix"),
-                        "description": wine.raw.get("description"),
-                    },
-                    "suggestions": wine.raw.get("suggestions") or [],
-                }
-            )
+            return _enriched_response(wine, cuvee, created)
 
         # --- Échec total ---
         return Response(
@@ -297,24 +303,7 @@ class ScanEtiquetteView(APIView):
             if not wine:
                 continue
             cuvee, created = upsert_cuvee(wine)
-            return Response(
-                {
-                    "source": wine.source,
-                    "created": created,
-                    "millesime": wine.millesime,
-                    "confidence": wine.raw.get("confidence"),
-                    "cuvee": CuveeSerializer(cuvee).data,
-                    "infos": {
-                        "region": wine.raw.get("region"),
-                        "pays": wine.raw.get("country"),
-                        "note": wine.raw.get("note"),
-                        "alcool": wine.raw.get("alcool"),
-                        "prix": wine.raw.get("prix"),
-                        "description": wine.raw.get("description"),
-                    },
-                    "suggestions": wine.raw.get("suggestions") or [],
-                }
-            )
+            return _enriched_response(wine, cuvee, created)
 
         return Response(
             {"source": None, "detail": "Vin non identifié sur l'étiquette"},
