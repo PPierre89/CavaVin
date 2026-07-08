@@ -85,6 +85,13 @@ export interface FicheCuvee {
     couleur: Couleur
     domaine_nom: string
     cepages: string[]
+    region: string
+    pays: string
+    classification: string
+    description: string
+    elaborate: string
+    degre_alcool: number | null
+    image_url: string
   }
   conseil_degustation: { temperature: string; carafage: string }
   profil_gustatif: AxeGustatif[]
@@ -97,6 +104,7 @@ export interface FicheCuvee {
   millesimes: FicheMillesime[]
   stock_total: number
   enrichissable: boolean
+  enrichi_le: string | null
 }
 
 export interface Mouvement {

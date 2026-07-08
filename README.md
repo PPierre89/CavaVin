@@ -81,12 +81,15 @@ code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` 
 - **Référentiel partagé** : nom, appellation, couleur, domaine et **cépages** de la cuvée.
 - **Conseil de dégustation** dérivé de la couleur (`backend/apps/catalog/sommellerie.py`, logique
   *pure* et testée) : température de service, carafage, profil gustatif type et accords mets-vins.
-- **Enrichissement wineapi.io** (si le vin a déjà été identifié — `Cuvee.reference_externe_id`) :
-  `GET /wines/{id}` fournit le **profil gustatif réel** (corps/acidité), les **accords mets-vins notés**,
-  la **note & le nombre d'avis communautaires**, les **avis de critiques** et la **fourchette de prix
-  marché**. Le mapping wineapi → fiche est isolé et testé (`backend/apps/catalog/wine_profile.py`), le
-  détail est **mis en cache** (6 h) et l'appel est *best-effort* : en cas d'indisponibilité (quota,
-  clé absente, vin inconnu), la fiche retombe sur le conseil dérivé de la couleur.
+- **Enrichissement wineapi.io persisté** (si le vin a été identifié — `Cuvee.reference_externe_id`) :
+  le détail `GET /wines/{id}` est **enregistré en base sur la cuvée** (via
+  `ingest.enrich_cuvee_from_wineapi`, mapping pur et testé dans `wine_profile.normalize_detail`) —
+  région/pays, classification, description, corps/acidité, degré d'alcool, image, cépages,
+  **note & nombre d'avis communautaires**, **avis de critiques**, **accords mets-vins notés** et
+  **fourchette de prix marché**. L'enrichissement a lieu **à l'identification** (texte/image) et à la
+  **synchro manuelle** (bouton 🔄). La fiche **lit alors la base, sans appel réseau** — ce qui
+  préserve le quota wineapi. Un vin importé avant cette persistance est enrichi **paresseusement au
+  premier accès** à sa fiche (une seule fois). Les champs absents retombent sur le conseil couleur.
 - **Données privées** (si authentifié, cloisonnées par propriétaire) : **prix d'achat moyen** pondéré
   par les quantités, **millésimes en stock** (quantité + fenêtre d'apogée agrégée) et **`ma_note`**
   (l'entrée de carnet de dégustation la plus récente pour cette cuvée).
@@ -94,8 +97,8 @@ code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` 
 L'endpoint est en lecture publique pour la partie référentiel/conseil (`IsAuthenticatedOrReadOnly`) ;
 les données privées (stock, `ma_note`) ne remontent que pour l'utilisateur authentifié.
 
-**Synchro à la demande** : `POST /api/cuvees/{id}/rafraichir/` force un re-fetch des données wineapi
-(le bouton 🔄 de la fiche), en contournant le cache. **Garde-fou anti-quota** : un *cooldown* par vin
+**Synchro à la demande** : `POST /api/cuvees/{id}/rafraichir/` force un re-fetch wineapi et **met à
+jour la cuvée en base** (le bouton 🔄 de la fiche). **Garde-fou anti-quota** : un *cooldown* par vin
 (`WINEAPI_REFRESH_COOLDOWN`, défaut 1 h) renvoie `429` si le vin a déjà été synchronisé récemment, et
 l'action est soumise au throttle `enrichment` — de quoi préserver le nombre d'appels wineapi limité.
 

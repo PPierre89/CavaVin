@@ -213,11 +213,31 @@ export function FicheVin({
         </div>
 
         <div className="flex flex-col items-center pt-3 pb-8">
-          <div className="text-[5.5rem] leading-none drop-shadow-[0_10px_24px_rgba(0,0,0,0.5)]">🍷</div>
-          <span className="mt-3 px-4 py-1.5 rounded-full text-white text-sm font-semibold bg-gradient-to-b from-wine-soft to-wine-deep">
-            {COULEUR_LABELS[couleur]}
-          </span>
+          {fiche?.cuvee.image_url ? (
+            <img
+              src={fiche.cuvee.image_url}
+              alt={bouteille.cuvee_nom}
+              className="h-40 object-contain drop-shadow-[0_10px_24px_rgba(0,0,0,0.5)]"
+            />
+          ) : (
+            <div className="text-[5.5rem] leading-none drop-shadow-[0_10px_24px_rgba(0,0,0,0.5)]">🍷</div>
+          )}
+          <div className="flex flex-wrap justify-center gap-2 mt-3">
+            <span className="px-4 py-1.5 rounded-full text-white text-sm font-semibold bg-gradient-to-b from-wine-soft to-wine-deep">
+              {COULEUR_LABELS[couleur]}
+            </span>
+            {fiche?.cuvee.classification && (
+              <span className="px-4 py-1.5 rounded-full text-sm font-semibold border border-gold/40 text-gold">
+                {fiche.cuvee.classification}
+              </span>
+            )}
+          </div>
           <div className="text-muted text-sm mt-3">{appellation}</div>
+          {(fiche?.cuvee.region || fiche?.cuvee.pays) && (
+            <div className="text-muted text-xs mt-0.5">
+              {[fiche?.cuvee.region, fiche?.cuvee.pays].filter(Boolean).join(', ')}
+            </div>
+          )}
           <h1 className="font-serif text-[1.9rem] font-semibold text-ink mt-1 text-center px-6">
             {bouteille.cuvee_nom}
           </h1>
@@ -381,6 +401,25 @@ export function FicheVin({
                 ✏️ Ajouter une note personnelle
               </button>
             </Section>
+
+            {/* ---------- À propos ---------- */}
+            {fiche && (fiche.cuvee.description || fiche.cuvee.elaborate || fiche.cuvee.degre_alcool != null) && (
+              <Section title="À propos" emoji="📝">
+                <div className="glass rounded-2xl p-4">
+                  {fiche.cuvee.description && (
+                    <p className="text-sm text-ink/90 leading-relaxed">{fiche.cuvee.description}</p>
+                  )}
+                  {fiche.cuvee.elaborate && (
+                    <p className="text-sm text-muted leading-relaxed mt-2">{fiche.cuvee.elaborate}</p>
+                  )}
+                  {fiche.cuvee.degre_alcool != null && (
+                    <div className="text-sm text-muted mt-3">
+                      Degré d'alcool : <span className="text-ink font-medium">{fiche.cuvee.degre_alcool}°</span>
+                    </div>
+                  )}
+                </div>
+              </Section>
+            )}
 
             {/* ---------- Caractéristique gustative ---------- */}
             {fiche && fiche.profil_gustatif.length > 0 && (

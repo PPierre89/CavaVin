@@ -168,5 +168,8 @@ class WineApiProvider(EnrichmentProvider):
                 "prix": detail.get("priceRange"),
                 "suggestions": suggestions,
                 "wineapi_type": wine_type,
+                # Détail complet, persisté sur la cuvée par ingest.upsert_cuvee
+                # (non renvoyé tel quel dans la réponse d'identification).
+                "wineapi_detail": detail or None,
             },
         )
