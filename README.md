@@ -298,6 +298,14 @@ ni de construire quoi que ce soit : deux fichiers suffisent.
 **Mises à jour** : `docker compose pull && docker compose up -d` — récupère la dernière image publiée ;
 migrations et fichiers statiques se réappliquent automatiquement au redémarrage.
 
+**Dépannage — « l'ajout de vin plante » / `WORKER TIMEOUT` / worker `SIGKILL`** : les appels
+d'enrichissement wineapi (identification texte/image) sont lents ; si gunicorn tourne avec un
+`--timeout` court (30 s par défaut), il tue le worker en plein appel. Les réglages sûrs (timeout 120,
+threads) sont dans `backend/gunicorn.conf.py`, **chargé automatiquement** — donc un simple
+`docker compose pull && docker compose up -d` suffit à corriger, **même si un ancien
+`docker-compose.yml` surcharge la commande** (tant qu'il ne force pas lui-même un `--timeout` court :
+dans ce cas, retire ce flag ou réaligne le `command:` sur celui du dépôt).
+
 **HTTPS** : ce compose sert du HTTP simple, adapté à un accès réseau local. Si tu exposes l'app sur
 Internet (via un reverse proxy comme Nginx Proxy Manager ou Traefik), termine le TLS là et active en
 plus `SECURE_SSL_REDIRECT`, `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE` dans `backend/config/settings.py`

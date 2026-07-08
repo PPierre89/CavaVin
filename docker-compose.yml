@@ -7,10 +7,10 @@ services:
     restart: unless-stopped
     # migrate + collectstatic à chaque démarrage, puis gunicorn.
     # migrate -> création auto de l'admin (si vars définies) -> collectstatic -> gunicorn.
-    # --timeout 120 + --threads 4 : les appels d'enrichissement wineapi (identification
-    # texte/image) peuvent être lents ; sans ça gunicorn tue le worker à 30 s (timeout
-    # par défaut) et l'ajout échoue.
-    command: sh -c "python manage.py migrate && python manage.py ensure_superuser && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --threads 4 --timeout 120"
+    # Réglages gunicorn (timeout 120, threads 4...) dans backend/gunicorn.conf.py,
+    # chargé automatiquement : les appels d'enrichissement wineapi (identification
+    # texte/image) peuvent être lents ; sans ça gunicorn tue le worker à 30 s.
+    command: sh -c "python manage.py migrate && python manage.py ensure_superuser && python manage.py collectstatic --noinput && gunicorn config.wsgi:application -c gunicorn.conf.py"
     environment:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-please-generate-a-real-secret}
       DJANGO_DEBUG: ${DJANGO_DEBUG:-False}
