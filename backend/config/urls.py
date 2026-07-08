@@ -17,7 +17,11 @@ from apps.catalog.views import (
     ScanEtiquetteView,
 )
 from apps.cellars.views import CaveViewSet, EmplacementViewSet
-from apps.inventory.views import BouteilleViewSet, MouvementStockViewSet
+from apps.inventory.views import (
+    BouteilleViewSet,
+    MouvementStockViewSet,
+    NoteDegustationViewSet,
+)
 from .auth import RegisterView
 from .views import index
 
@@ -29,6 +33,7 @@ router.register("caves", CaveViewSet, basename="cave")
 router.register("emplacements", EmplacementViewSet, basename="emplacement")
 router.register("bouteilles", BouteilleViewSet, basename="bouteille")
 router.register("mouvements", MouvementStockViewSet, basename="mouvement")
+router.register("notes-degustation", NoteDegustationViewSet, basename="note-degustation")
 
 urlpatterns = [
     path("", index, name="home"),

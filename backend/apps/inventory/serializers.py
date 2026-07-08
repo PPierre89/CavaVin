@@ -1,7 +1,7 @@
 from django.db.models import Sum
 from rest_framework import serializers
 
-from .models import Bouteille, MouvementStock
+from .models import Bouteille, MouvementStock, NoteDegustation
 
 
 class MouvementStockSerializer(serializers.ModelSerializer):
@@ -102,3 +102,31 @@ class ConsommerSerializer(serializers.Serializer):
     quantite = serializers.IntegerField(min_value=1, default=1)
     occasion = serializers.CharField(required=False, allow_blank=True, default="")
     notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class NoteDegustationSerializer(serializers.ModelSerializer):
+    proprietaire = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    cuvee_nom = serializers.CharField(source="cuvee.nom", read_only=True)
+    domaine_nom = serializers.CharField(source="cuvee.domaine.nom", read_only=True)
+    couleur = serializers.CharField(source="cuvee.couleur", read_only=True)
+    note = serializers.DecimalField(max_digits=2, decimal_places=1, min_value=0, max_value=5)
+
+    class Meta:
+        model = NoteDegustation
+        fields = [
+            "id",
+            "proprietaire",
+            "cuvee",
+            "cuvee_nom",
+            "domaine_nom",
+            "couleur",
+            "millesime",
+            "note",
+            "commentaire",
+            "acidite",
+            "tanin",
+            "fruit",
+            "date_degustation",
+            "cree_le",
+        ]
+        read_only_fields = ["cree_le"]

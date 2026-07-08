@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 
 class Bouteille(models.Model):
@@ -93,3 +95,47 @@ class MouvementStock(models.Model):
 
     def __str__(self):
         return f"{self.get_type_mouvement_display()} x{self.quantite} - {self.bouteille}"
+
+
+class NoteDegustation(models.Model):
+    """
+    Carnet de dégustation : appréciation personnelle d'un vin par un utilisateur.
+
+    C'est un journal — plusieurs entrées sont possibles pour une même cuvée, au
+    fil des dégustations. Sur la fiche vin, « Ma note » correspond à l'entrée la
+    plus récente. Les données sont privées (cloisonnées par propriétaire), à la
+    différence des notes communautaires (référentiel / wineapi).
+    """
+
+    proprietaire = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="degustations"
+    )
+    cuvee = models.ForeignKey(
+        "catalog.Cuvee", on_delete=models.CASCADE, related_name="degustations"
+    )
+    millesime = models.PositiveIntegerField(
+        null=True, blank=True, help_text="Millésime dégusté (facultatif)."
+    )
+    note = models.DecimalField(
+        max_digits=2,
+        decimal_places=1,
+        validators=[MinValueValidator(0), MaxValueValidator(5)],
+        help_text="Note personnelle de 0 à 5.",
+    )
+    commentaire = models.TextField(blank=True)
+
+    # Curseurs de dégustation (0 à 5), facultatifs.
+    acidite = models.PositiveSmallIntegerField(null=True, blank=True, validators=[MaxValueValidator(5)])
+    tanin = models.PositiveSmallIntegerField(null=True, blank=True, validators=[MaxValueValidator(5)])
+    fruit = models.PositiveSmallIntegerField(null=True, blank=True, validators=[MaxValueValidator(5)])
+
+    date_degustation = models.DateField(default=timezone.localdate)
+    cree_le = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date_degustation", "-cree_le"]
+        verbose_name = "Note de dégustation"
+        verbose_name_plural = "Notes de dégustation"
+
+    def __str__(self):
+        return f"{self.cuvee} — {self.note}/5"

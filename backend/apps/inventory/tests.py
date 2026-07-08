@@ -6,7 +6,7 @@ from rest_framework.test import APITestCase
 from apps.catalog.models import Cuvee, Domaine
 from apps.cellars.models import Cave, Emplacement
 
-from .models import Bouteille, MouvementStock
+from .models import Bouteille, MouvementStock, NoteDegustation
 
 User = get_user_model()
 
@@ -118,3 +118,72 @@ class CloisonnementRgpdTests(APITestCase):
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("emplacement", resp.data)
+
+
+class NoteDegustationTests(APITestCase):
+    """Carnet de dégustation : création, cloisonnement, filtrage par cuvée."""
+
+    def setUp(self):
+        self.alice = User.objects.create_user(username="alice", password="x")
+        self.bob = User.objects.create_user(username="bob", password="x")
+        self.cuvee = _cuvee()
+        self.url = reverse("note-degustation-list")
+
+    def test_creation_associe_le_proprietaire(self):
+        self.client.force_authenticate(self.alice)
+        resp = self.client.post(
+            self.url,
+            {"cuvee": self.cuvee.pk, "millesime": 2019, "note": "4.5", "commentaire": "Superbe"},
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        note = NoteDegustation.objects.get()
+        self.assertEqual(note.proprietaire, self.alice)
+        self.assertEqual(str(note.note), "4.5")
+
+    def test_note_hors_bornes_refusee(self):
+        self.client.force_authenticate(self.alice)
+        resp = self.client.post(self.url, {"cuvee": self.cuvee.pk, "note": "6"})
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_carnet_cloisonne_par_utilisateur(self):
+        NoteDegustation.objects.create(proprietaire=self.alice, cuvee=self.cuvee, note="4")
+        self.client.force_authenticate(self.bob)
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        results = resp.data["results"] if isinstance(resp.data, dict) else resp.data
+        self.assertEqual(len(results), 0)  # Bob ne voit pas le carnet d'Alice
+
+    def test_filtre_par_cuvee(self):
+        autre = _cuvee("Autre")
+        NoteDegustation.objects.create(proprietaire=self.alice, cuvee=self.cuvee, note="4")
+        NoteDegustation.objects.create(proprietaire=self.alice, cuvee=autre, note="3")
+        self.client.force_authenticate(self.alice)
+        resp = self.client.get(self.url, {"cuvee": self.cuvee.pk})
+        results = resp.data["results"] if isinstance(resp.data, dict) else resp.data
+        self.assertEqual(len(results), 1)
+
+
+class FicheMaNoteTests(APITestCase):
+    """La fiche remonte « ma_note » = entrée de carnet la plus récente."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="alice", password="x")
+        self.cuvee = _cuvee()
+        self.url = reverse("cuvee-fiche", args=[self.cuvee.pk])
+
+    def test_ma_note_est_la_plus_recente(self):
+        NoteDegustation.objects.create(
+            proprietaire=self.user, cuvee=self.cuvee, note="3", date_degustation="2020-01-01"
+        )
+        NoteDegustation.objects.create(
+            proprietaire=self.user, cuvee=self.cuvee, note="4.5", date_degustation="2024-06-01"
+        )
+        self.client.force_authenticate(self.user)
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["ma_note"]["note"], "4.5")
+
+    def test_ma_note_absente_pour_anonyme(self):
+        NoteDegustation.objects.create(proprietaire=self.user, cuvee=self.cuvee, note="4")
+        resp = self.client.get(self.url)
+        self.assertIsNone(resp.data["ma_note"])
