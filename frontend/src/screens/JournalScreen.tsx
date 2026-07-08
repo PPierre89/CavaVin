@@ -1,5 +1,6 @@
 import { useData } from '../data'
 import { Card, CardTitle } from '../ui'
+import { formatDateTime } from '../dates'
 
 const MVT_ICONS: Record<string, string> = {
   CONSOMMATION: '🥂',
@@ -22,12 +23,7 @@ export default function JournalScreen() {
         mouvements.map((m) => {
           const b = bouteilles.find((x) => x.id === m.bouteille)
           const nom = b ? `${b.cuvee_nom}${b.millesime ? ' ' + b.millesime : ''}` : `Bouteille #${m.bouteille}`
-          const date = new Date(m.date).toLocaleDateString('fr-FR', {
-            day: 'numeric',
-            month: 'short',
-            hour: '2-digit',
-            minute: '2-digit',
-          })
+          const date = formatDateTime(m.date)
           return (
             <div
               key={m.id}

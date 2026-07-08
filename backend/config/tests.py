@@ -1,10 +1,22 @@
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.test import SimpleTestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 User = get_user_model()
+
+
+class WineapiTimeoutInvariantTests(SimpleTestCase):
+    """Garde-fou : les timeouts wineapi par défaut doivent rester sous le timeout
+    worker gunicorn le plus court rencontré (30 s), sinon un appel lent (vision)
+    fait tuer le worker au lieu de dégrader en 404. Voir config/settings.py."""
+
+    def test_timeouts_par_defaut_surs(self):
+        self.assertLess(settings.WINEAPI_TIMEOUT, 30)
+        self.assertLess(settings.WINEAPI_IMAGE_TIMEOUT, 30)
 
 
 class RegisterViewTests(APITestCase):
