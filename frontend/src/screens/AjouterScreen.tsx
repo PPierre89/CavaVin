@@ -2,16 +2,12 @@ import { useRef, useState, type FormEvent } from 'react'
 import { api, apiAllPages, errMsg } from '../api'
 import { useData } from '../data'
 import { useToast } from '../toast'
-import { Card, CardTitle, Field, inputCls, primaryCls, ghostCls } from '../ui'
+import { Card, CardTitle, Field, inputCls, primaryCls } from '../ui'
+import { VinIdentification } from '../components/VinIdentification'
+import type { IdentifiedWine } from '../identification'
 import type { Couleur, Cuvee, Domaine, Statut } from '../types'
 
 type Seg = 'bouteille' | 'emplacement' | 'cave'
-interface IdentifyResult {
-  cuvee: Cuvee
-  millesime?: number | null
-  confidence?: number | null
-  infos?: { region?: string | null }
-}
 
 export default function AjouterScreen({
   seg,
@@ -51,19 +47,15 @@ function BottleForm({ onDone }: { onDone: () => void }) {
   const { cuvees, emplacements, caveId, refresh } = useData()
   const toast = useToast()
   const formRef = useRef<HTMLFormElement>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const controlsRef = useRef<{ stop: () => void } | null>(null)
   const millesimeRef = useRef<HTMLInputElement>(null)
 
   const [cuveeId, setCuveeId] = useState('')
   const [couleur, setCouleur] = useState<Couleur>('ROUGE')
-  const [search, setSearch] = useState('')
-  const [scanning, setScanning] = useState(false)
 
   const isNew = !cuveeId
 
-  function applyIdentified(res: IdentifyResult, srcLabel: string) {
+  // Pré-remplit le formulaire à partir d'un vin identifié (scan, étiquette, nom).
+  function applyIdentified(res: IdentifiedWine, srcLabel: string) {
     refresh()
     setCuveeId(String(res.cuvee.id))
     if (res.cuvee.couleur) setCouleur(res.cuvee.couleur)
@@ -71,92 +63,6 @@ function BottleForm({ onDone }: { onDone: () => void }) {
     const conf = res.confidence != null ? ` · ${Math.round(res.confidence * 100)}%` : ''
     const reg = res.infos?.region ? ` (${res.infos.region})` : ''
     toast(`${srcLabel}${conf} : ${res.cuvee.domaine_nom} — ${res.cuvee.nom}${reg}`, 'ok')
-  }
-
-  async function resolveBarcode(ean: string) {
-    try {
-      const res = await api<IdentifyResult & { source: string }>('POST', '/api/scan-code-barres/', {
-        code_barres: ean,
-      })
-      applyIdentified(res, res.source === 'local' ? 'Reconnu (déjà en base)' : 'Reconnu')
-    } catch (e) {
-      const status = (e as { status?: number }).status
-      if (status === 404) toast("Vin non reconnu. Essaie 🏷️ Photographier l'étiquette.", 'err')
-      else toast(errMsg(e, 'Erreur pendant la recherche.'), 'err')
-    }
-  }
-
-  function stopScan() {
-    controlsRef.current?.stop()
-    controlsRef.current = null
-    setScanning(false)
-  }
-
-  function manualEntry() {
-    const ean = window.prompt('Saisis le code-barres (8 à 14 chiffres) :', '')
-    if (ean === null) return
-    const v = ean.trim()
-    if (/^\d{8,14}$/.test(v)) resolveBarcode(v)
-    else toast('Code-barres invalide.', 'err')
-  }
-
-  // ZXing : décodage caméra universel (contrairement à BarcodeDetector, absent de
-  // beaucoup de navigateurs). Import dynamique pour ne pas alourdir le bundle initial.
-  async function startScan() {
-    setScanning(true)
-    try {
-      const { BrowserMultiFormatReader } = await import('@zxing/browser')
-      const reader = new BrowserMultiFormatReader()
-      controlsRef.current = await reader.decodeFromConstraints(
-        { video: { facingMode: 'environment' } },
-        videoRef.current!,
-        (result, _err, controls) => {
-          if (result) {
-            controls.stop()
-            controlsRef.current = null
-            setScanning(false)
-            resolveBarcode(result.getText())
-          }
-        },
-      )
-    } catch {
-      setScanning(false)
-      toast('Caméra indisponible — saisie manuelle.', 'err')
-      manualEntry()
-    }
-  }
-
-  async function onFile() {
-    const f = fileRef.current?.files?.[0]
-    if (fileRef.current) fileRef.current.value = ''
-    if (!f) return
-    if (f.size > 10 * 1024 * 1024) return toast('Photo trop lourde (10 Mo max).', 'err')
-    toast("Identification de l'étiquette en cours…", 'ok')
-    const fd = new FormData()
-    fd.append('image', f, f.name || 'etiquette.jpg')
-    try {
-      const res = await api<IdentifyResult & { source: string }>('POST', '/api/scan-etiquette/', fd)
-      applyIdentified(res, 'Identifié')
-    } catch (e) {
-      const status = (e as { status?: number }).status
-      if (status === 404) toast("Vin non identifié sur l'étiquette. Essaie une photo plus nette.", 'err')
-      else toast(errMsg(e, "Erreur pendant l'identification."), 'err')
-    }
-  }
-
-  async function doSearch() {
-    const q = search.trim()
-    if (q.length < 2) return toast('Saisis au moins 2 caractères.', 'err')
-    try {
-      const res = await api<IdentifyResult & { source: string }>('POST', '/api/identifier-vin/', {
-        query: q,
-      })
-      applyIdentified(res, 'Identifié')
-    } catch (e) {
-      const status = (e as { status?: number }).status
-      if (status === 404) toast('Vin non identifié. Ajoute-le manuellement.', 'err')
-      else toast(errMsg(e, "Erreur pendant l'identification."), 'err')
-    }
   }
 
   async function findOrCreateDomaine(nom: string): Promise<number> {
@@ -219,52 +125,7 @@ function BottleForm({ onDone }: { onDone: () => void }) {
   return (
     <Card>
       <CardTitle>Ajouter une bouteille</CardTitle>
-      {scanning ? (
-        <div>
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            className="w-full rounded-xl bg-black aspect-[4/3] object-cover"
-          />
-          <p className="text-muted text-sm text-center mt-2">Vise le code-barres</p>
-          <button onClick={stopScan} className={`${ghostCls} w-full mt-2`}>
-            Annuler
-          </button>
-        </div>
-      ) : (
-        <>
-          <button onClick={startScan} className={primaryCls.replace('mt-4', 'mt-0')}>
-            📷 Scanner le code-barres
-          </button>
-          <button onClick={() => fileRef.current?.click()} className={`${primaryCls} mt-2`}>
-            🏷️ Photographier l'étiquette
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/jpeg,image/png"
-            capture="environment"
-            className="hidden"
-            onChange={onFile}
-          />
-          <div className="flex gap-2 mt-2.5">
-            <input
-              className={inputCls}
-              placeholder="ou rechercher par nom (Petrus 2015)"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), doSearch())}
-            />
-            <button onClick={doSearch} className={`${ghostCls} shrink-0`}>
-              🔎
-            </button>
-          </div>
-          <button onClick={manualEntry} className="w-full mt-2 text-xs text-muted underline">
-            saisir le code-barres à la main
-          </button>
-        </>
-      )}
+      <VinIdentification onIdentified={applyIdentified} />
 
       <form ref={formRef} onSubmit={submit} className="mt-4">
         <div className="text-[0.7rem] uppercase tracking-widest text-gold border-b border-gold/15 pb-1.5 mb-1">
