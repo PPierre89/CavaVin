@@ -1,5 +1,7 @@
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.conf import settings
+from django.core.cache import cache
 from django.db.models import DecimalField, ExpressionWrapper, F, Max, Min, Sum
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -11,7 +13,12 @@ from rest_framework.views import APIView
 from apps.inventory.models import Bouteille, NoteDegustation
 
 from . import sommellerie, wine_profile
-from .enrichment import EnrichmentError, get_enabled_providers, wineapi_detail
+from .enrichment import (
+    EnrichmentError,
+    get_enabled_providers,
+    refresh_wineapi_detail,
+    wineapi_detail,
+)
 from .enrichment.normalize import strip_vintage
 from .ingest import upsert_cuvee
 from .models import Cepage, Cuvee, Domaine
@@ -65,116 +72,149 @@ class CepageViewSet(viewsets.ModelViewSet):
     search_fields = ["nom"]
 
 
+def _build_fiche(cuvee, user, detail):
+    """Construit la charge utile de la fiche vin.
+
+    `detail` est le détail wineapi déjà récupéré (cache ou rafraîchi), ou None.
+    Le stock (prix moyen, millésimes, ma note) n'est renseigné que pour un
+    utilisateur authentifié ; le référentiel et le conseil sont publics.
+    """
+    conseil = sommellerie.conseil_pour_couleur(cuvee.couleur)
+    bouteilles = (
+        Bouteille.objects.filter(proprietaire=user, cuvee=cuvee)
+        if user.is_authenticated
+        else Bouteille.objects.none()
+    )
+
+    # Prix d'achat moyen pondéré par les quantités (lignes sans prix ignorées).
+    # ExpressionWrapper : le produit Decimal × entier exige un output_field explicite.
+    ligne_valeur = ExpressionWrapper(
+        F("prix_achat") * F("quantite"),
+        output_field=DecimalField(max_digits=12, decimal_places=2),
+    )
+    chiffres = bouteilles.filter(prix_achat__isnull=False).aggregate(
+        montant=Sum(ligne_valeur), nb=Sum("quantite")
+    )
+    prix_moyen = None
+    if chiffres["nb"]:
+        prix_moyen = (chiffres["montant"] / chiffres["nb"]).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    # Millésimes en stock, regroupés (une cuvée peut avoir plusieurs lignes par
+    # millésime, à des emplacements différents).
+    millesimes = list(
+        bouteilles.filter(quantite__gt=0)
+        .values("millesime")
+        .annotate(
+            quantite=Sum("quantite"),
+            apogee_debut=Min("apogee_debut"),
+            apogee_fin=Max("apogee_fin"),
+        )
+        .order_by(F("millesime").desc(nulls_last=True))
+    )
+
+    # Valeurs par défaut dérivées de la couleur (repli si wineapi indisponible).
+    profil = [vars(axe) for axe in conseil.gustatif]
+    accords = [{**vars(a), "confiance": None} for a in conseil.accords]
+    note_communaute = None
+    avis = []
+    prix_marche = None
+    if detail:
+        profil = wine_profile.profil_gustatif(detail, profil)
+        accords = wine_profile.accords_mets(detail) or accords
+        note_communaute = wine_profile.note_communaute(detail)
+        avis = wine_profile.avis_critiques(detail)
+        prix_marche = wine_profile.prix_marche(detail)
+
+    # Ma note : entrée la plus récente du carnet de dégustation pour cette cuvée.
+    ma_note = None
+    if user.is_authenticated:
+        derniere = (
+            NoteDegustation.objects.filter(proprietaire=user, cuvee=cuvee)
+            .order_by("-date_degustation", "-cree_le")
+            .first()
+        )
+        if derniere is not None:
+            ma_note = {
+                "note": str(derniere.note),
+                "commentaire": derniere.commentaire,
+                "millesime": derniere.millesime,
+                "date": derniere.date_degustation,
+            }
+
+    return {
+        "cuvee": {
+            "id": cuvee.id,
+            "nom": cuvee.nom,
+            "appellation": cuvee.appellation,
+            "couleur": cuvee.couleur,
+            "domaine_nom": cuvee.domaine.nom,
+            "cepages": list(cuvee.cepages.values_list("nom", flat=True)),
+        },
+        "conseil_degustation": {
+            "temperature": conseil.temperature,
+            "carafage": conseil.carafage,
+        },
+        "profil_gustatif": profil,
+        "accords_mets": accords,
+        "note_communaute": note_communaute,
+        "avis": avis,
+        "prix_marche": prix_marche,
+        "ma_note": ma_note,
+        "prix_achat_moyen": str(prix_moyen) if prix_moyen is not None else None,
+        "millesimes": millesimes,
+        "stock_total": sum(m["quantite"] for m in millesimes),
+        # Le vin a une source externe (wineapi) => le bouton de synchro est utile.
+        "enrichissable": bool(cuvee.reference_externe_id),
+    }
+
+
 class CuveeViewSet(viewsets.ModelViewSet):
     queryset = Cuvee.objects.select_related("domaine").prefetch_related("cepages")
     serializer_class = CuveeSerializer
     search_fields = ["nom", "domaine__nom", "appellation", "code_barres"]
     filterset_fields = ["couleur", "domaine"]
 
+    def get_throttles(self):
+        # La synchro force un appel wineapi : on la soumet au throttle "enrichment".
+        if self.action == "rafraichir":
+            self.throttle_scope = "enrichment"
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
+
     @action(detail=True, methods=["get"])
     def fiche(self, request, pk=None):
-        """Fiche vin consolidée : référentiel + conseil de dégustation (public)
-        + prix d'achat moyen et millésimes en stock (propres à l'utilisateur)."""
+        """Fiche vin consolidée. Le détail wineapi vient du cache (best-effort)."""
         cuvee = self.get_object()
-        conseil = sommellerie.conseil_pour_couleur(cuvee.couleur)
-
-        user = request.user
-        bouteilles = (
-            Bouteille.objects.filter(proprietaire=user, cuvee=cuvee)
-            if user.is_authenticated
-            else Bouteille.objects.none()
-        )
-
-        # Prix d'achat moyen pondéré par les quantités (lignes sans prix ignorées).
-        # ExpressionWrapper : le produit Decimal × entier exige un output_field explicite.
-        ligne_valeur = ExpressionWrapper(
-            F("prix_achat") * F("quantite"),
-            output_field=DecimalField(max_digits=12, decimal_places=2),
-        )
-        chiffres = bouteilles.filter(prix_achat__isnull=False).aggregate(
-            montant=Sum(ligne_valeur),
-            nb=Sum("quantite"),
-        )
-        prix_moyen = None
-        if chiffres["nb"]:
-            prix_moyen = (chiffres["montant"] / chiffres["nb"]).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
-
-        # Millésimes en stock, regroupés (une cuvée peut avoir plusieurs lignes
-        # par millésime, à des emplacements différents).
-        millesimes = list(
-            bouteilles.filter(quantite__gt=0)
-            .values("millesime")
-            .annotate(
-                quantite=Sum("quantite"),
-                apogee_debut=Min("apogee_debut"),
-                apogee_fin=Max("apogee_fin"),
-            )
-            .order_by(F("millesime").desc(nulls_last=True))
-        )
-
-        cepages = list(cuvee.cepages.values_list("nom", flat=True))
-
-        # Valeurs par défaut dérivées de la couleur (repli si wineapi indisponible).
-        profil = [vars(axe) for axe in conseil.gustatif]
-        accords = [{**vars(a), "confiance": None} for a in conseil.accords]
-        note_communaute = None
-        avis = []
-        prix_marche = None
-
-        # Enrichissement wineapi.io si le vin a déjà été identifié (best-effort,
-        # mis en cache) : profil gustatif réel, accords notés, note & avis
-        # communautaires, fourchette de prix marché.
         detail = wineapi_detail(cuvee.reference_externe_id)
-        if detail:
-            profil = wine_profile.profil_gustatif(detail, profil)
-            accords = wine_profile.accords_mets(detail) or accords
-            note_communaute = wine_profile.note_communaute(detail)
-            avis = wine_profile.avis_critiques(detail)
-            prix_marche = wine_profile.prix_marche(detail)
+        return Response(_build_fiche(cuvee, request.user, detail))
 
-        # Ma note : entrée la plus récente du carnet de dégustation pour cette cuvée.
-        ma_note = None
-        if user.is_authenticated:
-            derniere = (
-                NoteDegustation.objects.filter(proprietaire=user, cuvee=cuvee)
-                .order_by("-date_degustation", "-cree_le")
-                .first()
+    @action(detail=True, methods=["post"])
+    def rafraichir(self, request, pk=None):
+        """Synchro à la demande : force un re-fetch des données wineapi de la fiche.
+
+        Garde-fou anti-quota : un cooldown par vin (WINEAPI_REFRESH_COOLDOWN)
+        empêche de re-solliciter wineapi trop souvent, en plus du throttle
+        "enrichment" appliqué à cette action.
+        """
+        cuvee = self.get_object()
+        if not cuvee.reference_externe_id:
+            return Response(
+                {"detail": "Aucune source externe à synchroniser pour ce vin."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            if derniere is not None:
-                ma_note = {
-                    "note": str(derniere.note),
-                    "commentaire": derniere.commentaire,
-                    "millesime": derniere.millesime,
-                    "date": derniere.date_degustation,
-                }
 
-        return Response(
-            {
-                "cuvee": {
-                    "id": cuvee.id,
-                    "nom": cuvee.nom,
-                    "appellation": cuvee.appellation,
-                    "couleur": cuvee.couleur,
-                    "domaine_nom": cuvee.domaine.nom,
-                    "cepages": cepages,
-                },
-                "conseil_degustation": {
-                    "temperature": conseil.temperature,
-                    "carafage": conseil.carafage,
-                },
-                "profil_gustatif": profil,
-                "accords_mets": accords,
-                "note_communaute": note_communaute,
-                "avis": avis,
-                "prix_marche": prix_marche,
-                "ma_note": ma_note,
-                "prix_achat_moyen": str(prix_moyen) if prix_moyen is not None else None,
-                "millesimes": millesimes,
-                "stock_total": sum(m["quantite"] for m in millesimes),
-            }
-        )
+        cle_cooldown = f"wineapi:refresh-cooldown:{cuvee.reference_externe_id}"
+        if cache.get(cle_cooldown):
+            return Response(
+                {"detail": "Fiche déjà synchronisée récemment. Réessaie plus tard."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        cache.set(cle_cooldown, True, settings.WINEAPI_REFRESH_COOLDOWN)
+
+        detail = refresh_wineapi_detail(cuvee.reference_externe_id)
+        return Response(_build_fiche(cuvee, request.user, detail))
 
 
 class ScanCodeBarresView(APIView):

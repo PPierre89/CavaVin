@@ -94,6 +94,11 @@ code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` 
 L'endpoint est en lecture publique pour la partie référentiel/conseil (`IsAuthenticatedOrReadOnly`) ;
 les données privées (stock, `ma_note`) ne remontent que pour l'utilisateur authentifié.
 
+**Synchro à la demande** : `POST /api/cuvees/{id}/rafraichir/` force un re-fetch des données wineapi
+(le bouton 🔄 de la fiche), en contournant le cache. **Garde-fou anti-quota** : un *cooldown* par vin
+(`WINEAPI_REFRESH_COOLDOWN`, défaut 1 h) renvoie `429` si le vin a déjà été synchronisé récemment, et
+l'action est soumise au throttle `enrichment` — de quoi préserver le nombre d'appels wineapi limité.
+
 ### Carnet de dégustation
 
 `NoteDegustation` (app `inventory`, données privées cloisonnées) est un **journal** : plusieurs

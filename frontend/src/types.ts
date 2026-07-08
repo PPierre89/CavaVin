@@ -96,6 +96,7 @@ export interface FicheCuvee {
   prix_achat_moyen: string | null
   millesimes: FicheMillesime[]
   stock_total: number
+  enrichissable: boolean
 }
 
 export interface Mouvement {

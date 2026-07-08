@@ -1,5 +1,10 @@
 from .base import EnrichmentError, EnrichmentProvider, NormalizedWine
-from .registry import get_enabled_providers, get_provider, wineapi_detail
+from .registry import (
+    get_enabled_providers,
+    get_provider,
+    refresh_wineapi_detail,
+    wineapi_detail,
+)
 
 __all__ = [
     "EnrichmentError",
@@ -7,5 +12,6 @@ __all__ = [
     "NormalizedWine",
     "get_enabled_providers",
     "get_provider",
+    "refresh_wineapi_detail",
     "wineapi_detail",
 ]

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { api } from '../api'
+import { api, errMsg } from '../api'
 import { useData } from '../data'
+import { useToast } from '../toast'
 import { COULEUR_LABELS, type Bouteille, type Couleur, type FicheCuvee, type PrixMarche } from '../types'
 import { TastingSheet } from './TastingSheet'
 import { formatDate, formatDateTime } from '../dates'
@@ -101,12 +102,14 @@ export function FicheVin({
   onRetirer: (b: Bouteille) => void
 }) {
   const { bouteilles, cuveeColor, mouvements } = useData()
+  const toast = useToast()
   const couleur = cuveeColor(bouteille)
 
   const [fiche, setFiche] = useState<FicheCuvee | null>(null)
   const [selId, setSelId] = useState(bouteille.id)
   const [tab, setTab] = useState<'millesimes' | 'historique'>('millesimes')
   const [tasting, setTasting] = useState(false)
+  const [syncing, setSyncing] = useState(false)
 
   // Millésimes en stock de cette cuvée (données réelles de la cave), triés du
   // plus récent au plus ancien. On garde les Bouteille (avec id + apogée) pour
@@ -158,6 +161,26 @@ export function FicheVin({
     }
   }
 
+  // Synchro à la demande des données wineapi (bouton 🔄). Le garde-fou anti-quota
+  // (cooldown) est côté serveur : un 429 signale simplement d'attendre.
+  const syncFiche = async () => {
+    if (syncing) return
+    setSyncing(true)
+    try {
+      const data = await api<FicheCuvee>('POST', `/api/cuvees/${bouteille.cuvee}/rafraichir/`)
+      setFiche(data)
+      toast('Fiche synchronisée depuis WineAPI. 🔄', 'ok')
+    } catch (e) {
+      const httpStatus = (e as { status?: number }).status
+      if (httpStatus === 429)
+        toast('Fiche déjà synchronisée récemment — réessaie plus tard.', 'err')
+      else if (httpStatus === 400) toast('Aucune source externe pour ce vin.', 'err')
+      else toast(errMsg(e, 'Échec de la synchronisation.'), 'err')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   const appellation = fiche?.cuvee.appellation || 'Appellation inconnue'
 
   return (
@@ -171,9 +194,22 @@ export function FicheVin({
           <button onClick={onClose} aria-label="Retour" className={`${roundBtnCls} text-ink text-xl`}>
             ‹
           </button>
-          <button onClick={share} aria-label="Partager" className={`${roundBtnCls} text-ink text-lg`}>
-            ⤴
-          </button>
+          <div className="flex gap-2.5">
+            {fiche?.enrichissable && (
+              <button
+                onClick={syncFiche}
+                disabled={syncing}
+                aria-label="Synchroniser la fiche"
+                title="Synchroniser depuis WineAPI"
+                className={`${roundBtnCls} text-ink text-lg disabled:opacity-60`}
+              >
+                <span className={`inline-block ${syncing ? 'animate-spin' : ''}`}>🔄</span>
+              </button>
+            )}
+            <button onClick={share} aria-label="Partager" className={`${roundBtnCls} text-ink text-lg`}>
+              ⤴
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-col items-center pt-3 pb-8">
