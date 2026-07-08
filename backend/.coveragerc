@@ -1,0 +1,31 @@
+# Configuration de la couverture de test (coverage.py).
+# Utilisée en CI (voir .github/workflows/ci.yml) et en local :
+#   cd backend && coverage run manage.py test && coverage report
+[run]
+source = apps
+branch = True
+omit =
+    */migrations/*
+    */tests.py
+    */apps.py
+    */__init__.py
+    manage.py
+
+[report]
+show_missing = True
+skip_covered = False
+# Seuil minimal de couverture : la commande `coverage report` échoue en dessous.
+# Ajustez à la hausse au fil de l'enrichissement de la suite de tests.
+fail_under = 70
+exclude_lines =
+    pragma: no cover
+    def __str__
+    def __repr__
+    raise NotImplementedError
+    if TYPE_CHECKING:
+
+[html]
+directory = htmlcov
+
+[xml]
+output = coverage.xml

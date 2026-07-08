@@ -10,3 +10,7 @@ backend/spa/
 /staticfiles_data/
 .env
 *.log
+# Rapports de couverture de test (générés en CI / local)
+.coverage
+backend/htmlcov/
+backend/coverage.xml

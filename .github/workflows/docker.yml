@@ -1,12 +1,21 @@
 name: Docker
 
 # Construit l'image sur chaque PR (vérifie que le Dockerfile build) et la publie
-# sur GitHub Container Registry (ghcr.io) à chaque push sur main.
+# sur GitHub Container Registry (ghcr.io) :
+#   - `latest` + `sha-xxxx` à chaque push sur main (déploiement continu) ;
+#   - `vX.Y.Z` (+ `X.Y`, `X`) sur chaque tag de version `v*` (release) ;
+#   - déclenchement manuel possible via l'onglet Actions (workflow_dispatch).
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -39,9 +48,13 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
 
       # Contexte = racine du repo (le Dockerfile multi-stage build frontend/ + backend/).
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -51,3 +64,19 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Récapitulatif lisible de ce qui a été (ou aurait été) publié.
+      - name: Deployment summary
+        if: always()
+        run: |
+          {
+            echo "### Image Docker"
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "🔍 Build de vérification (PR) — **non publiée**."
+            else
+              echo "🚀 Publiée sur \`ghcr.io/${{ github.repository }}\` :"
+            fi
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

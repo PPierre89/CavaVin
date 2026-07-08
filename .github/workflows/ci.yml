@@ -1,15 +1,21 @@
 name: CI
 
-# Lance la suite de tests Django sur chaque PR vers main et sur main.
+# Lance la suite de tests Django (avec seuil de couverture) et le lint/build
+# du frontend sur chaque PR vers main et sur main.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
+# Annule les runs obsolètes quand on pousse à nouveau sur la même branche/PR.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    name: Tests (Django)
+    name: Tests & couverture (Django)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -31,14 +37,39 @@ jobs:
 
       # Pas de POSTGRES_HOST -> Django bascule sur SQLite (voir config/settings.py),
       # aucun service externe requis. WINEAPI_KEY vide -> provider wineapi désactivé.
+      # La config de couverture (source, omit, seuil) vient de backend/.coveragerc.
       - name: Run tests with coverage
-        run: coverage run --source=apps manage.py test --verbosity=2
+        run: coverage run manage.py test --verbosity=2
 
-      - name: Coverage report
+      # Génère les rapports (XML pour l'outillage, HTML pour l'artefact).
+      - name: Build coverage reports
+        run: |
+          coverage xml
+          coverage html
+
+      # Résumé de couverture directement dans le récapitulatif du job GitHub.
+      - name: Coverage summary
+        if: always()
+        run: |
+          echo "### Couverture de test" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          coverage report >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      # Applique le seuil (fail_under de .coveragerc) : échoue si couverture insuffisante.
+      - name: Enforce coverage threshold
         run: coverage report
 
+      - name: Upload HTML coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: backend/htmlcov
+          retention-days: 14
+
   frontend:
-    name: Frontend (build)
+    name: Frontend (lint & build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -55,6 +86,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Lint (oxlint)
+        run: npm run lint
 
       - name: Type-check & build
         run: npm run build

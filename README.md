@@ -159,6 +159,45 @@ La base de données est **SQLite** (zéro dépendance externe, adapté au déplo
 conteneur, `SQLITE_PATH` place le fichier SQLite sur un volume persistant — voir
 `backend/config/settings.py`.
 
+## Intégration continue & déploiement (CI/CD)
+
+Deux workflows GitHub Actions automatisent la vérification et la livraison. Ils tournent sur chaque
+**Pull Request vers `main`** et sur **`main`**.
+
+### `ci.yml` — tests, couverture & build front
+
+- **Backend** : installe les dépendances (Python 3.12), lance la suite de tests Django
+  (`manage.py test`) instrumentée par [coverage.py](https://coverage.readthedocs.io/). La
+  configuration (source mesurée, exclusions, **seuil minimal**) vit dans
+  [`backend/.coveragerc`](backend/.coveragerc).
+  - Le **seuil de couverture** (`fail_under = 70`) est appliqué : sous 70 %, le job échoue.
+    Relevez-le au fil de l'enrichissement des tests.
+  - Un **résumé de couverture** est écrit dans le récapitulatif du job (onglet *Summary* du run),
+    et le **rapport HTML** est publié en artefact téléchargeable (`coverage-html`, conservé 14 jours).
+- **Frontend** : `npm ci`, puis **lint** (`oxlint`) et **type-check + build** (`tsc -b && vite build`).
+
+Reproduire la mesure de couverture en local :
+
+```bash
+cd backend
+pip install -r requirements.txt coverage
+coverage run manage.py test      # config lue depuis .coveragerc
+coverage report                  # résumé + application du seuil
+coverage html                    # rapport détaillé dans backend/htmlcov/
+```
+
+### `docker.yml` — build & publication de l'image
+
+- Sur **PR** : build de vérification du `Dockerfile` multi-stage (front + back), **sans publication**.
+- Sur **`main`** : publie `ghcr.io/ppierre89/cavavin:latest` **et** un tag immuable `sha-xxxx`
+  (déploiement continu — le NAS récupère `latest`).
+- Sur un **tag de version `vX.Y.Z`** (`git tag v1.2.0 && git push --tags`) : publie les tags
+  sémantiques `1.2.0`, `1.2`, `1` pour épingler une release précise.
+- Déclenchement **manuel** possible via l'onglet *Actions* (`workflow_dispatch`).
+
+Le récapitulatif du job liste les tags effectivement publiés. La mise à jour du NAS reste
+`docker compose pull && docker compose up -d` (voir ci-dessous).
+
 ## Lancer en local (sans Docker)
 
 ```powershell
