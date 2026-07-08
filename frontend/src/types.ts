@@ -58,6 +58,18 @@ export interface AxeGustatif {
 export interface Accord {
   nom: string
   emoji: string
+  confiance: number | null
+}
+export interface AvisCritique {
+  reviewer: string
+  score: number | null
+  score_text: string | null
+  date: string | null
+}
+export interface PrixMarche {
+  min: number
+  max: number
+  devise: string
 }
 export interface FicheMillesime {
   millesime: number | null
@@ -77,6 +89,9 @@ export interface FicheCuvee {
   conseil_degustation: { temperature: string; carafage: string }
   profil_gustatif: AxeGustatif[]
   accords_mets: Accord[]
+  note_communaute: { note: number; nb: number } | null
+  avis: AvisCritique[]
+  prix_marche: PrixMarche | null
   prix_achat_moyen: string | null
   millesimes: FicheMillesime[]
   stock_total: number

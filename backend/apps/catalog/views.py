@@ -10,8 +10,8 @@ from rest_framework.views import APIView
 
 from apps.inventory.models import Bouteille
 
-from . import sommellerie
-from .enrichment import EnrichmentError, get_enabled_providers
+from . import sommellerie, wine_profile
+from .enrichment import EnrichmentError, get_enabled_providers, wineapi_detail
 from .enrichment.normalize import strip_vintage
 from .ingest import upsert_cuvee
 from .models import Cepage, Cuvee, Domaine
@@ -87,6 +87,26 @@ class CuveeViewSet(viewsets.ModelViewSet):
             .order_by(F("millesime").desc(nulls_last=True))
         )
 
+        cepages = list(cuvee.cepages.values_list("nom", flat=True))
+
+        # Valeurs par défaut dérivées de la couleur (repli si wineapi indisponible).
+        profil = [vars(axe) for axe in conseil.gustatif]
+        accords = [{**vars(a), "confiance": None} for a in conseil.accords]
+        note_communaute = None
+        avis = []
+        prix_marche = None
+
+        # Enrichissement wineapi.io si le vin a déjà été identifié (best-effort,
+        # mis en cache) : profil gustatif réel, accords notés, note & avis
+        # communautaires, fourchette de prix marché.
+        detail = wineapi_detail(cuvee.reference_externe_id)
+        if detail:
+            profil = wine_profile.profil_gustatif(detail, profil)
+            accords = wine_profile.accords_mets(detail) or accords
+            note_communaute = wine_profile.note_communaute(detail)
+            avis = wine_profile.avis_critiques(detail)
+            prix_marche = wine_profile.prix_marche(detail)
+
         return Response(
             {
                 "cuvee": {
@@ -95,14 +115,17 @@ class CuveeViewSet(viewsets.ModelViewSet):
                     "appellation": cuvee.appellation,
                     "couleur": cuvee.couleur,
                     "domaine_nom": cuvee.domaine.nom,
-                    "cepages": list(cuvee.cepages.values_list("nom", flat=True)),
+                    "cepages": cepages,
                 },
                 "conseil_degustation": {
                     "temperature": conseil.temperature,
                     "carafage": conseil.carafage,
                 },
-                "profil_gustatif": [vars(axe) for axe in conseil.gustatif],
-                "accords_mets": [vars(accord) for accord in conseil.accords],
+                "profil_gustatif": profil,
+                "accords_mets": accords,
+                "note_communaute": note_communaute,
+                "avis": avis,
+                "prix_marche": prix_marche,
                 "prix_achat_moyen": str(prix_moyen) if prix_moyen is not None else None,
                 "millesimes": millesimes,
                 "stock_total": sum(m["quantite"] for m in millesimes),

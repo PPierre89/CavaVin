@@ -81,6 +81,12 @@ code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` 
 - **Référentiel partagé** : nom, appellation, couleur, domaine et **cépages** de la cuvée.
 - **Conseil de dégustation** dérivé de la couleur (`backend/apps/catalog/sommellerie.py`, logique
   *pure* et testée) : température de service, carafage, profil gustatif type et accords mets-vins.
+- **Enrichissement wineapi.io** (si le vin a déjà été identifié — `Cuvee.reference_externe_id`) :
+  `GET /wines/{id}` fournit le **profil gustatif réel** (corps/acidité), les **accords mets-vins notés**,
+  la **note & le nombre d'avis communautaires**, les **avis de critiques** et la **fourchette de prix
+  marché**. Le mapping wineapi → fiche est isolé et testé (`backend/apps/catalog/wine_profile.py`), le
+  détail est **mis en cache** (6 h) et l'appel est *best-effort* : en cas d'indisponibilité (quota,
+  clé absente, vin inconnu), la fiche retombe sur le conseil dérivé de la couleur.
 - **Données privées** (si authentifié, cloisonnées par propriétaire) : **prix d'achat moyen** pondéré
   par les quantités et **millésimes en stock** (quantité + fenêtre d'apogée agrégée).
 

@@ -17,7 +17,7 @@ from .enrichment import EnrichmentError, NormalizedWine
 from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.wineapi import WineApiProvider
-from . import sommellerie
+from . import sommellerie, wine_profile
 from .ingest import upsert_cuvee
 from .models import Cepage, Cuvee, Domaine
 from .serializers import ScanEtiquetteSerializer
@@ -586,3 +586,106 @@ class FicheCuveeTests(APITestCase):
         # Bob ne voit pas le stock d'Alice.
         self.assertEqual(resp.data["millesimes"], [])
         self.assertIsNone(resp.data["prix_achat_moyen"])
+
+
+# Détail wineapi.io d'exemple (sous-ensemble de GET /wines/{id}).
+_WINEAPI_DETAIL = {
+    "body": "Full-bodied",
+    "acidity": "Medium",
+    "averageRating": 3.9,
+    "ratingsCount": 26,
+    "priceRange": {"min": 38, "max": 65, "currency": "EUR"},
+    "pairings": [
+        {"food": "Beef", "confidence": 0.95, "notes": "Grillé"},
+        {"food": "Lamb", "confidence": 0.9, "notes": None},
+    ],
+    "scores": [
+        {"score": 92, "scoreText": "Excellent", "reviewer": "Wine Critic", "reviewDate": "2020-01-01"},
+        {"score": None, "scoreText": None, "reviewer": None},  # ignoré (pas de reviewer)
+    ],
+}
+
+
+class WineProfileTests(SimpleTestCase):
+    """Mapping wineapi.io -> champs de fiche — fonctions pures, sans réseau."""
+
+    def test_food_emoji(self):
+        self.assertEqual(wine_profile.food_emoji("Grilled Beef"), "🥩")
+        self.assertEqual(wine_profile.food_emoji("Poisson grillé"), "🐟")
+        self.assertEqual(wine_profile.food_emoji("Ovni"), "🍽️")
+
+    def test_profil_gustatif_utilise_corps_et_acidite(self):
+        defaut = [
+            {"gauche": "Léger", "droite": "Puissant", "valeur": 0.1},
+            {"gauche": "Souple", "droite": "Tannique", "valeur": 0.2},
+            {"gauche": "Doux", "droite": "Acide", "valeur": 0.3},
+        ]
+        axes = wine_profile.profil_gustatif(_WINEAPI_DETAIL, defaut)
+        self.assertEqual(axes[0]["valeur"], 0.85)  # Full-bodied
+        self.assertEqual(axes[1]["valeur"], 0.2)  # tanin : conserve le défaut
+        self.assertEqual(axes[2]["valeur"], 0.5)  # acidité Medium
+
+    def test_profil_gustatif_repli_si_rien(self):
+        defaut = [{"gauche": "Léger", "droite": "Puissant", "valeur": 0.1}]
+        self.assertIs(wine_profile.profil_gustatif({}, defaut), defaut)
+
+    def test_accords_tries_par_confiance(self):
+        accords = wine_profile.accords_mets(_WINEAPI_DETAIL)
+        self.assertEqual([a["nom"] for a in accords], ["Beef", "Lamb"])
+        self.assertEqual(accords[0]["emoji"], "🥩")
+        self.assertEqual(accords[0]["confiance"], 0.95)
+        self.assertIsNone(wine_profile.accords_mets({}))
+
+    def test_note_communaute_ramenee_sur_5(self):
+        self.assertEqual(wine_profile.note_communaute(_WINEAPI_DETAIL), {"note": 3.9, "nb": 26})
+        self.assertEqual(wine_profile.note_communaute({"averageRating": 92})["note"], 4.6)
+        self.assertIsNone(wine_profile.note_communaute({}))
+
+    def test_avis_ignore_sans_reviewer(self):
+        avis = wine_profile.avis_critiques(_WINEAPI_DETAIL)
+        self.assertEqual(len(avis), 1)
+        self.assertEqual(avis[0]["reviewer"], "Wine Critic")
+        self.assertEqual(avis[0]["score"], 92)
+
+    def test_prix_marche(self):
+        self.assertEqual(
+            wine_profile.prix_marche(_WINEAPI_DETAIL), {"min": 38, "max": 65, "devise": "EUR"}
+        )
+        self.assertIsNone(wine_profile.prix_marche({"priceRange": {"min": 10}}))
+
+
+class FicheEnrichmentTests(APITestCase):
+    """L'endpoint fiche fusionne le détail wineapi quand le vin est identifié."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Château Cantemerle")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine,
+            nom="Grand Cru Classé",
+            couleur=Cuvee.Couleur.ROUGE,
+            reference_externe_id="abc-123",
+        )
+        self.url = reverse("cuvee-fiche", args=[self.cuvee.pk])
+
+    @patch("apps.catalog.views.wineapi_detail")
+    def test_fiche_enrichie_par_wineapi(self, mock_detail):
+        mock_detail.return_value = _WINEAPI_DETAIL
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_detail.assert_called_once_with("abc-123")
+        self.assertEqual(resp.data["note_communaute"], {"note": 3.9, "nb": 26})
+        self.assertEqual(resp.data["prix_marche"]["max"], 65)
+        self.assertEqual(resp.data["accords_mets"][0]["nom"], "Beef")
+        self.assertEqual(len(resp.data["avis"]), 1)
+
+    @patch("apps.catalog.views.wineapi_detail")
+    def test_fiche_repli_sans_wineapi(self, mock_detail):
+        mock_detail.return_value = None
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        # Repli sur le conseil dérivé de la couleur (ROUGE).
+        self.assertIsNone(resp.data["note_communaute"])
+        self.assertEqual(resp.data["avis"], [])
+        self.assertIsNone(resp.data["prix_marche"])
+        self.assertTrue(resp.data["accords_mets"])  # accords par défaut présents
+        self.assertIsNone(resp.data["accords_mets"][0]["confiance"])
