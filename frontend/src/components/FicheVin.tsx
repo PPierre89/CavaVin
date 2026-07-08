@@ -3,6 +3,7 @@ import { api } from '../api'
 import { useData } from '../data'
 import { COULEUR_LABELS, type Bouteille, type Couleur, type FicheCuvee, type PrixMarche } from '../types'
 import { TastingSheet } from './TastingSheet'
+import { formatDate, formatDateTime } from '../dates'
 
 /* ------------------------------------------------------------------ *
  *  Fiche vin plein écran — vue détaillée d'un vin.
@@ -220,7 +221,7 @@ export function FicheVin({
                     </div>
                     <div className="text-right">
                       <div className="text-ink">× {m.quantite}</div>
-                      <div className="text-muted text-xs">{new Date(m.date).toLocaleDateString('fr-FR')}</div>
+                      <div className="text-muted text-xs">{formatDateTime(m.date)}</div>
                     </div>
                   </div>
                 ))}
@@ -442,7 +443,7 @@ export function FicheVin({
                       <div className="text-muted text-sm mt-1">
                         {a.score_text}
                         {a.score_text && a.date ? ' · ' : ''}
-                        {a.date ? new Date(a.date).toLocaleDateString('fr-FR') : ''}
+                        {a.date ? formatDate(a.date) : ''}
                       </div>
                     )}
                   </div>

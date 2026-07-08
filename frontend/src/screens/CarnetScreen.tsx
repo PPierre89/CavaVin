@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { apiAllPages } from '../api'
 import { Card, CardTitle } from '../ui'
+import { formatDate } from '../dates'
 import { COULEUR_LABELS, type Couleur, type NoteDegustation } from '../types'
 
 const DOT: Record<Couleur, string> = {
@@ -56,13 +57,7 @@ export default function CarnetScreen() {
               <Stars note={Number(n.note)} />
             </div>
             {n.commentaire && <p className="text-sm text-ink/90 mt-1.5 ml-5">« {n.commentaire} »</p>}
-            <div className="text-xs text-muted mt-1 ml-5">
-              {new Date(n.date_degustation).toLocaleDateString('fr-FR', {
-                day: 'numeric',
-                month: 'long',
-                year: 'numeric',
-              })}
-            </div>
+            <div className="text-xs text-muted mt-1 ml-5">{formatDate(n.date_degustation)}</div>
           </div>
         ))
       )}
