@@ -52,3 +52,15 @@ def wineapi_detail(wine_id: str) -> dict | None:
         return None
     cache.set(key, detail or {}, _DETAIL_TTL)
     return detail or None
+
+
+def refresh_wineapi_detail(wine_id: str) -> dict | None:
+    """Force le rafraîchissement du détail wineapi en ignorant le cache.
+
+    Utilisé par le bouton de synchro de la fiche. L'appelant est responsable
+    du garde-fou anti-quota (cooldown) : cette fonction re-sollicite wineapi
+    à chaque appel."""
+    if not wine_id:
+        return None
+    cache.delete(f"wineapi:detail:{wine_id}")
+    return wineapi_detail(wine_id)

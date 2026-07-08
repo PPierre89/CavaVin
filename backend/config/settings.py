@@ -207,3 +207,6 @@ WINEAPI_TIMEOUT = int(os.getenv("WINEAPI_TIMEOUT", "20"))
 WINEAPI_IMAGE_TIMEOUT = int(os.getenv("WINEAPI_IMAGE_TIMEOUT", "25"))
 # Appelle /wines/{id} après identification pour récupérer cépages/appellation/notes.
 WINEAPI_ENRICH_DETAIL = os.getenv("WINEAPI_ENRICH_DETAIL", "True") == "True"
+# Garde-fou du bouton de synchro de la fiche : délai minimal (secondes) entre deux
+# rafraîchissements forcés d'un même vin, pour préserver le quota d'appels wineapi.
+WINEAPI_REFRESH_COOLDOWN = int(os.getenv("WINEAPI_REFRESH_COOLDOWN", "3600"))

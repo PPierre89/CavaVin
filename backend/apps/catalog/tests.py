@@ -689,3 +689,43 @@ class FicheEnrichmentTests(APITestCase):
         self.assertIsNone(resp.data["prix_marche"])
         self.assertTrue(resp.data["accords_mets"])  # accords par défaut présents
         self.assertIsNone(resp.data["accords_mets"][0]["confiance"])
+
+
+class FicheRafraichirTests(APITestCase):
+    """Bouton de synchro : POST /api/cuvees/{id}/rafraichir/ + garde-fou cooldown."""
+
+    def setUp(self):
+        cache.clear()  # réinitialise cooldown et compteurs de throttle
+        self.user = User.objects.create_user(username="alice", password="x")
+        self.domaine = Domaine.objects.create(nom="Château Cantemerle")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine,
+            nom="Grand Cru Classé",
+            couleur=Cuvee.Couleur.ROUGE,
+            reference_externe_id="abc-123",
+        )
+        self.url = reverse("cuvee-rafraichir", args=[self.cuvee.pk])
+
+    @patch("apps.catalog.views.refresh_wineapi_detail")
+    def test_force_le_refetch_puis_bloque_par_cooldown(self, mock_refresh):
+        mock_refresh.return_value = _WINEAPI_DETAIL
+        self.client.force_authenticate(self.user)
+
+        r1 = self.client.post(self.url)
+        self.assertEqual(r1.status_code, status.HTTP_200_OK)
+        self.assertEqual(r1.data["note_communaute"], {"note": 3.9, "nb": 26})
+        mock_refresh.assert_called_once_with("abc-123")
+
+        # 2e synchro immédiate : bloquée par le cooldown, aucun nouvel appel wineapi.
+        r2 = self.client.post(self.url)
+        self.assertEqual(r2.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        mock_refresh.assert_called_once()
+
+    def test_sans_source_externe_400(self):
+        cuvee = Cuvee.objects.create(
+            domaine=self.domaine, nom="Sans réf", couleur=Cuvee.Couleur.ROUGE
+        )
+        url = reverse("cuvee-rafraichir", args=[cuvee.pk])
+        self.client.force_authenticate(self.user)
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
