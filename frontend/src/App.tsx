@@ -6,9 +6,10 @@ import CaveScreen from './screens/CaveScreen'
 import AjouterScreen from './screens/AjouterScreen'
 import JournalScreen from './screens/JournalScreen'
 import CarnetScreen from './screens/CarnetScreen'
+import MesVinsScreen from './screens/MesVinsScreen'
 import { Logo } from './ui'
 
-type Tab = 'cave' | 'ajouter' | 'journal' | 'carnet'
+type Tab = 'cave' | 'mesvins' | 'ajouter' | 'journal' | 'carnet'
 type Seg = 'bouteille' | 'emplacement' | 'cave'
 
 const barFilter = 'saturate(1.2) blur(14px)'
@@ -66,6 +67,7 @@ function Shell() {
         ) : (
           <>
             {tab === 'cave' && <CaveScreen onAdd={goAdd} />}
+            {tab === 'mesvins' && <MesVinsScreen />}
             {tab === 'ajouter' && <AjouterScreen seg={seg} setSeg={setSeg} onDone={goCave} />}
             {tab === 'journal' && <JournalScreen />}
             {tab === 'carnet' && <CarnetScreen />}
@@ -86,6 +88,7 @@ function Shell() {
         {(
           [
             ['cave', '🍷', 'Ma cave'],
+            ['mesvins', '🍾', 'Mes vins'],
             ['ajouter', '＋', 'Ajouter'],
             ['carnet', '📖', 'Carnet'],
             ['journal', '🕘', 'Journal'],

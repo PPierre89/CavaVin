@@ -32,6 +32,13 @@ export interface Cuvee {
   appellation: string
   couleur: Couleur
   cepages_noms: string[]
+  region?: string
+  pays?: string
+  classification?: string
+  image_url?: string
+  prix_min?: string | null
+  prix_max?: string | null
+  devise?: string
 }
 
 export interface Bouteille {
