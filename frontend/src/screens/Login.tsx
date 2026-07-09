@@ -37,7 +37,7 @@ export default function Login() {
         votre cave, sublimée
       </div>
 
-      <form onSubmit={submit} className="glass rounded-[18px] p-5 w-full max-w-sm">
+      <form onSubmit={submit} className="glass rounded-card p-5 w-full max-w-sm">
         <h2 className="font-serif text-xl text-center mb-1">
           {mode === 'login' ? 'Connexion' : 'Créer un compte'}
         </h2>

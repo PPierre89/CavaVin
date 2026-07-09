@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useData } from '../data'
-import { Card } from '../ui'
+import { Card, Chip } from '../ui'
 import { BottleSheet, Slot } from '../components/bottle'
 import { FicheVin } from '../components/FicheVin'
 import { TYPE_LABELS, type Bouteille, type Emplacement } from '../types'
@@ -68,7 +68,7 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
       }
     }
     return (
-      <div className="glass rounded-[18px] px-3.5 py-3 mb-3">
+      <div className="glass rounded-card px-3.5 py-3 mb-3">
         <div className="flex justify-between items-baseline gap-2">
           <div>
             <span className="block text-gold text-[0.68rem] uppercase tracking-wider mb-0.5">
@@ -123,24 +123,11 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
 
       <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2.5">
         {caves.map((c) => (
-          <button
-            key={c.id}
-            onClick={() => setCaveId(c.id)}
-            className={`shrink-0 px-4 py-2.5 rounded-full text-sm border transition ${
-              c.id === caveId
-                ? 'bg-gradient-to-b from-wine-soft to-wine-deep border-wine text-white font-semibold'
-                : 'glass text-muted'
-            }`}
-          >
+          <Chip key={c.id} active={c.id === caveId} onClick={() => setCaveId(c.id)}>
             {c.nom}
-          </button>
+          </Chip>
         ))}
-        <button
-          onClick={() => onAdd('cave')}
-          className="shrink-0 px-4 py-2.5 rounded-full text-sm glass text-muted"
-        >
-          ＋ cave
-        </button>
+        <Chip onClick={() => onAdd('cave')}>＋ cave</Chip>
       </div>
 
       <Legend />

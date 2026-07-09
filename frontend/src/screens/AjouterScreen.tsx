@@ -2,7 +2,7 @@ import { useRef, useState, type FormEvent } from 'react'
 import { api, apiAllPages, errMsg } from '../api'
 import { useData } from '../data'
 import { useToast } from '../toast'
-import { Card, CardTitle, Field, inputCls, primaryCls } from '../ui'
+import { Card, CardTitle, Field, SegTabs, inputCls, primaryCls } from '../ui'
 import { VinIdentification } from '../components/VinIdentification'
 import type { IdentifiedWine } from '../identification'
 import type { Couleur, Cuvee, Domaine } from '../types'
@@ -20,21 +20,18 @@ export default function AjouterScreen({
 }) {
   return (
     <div>
-      <div className="glass rounded-xl p-1 mb-1.5 flex">
-        {(['bouteille', 'emplacement', 'cave'] as Seg[]).map((s) => (
-          <button
-            key={s}
-            onClick={() => setSeg(s)}
-            className={`flex-1 py-2.5 rounded-[9px] text-sm capitalize transition ${
-              seg === s
-                ? 'bg-gradient-to-b from-wine-soft to-wine-deep text-white font-semibold'
-                : 'text-muted'
-            }`}
-          >
-            {s === 'cave' ? 'Cave' : s}
-          </button>
-        ))}
-      </div>
+      <SegTabs
+        className="mb-1.5"
+        value={seg}
+        onChange={setSeg}
+        options={
+          [
+            ['bouteille', 'Bouteille'],
+            ['emplacement', 'Emplacement'],
+            ['cave', 'Cave'],
+          ] as const
+        }
+      />
       {seg === 'bouteille' && <BottleForm onDone={onDone} />}
       {seg === 'emplacement' && <EmplacementForm onDone={onDone} />}
       {seg === 'cave' && <CaveForm onDone={onDone} />}

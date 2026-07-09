@@ -2,10 +2,9 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { api, errMsg } from '../api'
 import { useData } from '../data'
 import { useToast } from '../toast'
+import { IconButton, SegTabs, StatutBadge, goldGrad, wineGrad } from '../ui'
 import {
   COULEUR_LABELS,
-  STATUT_COLORS,
-  STATUT_LABELS,
   type Bouteille,
   type Couleur,
   type FicheCuvee,
@@ -37,9 +36,8 @@ const HERO_BG: Record<Couleur, string> = {
 }
 
 /* Classes réutilisées : CTA doré plein et bouton « ajouter » en pointillés. */
-const goldBtnCls = 'w-full py-3.5 rounded-2xl font-bold text-white bg-gradient-to-b from-gold to-gold-soft'
+const goldBtnCls = `w-full py-3.5 rounded-2xl font-bold text-white ${goldGrad}`
 const addBtnCls = 'w-full py-3.5 rounded-2xl border border-dashed border-gold/25 text-muted text-sm'
-const roundBtnCls = 'w-11 h-11 grid place-items-center rounded-full glass'
 
 /** Formate une fenêtre d'apogée (« 2024-2035 », « dès 2024 », « avant 2035 »). */
 function formatApogee(debut: number | null, fin: number | null): string | null {
@@ -301,24 +299,24 @@ export function FicheVin({
         style={{ background: HERO_BG[couleur], paddingTop: 'calc(12px + env(safe-area-inset-top))' }}
       >
         <div className="flex items-center justify-between px-4">
-          <button onClick={onClose} aria-label="Retour" className={`${roundBtnCls} text-ink text-xl`}>
+          <IconButton onClick={onClose} aria-label="Retour" className="text-ink text-xl">
             ‹
-          </button>
+          </IconButton>
           <div className="flex gap-2.5">
             {fiche?.enrichissable && (
-              <button
+              <IconButton
                 onClick={syncFiche}
                 disabled={syncing}
                 aria-label="Synchroniser la fiche"
                 title="Synchroniser depuis WineAPI"
-                className={`${roundBtnCls} text-ink text-lg disabled:opacity-60`}
+                className="text-ink text-lg disabled:opacity-60"
               >
                 <span className={`inline-block ${syncing ? 'animate-spin' : ''}`}>🔄</span>
-              </button>
+              </IconButton>
             )}
-            <button onClick={share} aria-label="Partager" className={`${roundBtnCls} text-ink text-lg`}>
+            <IconButton onClick={share} aria-label="Partager" className="text-ink text-lg">
               ⤴
-            </button>
+            </IconButton>
           </div>
         </div>
 
@@ -333,7 +331,7 @@ export function FicheVin({
             <div className="text-[5.5rem] leading-none drop-shadow-[0_10px_24px_rgba(0,0,0,0.5)]">🍷</div>
           )}
           <div className="flex flex-wrap justify-center gap-2 mt-3">
-            <span className="px-4 py-1.5 rounded-full text-white text-sm font-semibold bg-gradient-to-b from-wine-soft to-wine-deep">
+            <span className={`px-4 py-1.5 rounded-full text-white text-sm font-semibold ${wineGrad}`}>
               {COULEUR_LABELS[couleur]}
             </span>
             {fiche?.cuvee.classification && (
@@ -341,12 +339,7 @@ export function FicheVin({
                 {fiche.cuvee.classification}
               </span>
             )}
-            <span
-              className="px-4 py-1.5 rounded-full text-sm font-semibold border"
-              style={{ color: STATUT_COLORS[selected.statut], borderColor: STATUT_COLORS[selected.statut] }}
-            >
-              {STATUT_LABELS[selected.statut]}
-            </span>
+            <StatutBadge statut={selected.statut} className="px-4 py-1.5 text-sm font-semibold" />
           </div>
           <div className="text-muted text-sm mt-3">{appellation}</div>
           {(fiche?.cuvee.region || fiche?.cuvee.pays) && (
@@ -363,19 +356,18 @@ export function FicheVin({
 
       <div className="max-w-[640px] mx-auto px-4" style={{ paddingBottom: 'calc(96px + env(safe-area-inset-bottom))' }}>
         {/* ---------- Onglets ---------- */}
-        <div className="grid grid-cols-2 gap-2 mt-4 p-1 rounded-full glass">
-          {(['millesimes', 'historique'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`py-2.5 rounded-full text-sm font-semibold transition ${
-                tab === t ? 'bg-gradient-to-b from-wine-soft to-wine-deep text-white' : 'text-muted'
-              }`}
-            >
-              {t === 'millesimes' ? 'Millésimes' : 'Historique'}
-            </button>
-          ))}
-        </div>
+        <SegTabs
+          pill
+          className="mt-4"
+          value={tab}
+          onChange={setTab}
+          options={
+            [
+              ['millesimes', 'Millésimes'],
+              ['historique', 'Historique'],
+            ] as const
+          }
+        />
 
         {tab === 'historique' ? (
           <Section title="Historique">
@@ -411,7 +403,7 @@ export function FicheVin({
                     onClick={() => setSelId(b.id)}
                     className={`shrink-0 px-5 py-3 rounded-2xl text-left transition border ${
                       b.id === selId
-                        ? 'bg-gradient-to-b from-wine-soft to-wine-deep border-wine text-white'
+                        ? `${wineGrad} border-wine text-white`
                         : 'glass border-transparent text-muted'
                     }`}
                   >
@@ -663,7 +655,7 @@ export function FicheVin({
                     <div key={b.id} className="flex flex-col items-center justify-end h-full flex-1 max-w-16">
                       <div className="text-sm text-ink mb-1">{b.quantite}</div>
                       <div
-                        className="w-8 rounded-t-md bg-gradient-to-b from-gold to-gold-soft"
+                        className={`w-8 rounded-t-md ${goldGrad}`}
                         style={{ height: `${(b.quantite / maxStock) * 100}%` }}
                       />
                       <div className="text-xs text-muted mt-2">{b.millesime ?? 'N.M.'}</div>
@@ -701,13 +693,8 @@ export function FicheVin({
 
       {/* ---------- Barre d'action fixe ---------- */}
       <div
-        className="fixed bottom-0 left-0 right-0 z-10 flex gap-3 px-4 pt-3"
-        style={{
-          paddingBottom: 'calc(14px + env(safe-area-inset-bottom))',
-          background: 'linear-gradient(180deg, rgba(27,21,18,0.4), rgba(20,15,12,0.97))',
-          backdropFilter: 'saturate(1.2) blur(14px)',
-          WebkitBackdropFilter: 'saturate(1.2) blur(14px)',
-        }}
+        className="bar-bottom fixed bottom-0 left-0 right-0 z-10 flex gap-3 px-4 pt-3"
+        style={{ paddingBottom: 'calc(14px + env(safe-area-inset-bottom))' }}
       >
         <button onClick={() => onOptions(selected)} className={`${goldBtnCls} flex-1 rounded-full`}>
           Autres options

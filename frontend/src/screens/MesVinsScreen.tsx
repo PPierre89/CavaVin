@@ -11,14 +11,8 @@ import {
   type Filtres,
   type Ligne,
 } from '../filtres'
-import {
-  COULEUR_LABELS,
-  STATUT_COLORS,
-  STATUT_LABELS,
-  type Bouteille,
-  type Couleur,
-  type Cuvee,
-} from '../types'
+import { StatutBadge, wineGrad } from '../ui'
+import { COULEUR_LABELS, type Bouteille, type Couleur, type Cuvee } from '../types'
 
 /* ------------------------------------------------------------------ *
  *  « Mes vins » — vue vinothèque : la liste à plat de tous les vins
@@ -135,13 +129,13 @@ export default function MesVinsScreen() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Cherchez un vin dans votre cave"
-          className="flex-1 text-[16px] px-4 py-3 rounded-2xl glass text-ink outline-none placeholder:text-[#8a7a6d] focus:border-gold/35"
+          className="flex-1 text-[16px] px-4 py-3 rounded-2xl glass text-ink outline-none placeholder:text-placeholder focus:border-gold/35"
         />
         <button
           onClick={() => setShowFilters(true)}
           aria-label="Filtrer"
           className={`shrink-0 w-12 rounded-2xl grid place-items-center text-lg transition ${
-            nbFiltres ? 'bg-gradient-to-b from-wine-soft to-wine-deep text-white' : 'glass text-muted'
+            nbFiltres ? `${wineGrad} text-white` : 'glass text-muted'
           }`}
         >
           <span className="relative">
@@ -157,12 +151,12 @@ export default function MesVinsScreen() {
 
       {/* ---------- Liste vinothèque ---------- */}
       {lignes.length === 0 ? (
-        <div className="glass rounded-[18px] p-4 text-muted text-sm">
+        <div className="glass rounded-card p-4 text-muted text-sm">
           Aucun vin dans votre cave pour le moment. Scannez une étiquette depuis l'onglet Ajouter
           pour commencer votre vinothèque.
         </div>
       ) : filtered.length === 0 ? (
-        <div className="glass rounded-[18px] p-4 text-muted text-sm">
+        <div className="glass rounded-card p-4 text-muted text-sm">
           Aucun vin ne correspond à votre recherche.
         </div>
       ) : (
@@ -180,7 +174,7 @@ export default function MesVinsScreen() {
               <button
                 key={l.key}
                 onClick={() => setFiche(l.ref)}
-                className="glass rounded-[18px] p-2.5 flex gap-3 text-left active:scale-[0.99] transition"
+                className="glass rounded-card p-2.5 flex gap-3 text-left active:scale-[0.99] transition"
               >
                 {/* Vignette bouteille */}
                 <div
@@ -215,15 +209,7 @@ export default function MesVinsScreen() {
                   </div>
                   {lieu && <div className="text-muted text-[0.8rem] mt-1.5 truncate">{lieu}</div>}
                   <div className="flex items-center justify-between gap-2 mt-2">
-                    <span
-                      className="text-[0.78rem] px-2.5 py-1 rounded-full border font-medium whitespace-nowrap"
-                      style={{
-                        color: STATUT_COLORS[l.ref.statut],
-                        borderColor: STATUT_COLORS[l.ref.statut],
-                      }}
-                    >
-                      {STATUT_LABELS[l.ref.statut]}
-                    </span>
+                    <StatutBadge statut={l.ref.statut} className="text-[0.78rem] px-2.5 py-1 font-medium" />
                     <span className="text-muted text-[0.78rem] whitespace-nowrap">75cl</span>
                   </div>
                   <div className="flex items-center gap-3 mt-2 text-[0.78rem] text-muted">
