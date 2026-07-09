@@ -236,8 +236,8 @@ Deux workflows GitHub Actions automatisent la vérification et la livraison. Ils
   (`manage.py test`) instrumentée par [coverage.py](https://coverage.readthedocs.io/). La
   configuration (source mesurée, exclusions, **seuil minimal**) vit dans
   [`backend/.coveragerc`](backend/.coveragerc).
-  - Le **seuil de couverture** (`fail_under = 70`) est appliqué : sous 70 %, le job échoue.
-    Relevez-le au fil de l'enrichissement des tests.
+  - Le **seuil de couverture** (`fail_under = 85`) est appliqué : sous 85 %, le job échoue.
+    La couverture réelle est d'environ **92 %** ; relevez le seuil au fil de l'enrichissement des tests.
   - Un **résumé de couverture** est écrit dans le récapitulatif du job (onglet *Summary* du run),
     et le **rapport HTML** est publié en artefact téléchargeable (`coverage-html`, conservé 14 jours).
 - **Frontend** : `npm ci`, puis **lint** (`oxlint`) et **type-check + build** (`tsc -b && vite build`).
