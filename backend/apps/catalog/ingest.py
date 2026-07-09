@@ -35,6 +35,11 @@ def enrich_cuvee_from_wineapi(cuvee: Cuvee, detail: dict | None) -> Cuvee:
         if valeur not in (None, "", []):
             setattr(cuvee, champ, valeur)
 
+    # Conserve la réponse brute complète (toutes les informations remontées, même
+    # celles non mappées ci-dessus). Le dernier appel fait foi : « actualiser »
+    # remplace le snapshot par les données fraîches (prix, scores...).
+    cuvee.wineapi_detail = detail
+    cuvee.historique_prix = _fusionne_historique_prix(cuvee.historique_prix, detail, data)
     cuvee.enrichi_le = timezone.now()
     cuvee.save()
 
@@ -44,6 +49,40 @@ def enrich_cuvee_from_wineapi(cuvee: Cuvee, detail: dict | None) -> Cuvee:
         cuvee.cepages.set(cepages)
 
     return cuvee
+
+
+# Nombre max de points d'historique conservés par cuvée (garde-fou de taille).
+_HISTORIQUE_PRIX_MAX = 60
+
+
+def _fusionne_historique_prix(existant, detail: dict, data: dict) -> list[dict]:
+    """Fusionne les nouveaux points de prix dans la série accumulée sur la cuvée.
+
+    Déduplique par date (un point par jour de relevé) : un nouveau relevé pour une
+    date déjà présente met le point à jour. Repli : si l'API ne renvoie aucune
+    offre datée mais une fourchette marché (``priceRange``), on ancre un point à la
+    date du jour pour que la série se construise quand même. La liste est triée par
+    date et plafonnée aux ``_HISTORIQUE_PRIX_MAX`` points les plus récents.
+    """
+    par_date: dict[str, dict] = {}
+    for point in existant or []:
+        if isinstance(point, dict) and point.get("date"):
+            par_date[point["date"]] = point
+
+    nouveaux = wine_profile.points_historique_prix(detail)
+    if not nouveaux and data.get("prix_min") is not None and data.get("prix_max") is not None:
+        # Aucune offre datée : on date la fourchette marché au jour de la synchro.
+        nouveaux = [{
+            "date": timezone.now().date().isoformat(),
+            "prix_min": data["prix_min"],
+            "prix_max": data["prix_max"],
+            "devise": data.get("devise") or "EUR",
+        }]
+    for point in nouveaux:
+        par_date[point["date"]] = point
+
+    ordonnee = [par_date[d] for d in sorted(par_date)]
+    return ordonnee[-_HISTORIQUE_PRIX_MAX:]
 
 
 @transaction.atomic

@@ -68,8 +68,13 @@ const FICHE = {
   avis: [],
   prix_marche: { min: 38, max: 65, devise: 'EUR' },
   prix_marchands: [
-    { marchand: 'Cave A', prix: 42.5, devise: 'EUR', url: 'https://example.test/a' },
-    { marchand: 'Cave B', prix: 59.9, devise: 'EUR', url: '' },
+    { marchand: 'Cave A', prix: 42.5, devise: 'EUR', url: 'https://example.test/a', releve_le: '2026-06-15' },
+    { marchand: 'Cave B', prix: 59.9, devise: 'EUR', url: '', releve_le: '2026-06-15' },
+  ],
+  historique_prix: [
+    { date: '2026-05-01', prix_min: 45, prix_max: 62, devise: 'EUR' },
+    { date: '2026-06-01', prix_min: 43, prix_max: 60, devise: 'EUR' },
+    { date: '2026-06-15', prix_min: 42.5, prix_max: 59.9, devise: 'EUR' },
   ],
   ma_note: null,
   prix_achat_moyen: '40.00',

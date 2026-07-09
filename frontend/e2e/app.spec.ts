@@ -40,6 +40,16 @@ test('ouverture de la fiche vin depuis une alvéole', async ({ page }) => {
   // Statut de dégustation calculé + fenêtre d'apogée effective.
   await expect(page.getByText('À boire').first()).toBeVisible()
   await expect(page.getByText('2022-2031')).toBeVisible()
+
+  // Historique de prix (accumulé côté serveur) : section, meilleur prix courant,
+  // fraîcheur du tarif et graphe SVG.
+  const histo = page.getByRole('heading', { name: 'Historique de prix' })
+  await histo.scrollIntoViewIfNeeded()
+  await expect(histo).toBeVisible()
+  await expect(page.getByText('42,50 €').first()).toBeVisible()
+  await expect(page.getByText('Meilleur prix', { exact: true })).toBeVisible()
+  await expect(page.getByText(/relevé le/).first()).toBeVisible()
+  await expect(page.locator('svg[role="img"]')).toBeVisible()
 })
 
 test("l'onglet Carnet est accessible", async ({ page }) => {

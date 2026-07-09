@@ -87,6 +87,15 @@ export interface PrixMarchand {
   prix: number
   devise: string
   url: string
+  // Date de relevé du tarif (« prix relevé le… »), « YYYY-MM-DD » ou '' si inconnue.
+  releve_le?: string
+}
+/** Un point de l'historique de prix (une observation par jour de relevé). */
+export interface PointPrix {
+  date: string
+  prix_min: number
+  prix_max: number
+  devise: string
 }
 export interface FicheMillesime {
   millesime: number | null
@@ -118,6 +127,7 @@ export interface FicheCuvee {
   avis: AvisCritique[]
   prix_marche: PrixMarche | null
   prix_marchands: PrixMarchand[]
+  historique_prix: PointPrix[]
   ma_note: { note: string; commentaire: string; millesime: number | null; date: string } | null
   prix_achat_moyen: string | null
   millesimes: FicheMillesime[]

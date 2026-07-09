@@ -16,7 +16,9 @@ show_missing = True
 skip_covered = False
 # Seuil minimal de couverture : la commande `coverage report` échoue en dessous.
 # Ajustez à la hausse au fil de l'enrichissement de la suite de tests.
-fail_under = 70
+# Couverture actuelle ~92 % ; seuil tenu volontairement en dessous (marge de
+# sécurité) pour ne pas casser la CI sur une variation mineure.
+fail_under = 85
 exclude_lines =
     pragma: no cover
     def __str__

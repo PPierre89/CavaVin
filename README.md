@@ -94,9 +94,18 @@ code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` 
   région/pays, appellation, classification, description & élaboration, corps/acidité, degré d'alcool,
   image, code LWIN, cépages, **note & nombre d'avis communautaires**, **avis de critiques**
   (score, texte, date), **accords mets-vins notés** (aliment + confiance), **fourchette de prix
-  marché** et **prix par marchand** (`prices` : caviste, tarif, devise, lien). L'enrichissement a lieu
+  marché** et **prix par marchand** (`prices` : caviste, tarif, devise, lien, **date de relevé**
+  `fetchedAt` affichée « relevé le… »). La date de relevé alimente aussi un **historique de prix**
+  (`Cuvee.historique_prix`) : les offres sont regroupées **par jour de relevé** (min/max) et
+  **accumulées au fil des synchros**, ce qui construit une série temporelle affichée en **graphe**
+  sur la fiche (section « Historique de prix »). Au-delà de ces champs
+  mappés en colonnes, la **réponse brute complète** du dernier `GET /wines/{id}` est aussi conservée
+  telle quelle (`Cuvee.wineapi_detail`), pour ne **jamais perdre une information remontée** — même non
+  encore exploitée ou ajoutée plus tard par l'API — et pouvoir re-dériver les champs sans re-consommer
+  le quota. L'enrichissement a lieu
   **à l'identification** (texte/image) et à la **synchro manuelle** (bouton 🔄). La fiche **lit alors
-  la base, sans appel réseau** — ce qui préserve le quota wineapi. Un vin importé avant cette
+  la base, sans appel réseau** — ce qui préserve le quota wineapi. Un ré-appel (« actualiser »)
+  **met à jour** les données (prix, scores…) et rafraîchit le snapshot brut. Un vin importé avant cette
   persistance est enrichi **paresseusement au premier accès** à sa fiche (une seule fois). Les champs
   absents retombent sur le conseil couleur. Quand wineapi signale un détail encore incomplet
   (`X-Update-Status: pending` / `pendingEnrichment`, enrichissement asynchrone en cours), il **n'est
@@ -236,8 +245,8 @@ Deux workflows GitHub Actions automatisent la vérification et la livraison. Ils
   (`manage.py test`) instrumentée par [coverage.py](https://coverage.readthedocs.io/). La
   configuration (source mesurée, exclusions, **seuil minimal**) vit dans
   [`backend/.coveragerc`](backend/.coveragerc).
-  - Le **seuil de couverture** (`fail_under = 70`) est appliqué : sous 70 %, le job échoue.
-    Relevez-le au fil de l'enrichissement des tests.
+  - Le **seuil de couverture** (`fail_under = 85`) est appliqué : sous 85 %, le job échoue.
+    La couverture réelle est d'environ **92 %** ; relevez le seuil au fil de l'enrichissement des tests.
   - Un **résumé de couverture** est écrit dans le récapitulatif du job (onglet *Summary* du run),
     et le **rapport HTML** est publié en artefact téléchargeable (`coverage-html`, conservé 14 jours).
 - **Frontend** : `npm ci`, puis **lint** (`oxlint`) et **type-check + build** (`tsc -b && vite build`).
