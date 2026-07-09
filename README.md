@@ -83,13 +83,19 @@ code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` 
   *pure* et testée) : température de service, carafage, profil gustatif type et accords mets-vins.
 - **Enrichissement wineapi.io persisté** (si le vin a été identifié — `Cuvee.reference_externe_id`) :
   le détail `GET /wines/{id}` est **enregistré en base sur la cuvée** (via
-  `ingest.enrich_cuvee_from_wineapi`, mapping pur et testé dans `wine_profile.normalize_detail`) —
-  région/pays, classification, description, corps/acidité, degré d'alcool, image, cépages,
-  **note & nombre d'avis communautaires**, **avis de critiques**, **accords mets-vins notés** et
-  **fourchette de prix marché**. L'enrichissement a lieu **à l'identification** (texte/image) et à la
-  **synchro manuelle** (bouton 🔄). La fiche **lit alors la base, sans appel réseau** — ce qui
-  préserve le quota wineapi. Un vin importé avant cette persistance est enrichi **paresseusement au
-  premier accès** à sa fiche (une seule fois). Les champs absents retombent sur le conseil couleur.
+  `ingest.enrich_cuvee_from_wineapi`, mapping pur et testé dans `wine_profile.normalize_detail` —
+  **source de vérité unique** réutilisée par le provider `wineapi.py`, plus de double extraction).
+  **Toutes les informations remontées par wineapi.io** y sont mappées :
+  région/pays, appellation, classification, description & élaboration, corps/acidité, degré d'alcool,
+  image, code LWIN, cépages, **note & nombre d'avis communautaires**, **avis de critiques**
+  (score, texte, date), **accords mets-vins notés** (aliment + confiance), **fourchette de prix
+  marché** et **prix par marchand** (`prices` : caviste, tarif, devise, lien). L'enrichissement a lieu
+  **à l'identification** (texte/image) et à la **synchro manuelle** (bouton 🔄). La fiche **lit alors
+  la base, sans appel réseau** — ce qui préserve le quota wineapi. Un vin importé avant cette
+  persistance est enrichi **paresseusement au premier accès** à sa fiche (une seule fois). Les champs
+  absents retombent sur le conseil couleur. Quand wineapi signale un détail encore incomplet
+  (`X-Update-Status: pending` / `pendingEnrichment`, enrichissement asynchrone en cours), il **n'est
+  pas figé** : le cache est court et la fiche re-fetch un détail complet plus tard.
 - **Données privées** (si authentifié, cloisonnées par propriétaire) : **prix d'achat moyen** pondéré
   par les quantités, **millésimes en stock** (quantité + fenêtre d'apogée agrégée) et **`ma_note`**
   (l'entrée de carnet de dégustation la plus récente pour cette cuvée).

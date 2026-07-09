@@ -130,6 +130,33 @@ def prix_marche(detail: dict) -> dict | None:
     return {"min": pr["min"], "max": pr["max"], "devise": pr.get("currency") or "EUR"}
 
 
+def prix_marchands(detail: dict) -> list[dict]:
+    """Prix marchands détaillés (`prices`) : un tarif par marchand, avec lien.
+
+    wineapi.io renvoie, dans le détail d'un vin, une liste `prices`
+    [{merchantName, price, currency, url, fetchedAt}] — les offres des cavistes
+    partenaires. On la ramène à `{marchand, prix, devise, url}` (le tarif le plus
+    bas d'abord) pour alimenter la section « Prix par marchand » de la fiche."""
+    offres = []
+    for p in detail.get("prices") or []:
+        if not isinstance(p, dict) or p.get("price") is None:
+            continue
+        try:
+            prix = float(p["price"])
+        except (TypeError, ValueError):
+            continue
+        offres.append(
+            {
+                "marchand": _texte(p.get("merchantName")),
+                "prix": prix,
+                "devise": _texte(p.get("currency")) or "EUR",
+                "url": _texte(p.get("url")),
+            }
+        )
+    offres.sort(key=lambda o: o["prix"])
+    return offres
+
+
 def _texte(valeur) -> str:
     """Chaîne nettoyée (None -> '')."""
     return valeur.strip() if isinstance(valeur, str) else ""
@@ -172,5 +199,6 @@ def normalize_detail(detail: dict) -> dict:
         "devise": prix.get("devise", ""),
         "accords": accords_mets(detail) or [],
         "scores": avis_critiques(detail),
+        "prix_marchands": prix_marchands(detail),
         "cepages": cepages_noms(detail),
     }

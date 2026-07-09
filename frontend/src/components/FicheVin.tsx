@@ -10,6 +10,7 @@ import {
   type Couleur,
   type FicheCuvee,
   type PrixMarche,
+  type PrixMarchand,
 } from '../types'
 import { TastingSheet } from './TastingSheet'
 import { formatDate, formatDateTime } from '../dates'
@@ -61,6 +62,11 @@ function devise(code: string): string {
 /** Formate une fourchette de prix marché « 38–65 € ». */
 function formatFourchette(p: PrixMarche): string {
   return `${Math.round(p.min)}–${Math.round(p.max)} ${devise(p.devise)}`
+}
+
+/** Formate un prix marchand « 42,50 € ». */
+function formatPrixMarchand(p: PrixMarchand): string {
+  return `${p.prix.toFixed(2).replace('.', ',')} ${devise(p.devise)}`
 }
 
 /* Carte du bandeau de valeur : soit une vraie valeur, soit un verrou « Oeni+ ». */
@@ -485,6 +491,38 @@ export function FicheVin({
                       <div className="text-center text-sm mt-2 text-ink">{m.nom}</div>
                     </div>
                   ))}
+                </div>
+              </Section>
+            )}
+
+            {/* ---------- Prix par marchand (wineapi) ---------- */}
+            {fiche && fiche.prix_marchands.length > 0 && (
+              <Section title="Prix par marchand" emoji="🏷️">
+                <div className="glass rounded-2xl divide-y divide-gold/10">
+                  {fiche.prix_marchands.map((p, i) => {
+                    const label = p.marchand || 'Marchand'
+                    const inner = (
+                      <>
+                        <span className="text-ink text-sm">{label}</span>
+                        <span className="font-serif text-gold">{formatPrixMarchand(p)}</span>
+                      </>
+                    )
+                    return p.url ? (
+                      <a
+                        key={`${label}-${i}`}
+                        href={p.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-between px-4 py-3 active:bg-white/5"
+                      >
+                        {inner}
+                      </a>
+                    ) : (
+                      <div key={`${label}-${i}`} className="flex items-center justify-between px-4 py-3">
+                        {inner}
+                      </div>
+                    )
+                  })}
                 </div>
               </Section>
             )}

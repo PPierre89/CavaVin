@@ -67,6 +67,10 @@ const FICHE = {
   note_communaute: { note: 3.9, nb: 26 },
   avis: [],
   prix_marche: { min: 38, max: 65, devise: 'EUR' },
+  prix_marchands: [
+    { marchand: 'Cave A', prix: 42.5, devise: 'EUR', url: 'https://example.test/a' },
+    { marchand: 'Cave B', prix: 59.9, devise: 'EUR', url: '' },
+  ],
   ma_note: null,
   prix_achat_moyen: '40.00',
   millesimes: [
