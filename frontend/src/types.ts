@@ -82,6 +82,12 @@ export interface PrixMarche {
   max: number
   devise: string
 }
+export interface PrixMarchand {
+  marchand: string
+  prix: number
+  devise: string
+  url: string
+}
 export interface FicheMillesime {
   millesime: number | null
   quantite: number
@@ -111,6 +117,7 @@ export interface FicheCuvee {
   note_communaute: { note: number; nb: number } | null
   avis: AvisCritique[]
   prix_marche: PrixMarche | null
+  prix_marchands: PrixMarchand[]
   ma_note: { note: string; commentaire: string; millesime: number | null; date: string } | null
   prix_achat_moyen: string | null
   millesimes: FicheMillesime[]

@@ -19,6 +19,9 @@ _PROVIDERS: list[EnrichmentProvider] = [
 # Durée de mise en cache du détail wineapi (le profil d'un vin bouge lentement ;
 # évite de consommer le quota et la latence à chaque ouverture de fiche).
 _DETAIL_TTL = 6 * 60 * 60
+# TTL court quand le détail est 'pending' (enrichissement asynchrone côté wineapi
+# encore en cours) : on le re-fetch bientôt pour converger vers un détail complet.
+_PENDING_TTL = 5 * 60
 
 
 def get_enabled_providers() -> list[EnrichmentProvider]:
@@ -47,10 +50,12 @@ def wineapi_detail(wine_id: str) -> dict | None:
     if provider is None:
         return None
     try:
-        detail = provider.wine_detail(wine_id)  # type: ignore[attr-defined]
+        detail, pending = provider.wine_detail_with_status(wine_id)  # type: ignore[attr-defined]
     except EnrichmentError:
         return None
-    cache.set(key, detail or {}, _DETAIL_TTL)
+    # Un détail 'pending' est partiel : on le garde peu de temps pour le
+    # rafraîchir bientôt, au lieu de figer des données incomplètes 6 h.
+    cache.set(key, detail or {}, _PENDING_TTL if pending else _DETAIL_TTL)
     return detail or None
 
 

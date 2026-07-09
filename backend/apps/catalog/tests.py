@@ -458,9 +458,9 @@ class WineApiProviderTests(SimpleTestCase):
         detail = json.dumps({
             "id": 7, "name": "Cuvée Prestige 2018", "type": "white",
             "winery": {"name": "Domaine Test"},
-            "appellation": {"name": "Chablis"},
+            "appellation": "Chablis",  # l'API renvoie l'appellation en chaîne
             "grapes": [{"name": "Chardonnay"}],
-            "scores": [{"score": 92}, {"score": 88}],
+            "scores": [{"score": 92, "reviewer": "A"}, {"score": 88, "reviewer": "B"}],
             "region": {"name": "Bourgogne", "country": "France"},
             "vintage": 2018,
         }).encode("utf-8")
@@ -513,6 +513,34 @@ class WineApiProviderTests(SimpleTestCase):
         self.assertIn("multipart/form-data; boundary=", req.headers["Content-type"])
         self.assertIn(b"fausse-image-jpeg", req.data)
         self.assertIn(b'name="image"; filename="etiquette.jpg"', req.data)
+
+    @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")
+    def test_wine_detail_with_status_lit_le_header_pending(self, mock_urlopen):
+        cm = MagicMock()
+        cm.__enter__.return_value.read.return_value = b'{"id": 1, "name": "X", "type": "red"}'
+        cm.__enter__.return_value.headers = {"X-Update-Status": "pending", "Retry-After": "5"}
+        mock_urlopen.return_value = cm
+
+        detail, pending = self.provider.wine_detail_with_status("1")
+        self.assertTrue(pending)
+        self.assertEqual(detail["name"], "X")
+
+    @override_settings(WINEAPI_ENRICH_DETAIL=True)
+    @patch("apps.catalog.enrichment.wineapi.urllib.request.urlopen")
+    def test_detail_pending_ecarte_du_wineapi_detail(self, mock_urlopen):
+        """Un détail encore 'pending' ne doit pas être figé : on l'écarte de
+        ``raw["wineapi_detail"]`` pour laisser la fiche re-fetcher plus tard."""
+        identify = json.dumps(
+            {"wine": {"id": 7, "name": "Cuvée", "type": "red"}, "pendingEnrichment": True}
+        ).encode("utf-8")
+        detail_cm = MagicMock()
+        detail_cm.__enter__.return_value.read.return_value = b'{"id":7,"name":"Cuv\\u00e9e","type":"red"}'
+        detail_cm.__enter__.return_value.headers = {"X-Update-Status": "pending"}
+        mock_urlopen.side_effect = [_fake_urlopen(identify), detail_cm]
+
+        wine = self.provider.lookup_by_text("Cuvée")
+        self.assertTrue(wine.raw["pending"])
+        self.assertIsNone(wine.raw["wineapi_detail"])
 
 
 class EnsureSuperuserCommandTests(TestCase):
@@ -694,6 +722,15 @@ class WineProfileTests(SimpleTestCase):
         )
         self.assertIsNone(wine_profile.prix_marche({"priceRange": {"min": 10}}))
 
+    def test_prix_marchands_tries_et_filtres(self):
+        offres = wine_profile.prix_marchands(_WINEAPI_FULL)
+        # Triés par prix croissant ; l'offre sans prix est ignorée.
+        self.assertEqual([o["marchand"] for o in offres], ["Cave A", "Cave B"])
+        self.assertEqual(offres[0]["prix"], 42.5)
+        self.assertEqual(offres[0]["devise"], "EUR")
+        self.assertEqual(offres[0]["url"], "")
+        self.assertEqual(wine_profile.prix_marchands({}), [])
+
 
 class FicheEnrichmentTests(APITestCase):
     """L'endpoint fiche fusionne le détail wineapi quand le vin est identifié."""
@@ -789,6 +826,11 @@ _WINEAPI_FULL = {
     "grapes": [{"id": "g1", "name": "Merlot", "color": "red"}],
     "pairings": [{"food": "Beef", "confidence": 0.95, "notes": "Grillé"}],
     "scores": [{"score": 92, "scoreText": "Excellent", "reviewer": "Critic", "reviewDate": "2020-01-01"}],
+    "prices": [
+        {"merchantName": "Cave B", "price": 59.9, "currency": "EUR", "url": "https://b.example/w"},
+        {"merchantName": "Cave A", "price": 42.5, "currency": "EUR", "url": None},
+        {"merchantName": "Sans prix", "price": None, "currency": "EUR"},  # ignoré
+    ],
 }
 
 
@@ -808,6 +850,7 @@ class NormalizeDetailTests(SimpleTestCase):
         self.assertEqual(d["prix_min"], 38)
         self.assertEqual(d["cepages"], ["Merlot"])
         self.assertEqual(d["accords"][0]["nom"], "Beef")
+        self.assertEqual([o["marchand"] for o in d["prix_marchands"]], ["Cave A", "Cave B"])
 
     def test_detail_vide_donne_des_valeurs_neutres(self):
         d = wine_profile.normalize_detail({})
@@ -815,6 +858,7 @@ class NormalizeDetailTests(SimpleTestCase):
         self.assertIsNone(d["note_moyenne"])
         self.assertEqual(d["accords"], [])
         self.assertEqual(d["cepages"], [])
+        self.assertEqual(d["prix_marchands"], [])
 
 
 class EnrichCuveeTests(TestCase):
@@ -835,6 +879,7 @@ class EnrichCuveeTests(TestCase):
         self.assertEqual(self.cuvee.image_url, "https://img.example/wine.png")
         self.assertEqual(self.cuvee.accords[0]["nom"], "Beef")
         self.assertEqual(self.cuvee.scores[0]["reviewer"], "Critic")
+        self.assertEqual(self.cuvee.prix_marchands[0]["marchand"], "Cave A")  # moins cher d'abord
         self.assertIsNotNone(self.cuvee.enrichi_le)
         self.assertTrue(self.cuvee.cepages.filter(nom="Merlot").exists())
 

@@ -73,6 +73,9 @@ class Cuvee(models.Model):
     devise = models.CharField(max_length=8, blank=True, default="")
     accords = models.JSONField(default=list, blank=True, help_text="Accords mets-vins [{nom, emoji, confiance}].")
     scores = models.JSONField(default=list, blank=True, help_text="Avis critiques [{reviewer, score, ...}].")
+    prix_marchands = models.JSONField(
+        default=list, blank=True, help_text="Prix marchands wineapi [{marchand, prix, devise, url}]."
+    )
     enrichi_le = models.DateTimeField(null=True, blank=True, help_text="Dernière synchro wineapi.")
 
     class Meta:

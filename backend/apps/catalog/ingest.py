@@ -12,6 +12,7 @@ _ENRICH_FIELDS = (
     "region", "pays", "classification", "description", "elaborate", "corps",
     "acidite", "degre_alcool", "image_url", "lwin_code", "note_moyenne",
     "nb_notes", "prix_min", "prix_max", "devise", "accords", "scores",
+    "prix_marchands",
 )
 
 

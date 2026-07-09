@@ -89,6 +89,7 @@ class CuveeSerializer(serializers.ModelSerializer):
             "devise",
             "accords",
             "scores",
+            "prix_marchands",
             "enrichi_le",
         ]
         # L'enrichissement est alimenté par wineapi (identification / synchro),
@@ -97,5 +98,5 @@ class CuveeSerializer(serializers.ModelSerializer):
             "region", "pays", "classification", "description", "elaborate",
             "corps", "acidite", "degre_alcool", "image_url", "lwin_code",
             "note_moyenne", "nb_notes", "prix_min", "prix_max", "devise",
-            "accords", "scores", "enrichi_le",
+            "accords", "scores", "prix_marchands", "enrichi_le",
         ]
