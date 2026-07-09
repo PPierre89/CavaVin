@@ -95,12 +95,13 @@ test('recherche dynamique : une cuvée déjà en base est suggérée sans appel 
   page,
 }) => {
   await seedAuth(page)
-  await page.goto('/')
-  // Aucun mock sur /api/identifier-vin/ : le test échouerait si un appel externe
-  // partait. On ne mocke que le strict nécessaire au chargement de l'app, et on
-  // fait échouer explicitement l'endpoint consommateur de quota.
   await mockApi(page)
+  // Filet anti-quota : on fait échouer explicitement l'endpoint consommateur de
+  // quota. Enregistré après mockApi, il est prioritaire (Playwright évalue les
+  // routes dans l'ordre inverse d'enregistrement) — le test échouerait donc si
+  // un appel externe partait pendant la recherche locale.
   await page.route('**/api/identifier-vin/', (route) => route.abort())
+  await page.goto('/')
 
   await page.getByRole('button', { name: 'Ajouter' }).click()
   // Au fil de la frappe, la cuvée du catalogue local remonte en suggestion.
