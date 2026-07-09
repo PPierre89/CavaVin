@@ -9,6 +9,7 @@ import {
   type Bouteille,
   type Couleur,
   type FicheCuvee,
+  type PointPrix,
   type PrixMarche,
   type PrixMarchand,
 } from '../types'
@@ -67,6 +68,97 @@ function formatFourchette(p: PrixMarche): string {
 /** Formate un prix marchand « 42,50 € ». */
 function formatPrixMarchand(p: PrixMarchand): string {
   return `${p.prix.toFixed(2).replace('.', ',')} ${devise(p.devise)}`
+}
+
+/** Formate un montant « 42,50 € ». */
+function formatMontant(n: number, code: string): string {
+  return `${n.toFixed(2).replace('.', ',')} ${devise(code)}`
+}
+
+/** Mois + année compacts pour un axe, ex. « mai 26 ». Sûr pour les dates seules. */
+function moisCourt(iso: string): string {
+  const anchor = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T12:00:00Z` : iso
+  return new Date(anchor).toLocaleDateString('fr-FR', {
+    month: 'short',
+    year: '2-digit',
+    timeZone: 'Europe/Paris',
+  })
+}
+
+/* Graphe d'historique de prix : série « meilleur prix » (prix_min) dans le temps,
+   avec une bande min–max en fond. SVG maison (aucune dépendance), aligné sur le
+   style de l'app (or sur verre sombre). Requiert au moins deux points ; l'axe X
+   est mis à l'échelle sur les dates réelles de relevé (fetchedAt). */
+function PriceHistoryChart({ points }: { points: PointPrix[] }) {
+  const W = 320
+  const H = 150
+  const padL = 10
+  const padR = 44
+  const padT = 16
+  const padB = 22
+
+  const xs = points.map((p) => Date.parse(p.date))
+  const xmin = Math.min(...xs)
+  const xmax = Math.max(...xs)
+  const vals = points.flatMap((p) => [p.prix_min, p.prix_max])
+  const dataMin = Math.min(...vals)
+  const dataMax = Math.max(...vals)
+  let lo = dataMin
+  let hi = dataMax
+  if (lo === hi) {
+    lo -= 1
+    hi += 1
+  }
+  const marge = (hi - lo) * 0.15
+  lo -= marge
+  hi += marge
+
+  const X = (t: number) => padL + (xmax === xmin ? 0.5 : (t - xmin) / (xmax - xmin)) * (W - padL - padR)
+  const Y = (v: number) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB)
+
+  const ligne = points.map((p, i) => `${i ? 'L' : 'M'}${X(xs[i]).toFixed(1)},${Y(p.prix_min).toFixed(1)}`).join(' ')
+  const haut = points.map((p, i) => `${i ? 'L' : 'M'}${X(xs[i]).toFixed(1)},${Y(p.prix_max).toFixed(1)}`)
+  const bas = points.map((p, i) => `L${X(xs[i]).toFixed(1)},${Y(p.prix_min).toFixed(1)}`).reverse()
+  const bande = [...haut, ...bas, 'Z'].join(' ')
+
+  const last = points[points.length - 1]
+  const gold = 'var(--color-gold)'
+  const muted = 'var(--color-muted)'
+  const resume = `Meilleur prix de ${formatMontant(dataMin, last.devise)} à ${formatMontant(dataMax, last.devise)} entre le ${points[0].date} et le ${last.date}.`
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      className="w-full h-auto"
+      role="img"
+      aria-label={resume}
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <title>{resume}</title>
+      {/* Repères horizontaux (min / max des données) + libellés de prix à droite. */}
+      {[dataMax, dataMin].map((v) => (
+        <g key={v}>
+          <line x1={padL} y1={Y(v)} x2={W - padR} y2={Y(v)} stroke={muted} strokeOpacity={0.15} strokeWidth={1} />
+          <text x={W - padR + 5} y={Y(v)} dy="0.32em" fontSize="10" fill={muted}>
+            {Math.round(v)} {devise(last.devise)}
+          </text>
+        </g>
+      ))}
+      {/* Bande min–max (étendue des offres) puis ligne du meilleur prix. */}
+      <path d={bande} fill={gold} fillOpacity={0.12} />
+      <path d={ligne} fill="none" stroke={gold} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+      {points.map((p, i) => (
+        <circle key={p.date} cx={X(xs[i])} cy={Y(p.prix_min)} r={i === points.length - 1 ? 4 : 2.5} fill={gold} />
+      ))}
+      {/* Dates de relevé aux extrémités. */}
+      <text x={padL} y={H - 6} fontSize="10" fill={muted} textAnchor="start">
+        {moisCourt(points[0].date)}
+      </text>
+      <text x={W - padR} y={H - 6} fontSize="10" fill={muted} textAnchor="end">
+        {moisCourt(last.date)}
+      </text>
+    </svg>
+  )
 }
 
 /* Carte du bandeau de valeur : soit une vraie valeur, soit un verrou « Oeni+ ». */
@@ -196,6 +288,10 @@ export function FicheVin({
   }
 
   const appellation = fiche?.cuvee.appellation || 'Appellation inconnue'
+
+  // Historique de prix accumulé côté serveur (une observation par jour de relevé).
+  const histPrix = fiche?.historique_prix ?? []
+  const dernierPrix = histPrix.length ? histPrix[histPrix.length - 1] : null
 
   return (
     <div className="fixed inset-0 z-40 overflow-y-auto bg-bg">
@@ -503,8 +599,13 @@ export function FicheVin({
                     const label = p.marchand || 'Marchand'
                     const inner = (
                       <>
-                        <span className="text-ink text-sm">{label}</span>
-                        <span className="font-serif text-gold">{formatPrixMarchand(p)}</span>
+                        <span className="text-ink text-sm">
+                          {label}
+                          {p.releve_le && (
+                            <span className="block text-muted text-[0.7rem]">relevé le {formatDate(p.releve_le)}</span>
+                          )}
+                        </span>
+                        <span className="font-serif text-gold shrink-0">{formatPrixMarchand(p)}</span>
                       </>
                     )
                     return p.url ? (
@@ -532,9 +633,26 @@ export function FicheVin({
               <button className={goldBtnCls}>Essayer Oeni+</button>
             </Section>
 
-            <Section title="Prix de la bouteille">
-              <div className="text-muted text-sm mb-3">Historique de prix : France</div>
-              <button className={goldBtnCls}>Essayer Oeni+</button>
+            {/* ---------- Historique de prix (wineapi, accumulé au fil des synchros) ---------- */}
+            <Section title="Historique de prix" emoji="📈">
+              {dernierPrix ? (
+                <div className="glass rounded-2xl p-4">
+                  <div className="flex items-baseline justify-between mb-2">
+                    <div>
+                      <div className="font-serif text-[1.5rem] text-gold leading-none">
+                        {formatMontant(dernierPrix.prix_min, dernierPrix.devise)}
+                      </div>
+                      <div className="text-[0.72rem] text-muted mt-1">Meilleur prix</div>
+                    </div>
+                    <div className="text-[0.72rem] text-muted">relevé le {formatDate(dernierPrix.date)}</div>
+                  </div>
+                  {histPrix.length >= 2 && <PriceHistoryChart points={histPrix} />}
+                </div>
+              ) : (
+                <p className="text-muted text-sm glass rounded-2xl p-4">
+                  Pas encore d'historique de prix. Synchronisez la fiche (🔄) pour le construire au fil des relevés.
+                </p>
+              )}
             </Section>
 
             {/* ---------- Stock par millésimes ---------- */}

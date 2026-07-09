@@ -151,10 +151,55 @@ def prix_marchands(detail: dict) -> list[dict]:
                 "prix": prix,
                 "devise": _texte(p.get("currency")) or "EUR",
                 "url": _texte(p.get("url")),
+                # Fraîcheur du tarif (« prix relevé le… ») : date de relevé wineapi.
+                "releve_le": _jour(p.get("fetchedAt")),
             }
         )
     offres.sort(key=lambda o: o["prix"])
     return offres
+
+
+def _jour(valeur) -> str:
+    """Ramène un timestamp wineapi (`fetchedAt`, ISO 8601) à sa date `YYYY-MM-DD`.
+
+    Tolérant : accepte une date seule ou un datetime (avec heure / suffixe `Z`),
+    renvoie `''` si la valeur est absente ou non exploitable."""
+    texte = _texte(valeur)
+    if len(texte) >= 10 and texte[4] == "-" and texte[7] == "-":
+        return texte[:10]
+    return ""
+
+
+def points_historique_prix(detail: dict) -> list[dict]:
+    """Points d'historique de prix dérivés des offres marchands datées.
+
+    wineapi renvoie, pour chaque offre `prices[]`, un `fetchedAt` (date de relevé).
+    On regroupe les offres **par jour de relevé** et on retient, pour chaque jour,
+    le prix le plus bas et le plus haut observés — soit une observation
+    `{date, prix_min, prix_max, devise}` par jour. Un seul appel wineapi peut donc
+    déjà semer plusieurs points si les marchands ont été relevés à des dates
+    différentes ; les appels suivants (bouton « actualiser ») enrichissent la série.
+    Fonction pure : les offres sans prix ou sans date exploitable sont ignorées.
+    """
+    par_jour: dict[str, dict] = {}
+    for p in detail.get("prices") or []:
+        if not isinstance(p, dict) or p.get("price") is None:
+            continue
+        jour = _jour(p.get("fetchedAt"))
+        if not jour:
+            continue
+        try:
+            prix = float(p["price"])
+        except (TypeError, ValueError):
+            continue
+        devise = _texte(p.get("currency")) or "EUR"
+        point = par_jour.get(jour)
+        if point is None:
+            par_jour[jour] = {"date": jour, "prix_min": prix, "prix_max": prix, "devise": devise}
+        else:
+            point["prix_min"] = min(point["prix_min"], prix)
+            point["prix_max"] = max(point["prix_max"], prix)
+    return [par_jour[j] for j in sorted(par_jour)]
 
 
 def _texte(valeur) -> str:

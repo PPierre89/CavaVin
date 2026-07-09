@@ -74,7 +74,13 @@ class Cuvee(models.Model):
     accords = models.JSONField(default=list, blank=True, help_text="Accords mets-vins [{nom, emoji, confiance}].")
     scores = models.JSONField(default=list, blank=True, help_text="Avis critiques [{reviewer, score, ...}].")
     prix_marchands = models.JSONField(
-        default=list, blank=True, help_text="Prix marchands wineapi [{marchand, prix, devise, url}]."
+        default=list, blank=True, help_text="Prix marchands wineapi [{marchand, prix, devise, url, releve_le}]."
+    )
+    # Série d'historique de prix accumulée au fil des synchros wineapi (une
+    # observation {date, prix_min, prix_max, devise} par jour de relevé). Alimente
+    # le graphe « Historique de prix » de la fiche.
+    historique_prix = models.JSONField(
+        default=list, blank=True, help_text="Historique de prix [{date, prix_min, prix_max, devise}]."
     )
     # Payload brut complet du dernier `GET /wines/{id}` wineapi.io. On conserve la
     # réponse telle quelle (au-delà des seuls champs mappés ci-dessus) pour ne

@@ -190,6 +190,7 @@ def _build_fiche(cuvee, user):
         "avis": avis,
         "prix_marche": prix_marche,
         "prix_marchands": cuvee.prix_marchands or [],
+        "historique_prix": cuvee.historique_prix or [],
         "ma_note": ma_note,
         "prix_achat_moyen": str(prix_moyen) if prix_moyen is not None else None,
         "millesimes": millesimes,

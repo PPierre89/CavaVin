@@ -89,7 +89,11 @@ code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` 
   région/pays, appellation, classification, description & élaboration, corps/acidité, degré d'alcool,
   image, code LWIN, cépages, **note & nombre d'avis communautaires**, **avis de critiques**
   (score, texte, date), **accords mets-vins notés** (aliment + confiance), **fourchette de prix
-  marché** et **prix par marchand** (`prices` : caviste, tarif, devise, lien). Au-delà de ces champs
+  marché** et **prix par marchand** (`prices` : caviste, tarif, devise, lien, **date de relevé**
+  `fetchedAt` affichée « relevé le… »). La date de relevé alimente aussi un **historique de prix**
+  (`Cuvee.historique_prix`) : les offres sont regroupées **par jour de relevé** (min/max) et
+  **accumulées au fil des synchros**, ce qui construit une série temporelle affichée en **graphe**
+  sur la fiche (section « Historique de prix »). Au-delà de ces champs
   mappés en colonnes, la **réponse brute complète** du dernier `GET /wines/{id}` est aussi conservée
   telle quelle (`Cuvee.wineapi_detail`), pour ne **jamais perdre une information remontée** — même non
   encore exploitée ou ajoutée plus tard par l'API — et pouvoir re-dériver les champs sans re-consommer

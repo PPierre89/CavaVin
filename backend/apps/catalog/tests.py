@@ -834,6 +834,47 @@ _WINEAPI_FULL = {
 }
 
 
+# Détail wineapi avec offres datées (fetchedAt) pour l'historique de prix.
+_WINEAPI_PRICES_DATED = {
+    "priceRange": {"min": 40, "max": 70, "currency": "EUR"},
+    "prices": [
+        {"merchantName": "Cave A", "price": 42.5, "currency": "EUR", "fetchedAt": "2026-06-01T10:00:00Z"},
+        {"merchantName": "Cave B", "price": 59.9, "currency": "EUR", "fetchedAt": "2026-06-01"},
+        {"merchantName": "Cave C", "price": 55.0, "currency": "EUR", "fetchedAt": "2026-06-15T08:00:00Z"},
+        {"merchantName": "Sans date", "price": 50.0, "currency": "EUR"},  # ignoré (pas de fetchedAt)
+    ],
+}
+
+
+class HistoriquePrixTests(SimpleTestCase):
+    """wine_profile.points_historique_prix : offres datées -> points par jour (pur)."""
+
+    def test_groupe_par_jour_min_et_max(self):
+        points = wine_profile.points_historique_prix(_WINEAPI_PRICES_DATED)
+        # Deux jours de relevé, triés ; le 01/06 agrège deux offres (min/max).
+        self.assertEqual([p["date"] for p in points], ["2026-06-01", "2026-06-15"])
+        self.assertEqual(points[0]["prix_min"], 42.5)
+        self.assertEqual(points[0]["prix_max"], 59.9)
+        self.assertEqual(points[1]["prix_min"], 55.0)
+        self.assertEqual(points[1]["devise"], "EUR")
+
+    def test_offres_sans_date_ou_prix_ignorees(self):
+        self.assertEqual(wine_profile.points_historique_prix({}), [])
+        self.assertEqual(
+            wine_profile.points_historique_prix(
+                {"prices": [{"merchantName": "X", "price": 10}]}  # pas de fetchedAt
+            ),
+            [],
+        )
+
+    def test_prix_marchands_expose_la_date_de_releve(self):
+        offres = wine_profile.prix_marchands(_WINEAPI_PRICES_DATED)
+        par_marchand = {o["marchand"]: o for o in offres}
+        self.assertEqual(par_marchand["Cave A"]["releve_le"], "2026-06-01")
+        self.assertEqual(par_marchand["Cave C"]["releve_le"], "2026-06-15")
+        self.assertEqual(par_marchand["Sans date"]["releve_le"], "")
+
+
 class NormalizeDetailTests(SimpleTestCase):
     """wine_profile.normalize_detail : aplatissement wineapi -> champs cuvée (pur)."""
 
@@ -908,6 +949,38 @@ class EnrichCuveeTests(TestCase):
         self.cuvee.refresh_from_db()
         self.assertEqual(self.cuvee.wineapi_detail["priceRange"]["max"], 70)
         self.assertEqual(str(self.cuvee.prix_max), "70.00")
+
+    def test_accumule_lhistorique_de_prix_par_date(self):
+        """Les offres datées alimentent la série ; un nouvel appel enrichit sans
+        dupliquer, et un relevé pour une date existante met le point à jour."""
+        enrich_cuvee_from_wineapi(self.cuvee, _WINEAPI_PRICES_DATED)
+        self.cuvee.refresh_from_db()
+        self.assertEqual([p["date"] for p in self.cuvee.historique_prix], ["2026-06-01", "2026-06-15"])
+
+        # Second appel : nouvelle date + mise à jour d'une date déjà présente.
+        suivant = {"prices": [
+            {"merchantName": "Cave D", "price": 48.0, "currency": "EUR", "fetchedAt": "2026-06-20"},
+            {"merchantName": "Cave A", "price": 40.0, "currency": "EUR", "fetchedAt": "2026-06-01"},
+        ]}
+        enrich_cuvee_from_wineapi(self.cuvee, suivant)
+        self.cuvee.refresh_from_db()
+        hist = {p["date"]: p for p in self.cuvee.historique_prix}
+        self.assertEqual(sorted(hist), ["2026-06-01", "2026-06-15", "2026-06-20"])
+        self.assertEqual(hist["2026-06-01"]["prix_min"], 40.0)  # point mis à jour
+        self.assertEqual(hist["2026-06-20"]["prix_min"], 48.0)  # point ajouté
+
+    def test_repli_sur_la_fourchette_marche_si_aucune_offre_datee(self):
+        """Sans offre datée mais avec une fourchette marché, on ancre un point au
+        jour de la synchro pour que la série se construise quand même."""
+        from django.utils import timezone
+
+        enrich_cuvee_from_wineapi(self.cuvee, {"priceRange": {"min": 38, "max": 65, "currency": "EUR"}})
+        self.cuvee.refresh_from_db()
+        self.assertEqual(len(self.cuvee.historique_prix), 1)
+        point = self.cuvee.historique_prix[0]
+        self.assertEqual(point["date"], timezone.now().date().isoformat())
+        self.assertEqual(point["prix_min"], 38)
+        self.assertEqual(point["prix_max"], 65)
 
     def test_upsert_enrichit_via_raw(self):
         wine = NormalizedWine(
