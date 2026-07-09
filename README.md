@@ -33,7 +33,8 @@ en cascade :
 3. **Échec total** — `404 { "detail": "Vin non reconnu par son code-barres" }` ; côté mobile, l'app
    propose alors le scan d'étiquette (US 03, ci-dessous).
 
-Côté mobile, le bouton **📷 Scanner le code-barres** utilise l'API native `BarcodeDetector`
+Côté mobile, le scan de code-barres est proposé en **repli** (dépliant « Autre méthode ») : le bouton
+**📷 Scanner le code-barres** utilise l'API native `BarcodeDetector`
 (caméra arrière) quand elle est disponible, et bascule sinon sur une **saisie manuelle**. ⚠️ La caméra
 exige un contexte sécurisé : elle fonctionne sur `http://localhost` mais nécessite **HTTPS** sur un
 vrai téléphone via IP LAN.
@@ -46,9 +47,13 @@ héberger). Le hit est normalisé et **mis en cache local** comme pour le texte,
 forme que `/api/identifier-vin/` (`confidence`, `infos`, `suggestions`). Échec →
 `404 "Vin non identifié sur l'étiquette"`.
 
-Côté mobile, le bouton **🏷️ Photographier l'étiquette** ouvre directement la caméra arrière
-(`<input type="file" capture="environment">` — fonctionne partout, pas d'API caméra requise) et
-pré-remplit le formulaire d'ajout, exactement comme le scan de code-barres.
+Côté mobile, c'est la **méthode d'ajout par défaut** : le bouton principal **🏷️ Photographier
+l'étiquette** ouvre directement la caméra arrière (`<input type="file" capture="environment">` —
+fonctionne partout, pas d'API caméra requise) et pré-remplit le formulaire d'ajout, exactement comme
+le scan de code-barres. Un second bouton **🖼️ Importer une photo** pioche dans la galerie (même
+input, sans `capture`). Le scan de code-barres et la recherche par nom deviennent des **méthodes de
+repli**, regroupées sous un dépliant discret « Autre méthode : nom ou code-barres » afin de garder
+l'écran centré sur la photo.
 
 ### Identification par texte / wineapi.io (US 04)
 

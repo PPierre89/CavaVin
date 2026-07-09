@@ -104,6 +104,8 @@ test('recherche dynamique : une cuvée déjà en base est suggérée sans appel 
   await page.goto('/')
 
   await page.getByRole('button', { name: 'Ajouter' }).click()
+  // La recherche par nom est un repli : on déplie « Autre méthode » d'abord.
+  await page.getByRole('button', { name: /Autre méthode/ }).click()
   // Au fil de la frappe, la cuvée du catalogue local remonte en suggestion.
   await page.getByPlaceholder(/rechercher par nom/).fill('cantemerle')
   await page.getByText('Grand Cru Classé · Haut-Médoc').click()
@@ -118,6 +120,8 @@ test('ajout par recherche texte en ligne pré-remplit le vin identifié', async 
   await page.goto('/')
 
   await page.getByRole('button', { name: 'Ajouter' }).click()
+  // La recherche par nom est un repli : on déplie « Autre méthode » d'abord.
+  await page.getByRole('button', { name: /Autre méthode/ }).click()
   // « Margaux » n'est pas dans le catalogue local : la recherche en ligne est
   // le seul recours (bouton 🔎), et déclenche l'appel wineapi.
   await page.getByPlaceholder(/rechercher par nom/).fill('Margaux')
