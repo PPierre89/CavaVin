@@ -3,9 +3,18 @@ import { api, apiAllPages, errMsg } from '../api'
 import { useData } from '../data'
 import { useToast } from '../toast'
 import { Card, CardTitle, Field, SegTabs, inputCls, primaryCls } from '../ui'
+import { RackGrid, Slot } from '../components/bottle'
 import { VinIdentification } from '../components/VinIdentification'
 import type { IdentifiedWine } from '../identification'
-import type { Couleur, Cuvee, Domaine } from '../types'
+import {
+  DISPOSITION_LABELS,
+  TYPE_LABELS,
+  type Couleur,
+  type Cuvee,
+  type Disposition,
+  type Domaine,
+  type TypeEmplacement,
+} from '../types'
 
 type Seg = 'bouteille' | 'emplacement' | 'cave'
 
@@ -229,26 +238,70 @@ function BottleForm({ onDone }: { onDone: () => void }) {
 }
 
 /* ================= Emplacement ================= */
+const MIN_DIM = 1
+const MAX_DIM = 24
+const DISPOSITIONS: Disposition[] = ['DECALE_GAUCHE', 'ALIGNE', 'DECALE_DROITE']
+// Une « case individuelle » n'a pas de grille : c'est un seul logement.
+const GRID_TYPES: TypeEmplacement[] = ['ARMOIRE', 'CASIER', 'CLAYETTE', 'CAISSE']
+
+/** Compteur ± réutilisé pour la largeur et la hauteur de la rangée. */
+function Stepper({
+  value,
+  onChange,
+  min = MIN_DIM,
+  max = MAX_DIM,
+}: {
+  value: number
+  onChange: (v: number) => void
+  min?: number
+  max?: number
+}) {
+  const btn =
+    'w-10 h-10 rounded-full border border-gold/20 bg-black/30 text-xl leading-none disabled:opacity-35 active:scale-95 transition'
+  return (
+    <div className="flex items-center gap-3">
+      <button type="button" className={btn} disabled={value <= min} onClick={() => onChange(value - 1)}>
+        −
+      </button>
+      <span className="font-serif text-xl min-w-6 text-center tabular-nums">{value}</span>
+      <button type="button" className={btn} disabled={value >= max} onClick={() => onChange(value + 1)}>
+        ＋
+      </button>
+    </div>
+  )
+}
+
 function EmplacementForm({ onDone }: { onDone: () => void }) {
   const { caveId, emplacements, refresh } = useData()
   const toast = useToast()
-  const formRef = useRef<HTMLFormElement>(null)
+  const nomRef = useRef<HTMLInputElement>(null)
+  const parentRef = useRef<HTMLSelectElement>(null)
+
+  const [type, setType] = useState<TypeEmplacement>('ARMOIRE')
+  const [largeur, setLargeur] = useState(6)
+  const [hauteur, setHauteur] = useState(5)
+  const [disposition, setDisposition] = useState<Disposition>('ALIGNE')
+
+  const isGrid = GRID_TYPES.includes(type)
+  const total = largeur * hauteur
 
   async function submit(e: FormEvent) {
     e.preventDefault()
     if (!caveId) return toast("Crée d'abord une cave.", 'err')
-    const fd = new FormData(formRef.current!)
-    const g = (k: string) => String(fd.get(k) || '').trim()
-    if (!g('nom')) return
+    const nom = (nomRef.current?.value || '').trim()
+    if (!nom) return
+    const parent = parentRef.current?.value
     try {
       await api('POST', '/api/emplacements/', {
         cave: caveId,
-        nom: g('nom'),
-        type_emplacement: g('type_emplacement'),
-        parent: g('parent') ? parseInt(g('parent'), 10) : null,
-        capacite: g('capacite') ? parseInt(g('capacite'), 10) : null,
+        nom,
+        type_emplacement: type,
+        parent: parent ? parseInt(parent, 10) : null,
+        ...(isGrid
+          ? { nb_colonnes: largeur, nb_rangees: hauteur, disposition }
+          : { capacite: 1 }),
       })
-      formRef.current!.reset()
+      if (nomRef.current) nomRef.current.value = ''
       toast('Emplacement ajouté.', 'ok')
       await refresh()
       onDone()
@@ -259,27 +312,88 @@ function EmplacementForm({ onDone }: { onDone: () => void }) {
 
   return (
     <Card>
-      <CardTitle>Ajouter un emplacement</CardTitle>
-      <form ref={formRef} onSubmit={submit}>
+      <CardTitle>Personnalisez votre rangée</CardTitle>
+      <form onSubmit={submit}>
         <Field label="Nom">
-          <input name="nom" required className={inputCls} placeholder="Armoire 1, Clayette 3, B4…" />
+          <input ref={nomRef} name="nom" required className={inputCls} placeholder="Armoire 1, Clayette 3, B4…" />
         </Field>
-        <div className="grid grid-cols-2 gap-2.5">
-          <Field label="Type">
-            <select name="type_emplacement" className={inputCls} defaultValue="ARMOIRE">
-              <option value="ARMOIRE">Armoire</option>
-              <option value="CASIER">Casier</option>
-              <option value="CLAYETTE">Clayette</option>
-              <option value="CAISSE">Caisse bois</option>
-              <option value="CASE">Case individuelle</option>
-            </select>
-          </Field>
-          <Field label="Capacité" hint="facultatif">
-            <input name="capacite" type="number" inputMode="numeric" min={0} className={inputCls} placeholder="optionnel" />
-          </Field>
-        </div>
+
+        <Field label="Type">
+          <select
+            className={inputCls}
+            value={type}
+            onChange={(e) => setType(e.target.value as TypeEmplacement)}
+          >
+            {(Object.keys(TYPE_LABELS) as TypeEmplacement[]).map((t) => (
+              <option key={t} value={t}>
+                {TYPE_LABELS[t]}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        {isGrid ? (
+          <>
+            {/* Aperçu vivant de la rangée : se met à jour à chaque réglage. */}
+            <div className="glass rounded-2xl px-3 py-4 mt-4 flex justify-center">
+              <RackGrid
+                cols={largeur}
+                rows={hauteur}
+                disposition={disposition}
+                size={22}
+                gap={5}
+                renderSlot={(i) => <Slot key={i} empty size={22} />}
+              />
+            </div>
+
+            <div className="flex items-center justify-between mt-4">
+              <div>
+                <div className="text-[0.92rem] font-semibold">Largeur</div>
+                <div className="text-muted text-xs">Bouteilles par rangée</div>
+              </div>
+              <Stepper value={largeur} onChange={setLargeur} />
+            </div>
+            <div className="flex items-center justify-between mt-4 pt-4 border-t border-gold/10">
+              <div>
+                <div className="text-[0.92rem] font-semibold">Hauteur</div>
+                <div className="text-muted text-xs">Nombre de rangées</div>
+              </div>
+              <Stepper value={hauteur} onChange={setHauteur} />
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-gold/10">
+              <div className="text-[0.92rem] font-semibold mb-2.5">Disposition</div>
+              <div className="grid grid-cols-3 gap-2">
+                {DISPOSITIONS.map((d) => (
+                  <button
+                    type="button"
+                    key={d}
+                    onClick={() => setDisposition(d)}
+                    className={`rounded-xl border px-2 py-3 text-xs leading-tight transition ${
+                      disposition === d
+                        ? 'border-gold bg-gold/10 text-ink font-semibold'
+                        : 'border-gold/15 text-muted'
+                    }`}
+                  >
+                    {DISPOSITION_LABELS[d]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <p className="text-muted text-xs mt-4">
+              Capacité : <span className="text-ink font-semibold">{total}</span> bouteille
+              {total > 1 ? 's' : ''} ({largeur} × {hauteur}).
+            </p>
+          </>
+        ) : (
+          <p className="text-muted text-xs mt-3">
+            Une case individuelle accueille une seule bouteille.
+          </p>
+        )}
+
         <Field label="À l'intérieur de">
-          <select name="parent" className={inputCls} defaultValue="">
+          <select ref={parentRef} name="parent" className={inputCls} defaultValue="">
             <option value="">— Racine de la cave —</option>
             {emplacements.map((e) => (
               <option key={e.id} value={e.id}>
@@ -288,7 +402,7 @@ function EmplacementForm({ onDone }: { onDone: () => void }) {
             ))}
           </select>
         </Field>
-        <button className={primaryCls}>Créer l'emplacement</button>
+        <button className={primaryCls}>Enregistrer la rangée</button>
       </form>
     </Card>
   )
