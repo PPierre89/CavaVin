@@ -14,17 +14,22 @@ import {
 import type { Cuvee } from '../types'
 
 /* ------------------------------------------------------------------ *
- *  Module d'identification d'un vin — regroupe les trois méthodes :
- *  scan du code-barres (caméra), photo de l'étiquette (reconnaissance
- *  visuelle) et recherche par nom. Découplé du formulaire d'ajout : il
- *  remonte le vin identifié via `onIdentified`, à charge de l'appelant
- *  de pré-remplir son formulaire.
+ *  Module d'identification d'un vin.
  *
- *  Recherche par nom — dynamique et économe en quota : au fil de la
- *  frappe, on propose les cuvées DÉJÀ en base (filtrage en mémoire, sans
- *  réseau). L'appel à wineapi.io (consommateur de quota) n'est déclenché
- *  qu'explicitement, via le bouton 🔎 / « Rechercher en ligne », ou par
- *  Entrée quand aucune cuvée locale ne correspond.
+ *  Méthode par défaut : la PHOTO DE L'ÉTIQUETTE. Sur mobile, le bouton
+ *  principal ouvre directement l'appareil photo (capture arrière) ; on
+ *  propose aussi d'importer une image existante depuis la galerie.
+ *
+ *  Méthodes de repli (dépliables via « Autre méthode ») :
+ *    • recherche par nom — dynamique et économe en quota : au fil de la
+ *      frappe, on propose les cuvées DÉJÀ en base (filtrage en mémoire,
+ *      sans réseau). L'appel à wineapi.io (consommateur de quota) n'est
+ *      déclenché qu'explicitement, via 🔎 / « Rechercher en ligne », ou
+ *      par Entrée quand aucune cuvée locale ne correspond.
+ *    • scan du code-barres (caméra) — avec saisie manuelle en secours.
+ *
+ *  Découplé du formulaire d'ajout : il remonte le vin identifié via
+ *  `onIdentified`, à charge de l'appelant de pré-remplir son formulaire.
  * ------------------------------------------------------------------ */
 
 /**
@@ -86,10 +91,15 @@ export function VinIdentification({
   cuvees: Cuvee[]
 }) {
   const toast = useToast()
-  const fileRef = useRef<HTMLInputElement>(null)
+  // Deux entrées fichier distinctes : l'une ouvre l'appareil photo (capture),
+  // l'autre pioche dans la galerie (sans capture).
+  const cameraRef = useRef<HTMLInputElement>(null)
+  const galleryRef = useRef<HTMLInputElement>(null)
   const [search, setSearch] = useState('')
   // Champ de recherche actif : conditionne l'affichage des suggestions.
   const [focused, setFocused] = useState(false)
+  // Replis (nom / code-barres) masqués par défaut : la photo d'étiquette prime.
+  const [fallbackOpen, setFallbackOpen] = useState(false)
   // Libellé de l'opération d'identification en cours (null = aucune).
   const [pending, setPending] = useState<string | null>(null)
 
@@ -144,9 +154,11 @@ export function VinIdentification({
     )
   }
 
-  function onLabelFile() {
-    const file = fileRef.current?.files?.[0]
-    if (fileRef.current) fileRef.current.value = ''
+  /** Traite une photo d'étiquette (appareil photo ou galerie). */
+  function onLabelFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const input = e.currentTarget
+    const file = input.files?.[0]
+    input.value = ''
     if (!file) return
     if (file.size > MAX_LABEL_SIZE) return toast('Photo trop lourde (10 Mo max).', 'err')
     run(
@@ -203,81 +215,121 @@ export function VinIdentification({
 
   return (
     <>
-      <button onClick={startScan} disabled={busy} className={`${primaryCls.replace('mt-4', 'mt-0')} disabled:opacity-60`}>
-        📷 Scanner le code-barres
-      </button>
+      {/* Méthode par défaut : photo de l'étiquette (ouvre l'appareil photo). */}
       <button
-        onClick={() => fileRef.current?.click()}
+        onClick={() => cameraRef.current?.click()}
         disabled={busy}
-        className={`${primaryCls} mt-2 disabled:opacity-60`}
+        className={`${primaryCls.replace('mt-4', 'mt-0')} disabled:opacity-60`}
       >
         {pending === 'label' ? "🏷️ Identification de l'étiquette…" : "🏷️ Photographier l'étiquette"}
       </button>
+      <button
+        onClick={() => galleryRef.current?.click()}
+        disabled={busy}
+        className={`${ghostCls} w-full mt-2 disabled:opacity-60`}
+      >
+        🖼️ Importer une photo
+      </button>
+      {/* Appareil photo (capture arrière) — méthode principale. */}
       <input
-        ref={fileRef}
+        ref={cameraRef}
         type="file"
         accept="image/jpeg,image/png"
         capture="environment"
         className="hidden"
         onChange={onLabelFile}
       />
-      <div className="relative mt-2.5">
-        <div className="flex gap-2">
-          <input
-            className={inputCls}
-            placeholder="ou rechercher par nom (Petrus 2015)"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onFocus={() => setFocused(true)}
-            // Léger délai : laisse le clic sur une suggestion se déclencher avant
-            // la fermeture du panneau.
-            onBlur={() => setTimeout(() => setFocused(false), 120)}
-            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), onSearchEnter())}
-          />
-          <button
-            onClick={searchOnline}
-            disabled={busy}
-            className={`${ghostCls} shrink-0 disabled:opacity-60`}
-          >
-            {pending === 'text' ? '⏳' : '🔎'}
-          </button>
-        </div>
+      {/* Galerie (sans capture) — importer une photo existante. */}
+      <input
+        ref={galleryRef}
+        type="file"
+        accept="image/jpeg,image/png"
+        className="hidden"
+        onChange={onLabelFile}
+      />
 
-        {focused && q.length >= 1 && (
-          <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-gold/15 bg-[#241a16] shadow-[0_10px_30px_rgba(0,0,0,0.5)] overflow-hidden">
-            {matches.map((c) => (
+      {/* Replis : recherche par nom ou code-barres, masqués par défaut. */}
+      <button
+        onClick={() => setFallbackOpen((v) => !v)}
+        className="w-full mt-3 text-xs text-muted flex items-center justify-center gap-1"
+      >
+        <span className="underline">Autre méthode : nom ou code-barres</span>
+        <span className={`transition-transform ${fallbackOpen ? 'rotate-180' : ''}`}>▾</span>
+      </button>
+
+      {fallbackOpen && (
+        <div className="mt-2">
+          <div className="relative">
+            <div className="flex gap-2">
+              <input
+                className={inputCls}
+                placeholder="rechercher par nom (Petrus 2015)"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onFocus={() => setFocused(true)}
+                // Léger délai : laisse le clic sur une suggestion se déclencher avant
+                // la fermeture du panneau.
+                onBlur={() => setTimeout(() => setFocused(false), 120)}
+                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), onSearchEnter())}
+              />
               <button
-                key={c.id}
-                // onMouseDown (et non onClick) pour agir avant le blur de l'input.
-                onMouseDown={(e) => (e.preventDefault(), pickLocal(c))}
-                className="w-full text-left px-3.5 py-2.5 border-b border-gold/10 last:border-b-0 hover:bg-white/5 transition"
-              >
-                <div className="text-muted text-[0.78rem] truncate">{c.domaine_nom}</div>
-                <div className="text-ink text-sm truncate">
-                  {c.nom}
-                  {c.appellation ? ` · ${c.appellation}` : ''}
-                </div>
-              </button>
-            ))}
-            {q.length >= 2 ? (
-              <button
-                onMouseDown={(e) => (e.preventDefault(), searchOnline())}
+                onClick={searchOnline}
                 disabled={busy}
-                className="w-full text-left px-3.5 py-2.5 text-sm text-gold hover:bg-white/5 transition disabled:opacity-60"
+                className={`${ghostCls} shrink-0 disabled:opacity-60`}
               >
-                🌐 Rechercher « {q} » en ligne
+                {pending === 'text' ? '⏳' : '🔎'}
               </button>
-            ) : (
-              matches.length === 0 && (
-                <div className="px-3.5 py-2.5 text-muted text-sm">Continue à taper…</div>
-              )
+            </div>
+
+            {focused && q.length >= 1 && (
+              <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-gold/15 bg-[#241a16] shadow-[0_10px_30px_rgba(0,0,0,0.5)] overflow-hidden">
+                {matches.map((c) => (
+                  <button
+                    key={c.id}
+                    // onMouseDown (et non onClick) pour agir avant le blur de l'input.
+                    onMouseDown={(e) => (e.preventDefault(), pickLocal(c))}
+                    className="w-full text-left px-3.5 py-2.5 border-b border-gold/10 last:border-b-0 hover:bg-white/5 transition"
+                  >
+                    <div className="text-muted text-[0.78rem] truncate">{c.domaine_nom}</div>
+                    <div className="text-ink text-sm truncate">
+                      {c.nom}
+                      {c.appellation ? ` · ${c.appellation}` : ''}
+                    </div>
+                  </button>
+                ))}
+                {q.length >= 2 ? (
+                  <button
+                    onMouseDown={(e) => (e.preventDefault(), searchOnline())}
+                    disabled={busy}
+                    className="w-full text-left px-3.5 py-2.5 text-sm text-gold hover:bg-white/5 transition disabled:opacity-60"
+                  >
+                    🌐 Rechercher « {q} » en ligne
+                  </button>
+                ) : (
+                  matches.length === 0 && (
+                    <div className="px-3.5 py-2.5 text-muted text-sm">Continue à taper…</div>
+                  )
+                )}
+              </div>
             )}
           </div>
-        )}
-      </div>
-      <button onClick={manualEntry} disabled={busy} className="w-full mt-2 text-xs text-muted underline">
-        saisir le code-barres à la main
-      </button>
+
+          <button
+            onClick={startScan}
+            disabled={busy}
+            className={`${ghostCls} w-full mt-2 disabled:opacity-60`}
+          >
+            📷 Scanner le code-barres
+          </button>
+          <button
+            onClick={manualEntry}
+            disabled={busy}
+            className="w-full mt-2 text-xs text-muted underline"
+          >
+            saisir le code-barres à la main
+          </button>
+        </div>
+      )}
     </>
   )
 }
