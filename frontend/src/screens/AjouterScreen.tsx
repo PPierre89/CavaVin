@@ -124,7 +124,7 @@ function BottleForm({ onDone }: { onDone: () => void }) {
   return (
     <Card>
       <CardTitle>Ajouter une bouteille</CardTitle>
-      <VinIdentification onIdentified={applyIdentified} />
+      <VinIdentification onIdentified={applyIdentified} cuvees={cuvees} />
 
       <form ref={formRef} onSubmit={submit} className="mt-4">
         <div className="text-[0.7rem] uppercase tracking-widest text-gold border-b border-gold/15 pb-1.5 mb-1">
