@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Chip, IconButton, wineGrad } from '../ui'
 import { COULEUR_LABELS, type Couleur } from '../types'
 import {
   cloneFiltres,
@@ -21,35 +22,6 @@ const TYPES: Couleur[] = ['ROUGE', 'BLANC', 'ROSE', 'BULLES', 'AUTRE']
 
 /* Phases de vieillissement — fonctionnalité premium Oeni+ (verrouillée). */
 const PHASES = ['Jeunesse', 'Maturité', 'Apogée', 'Déclin']
-
-function Chip({
-  active,
-  disabled,
-  onClick,
-  children,
-}: {
-  active?: boolean
-  disabled?: boolean
-  onClick?: () => void
-  children: ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={`shrink-0 px-4 py-2.5 rounded-full text-sm border transition ${
-        active
-          ? 'bg-gradient-to-b from-wine-soft to-wine-deep border-wine text-white'
-          : disabled
-            ? 'border-gold/10 text-muted/40'
-            : 'glass border-transparent text-muted active:scale-95'
-      }`}
-    >
-      {children}
-    </button>
-  )
-}
 
 function FSection({
   emoji,
@@ -122,10 +94,10 @@ function DualRange({
         />
       </div>
       <div className="flex justify-between mt-1.5">
-        <span className="px-3.5 py-1 rounded-full text-sm font-semibold text-white bg-gradient-to-b from-wine-soft to-wine-deep">
+        <span className={`px-3.5 py-1 rounded-full text-sm font-semibold text-white ${wineGrad}`}>
           {lo}
         </span>
-        <span className="px-3.5 py-1 rounded-full text-sm font-semibold text-white bg-gradient-to-b from-wine-soft to-wine-deep">
+        <span className={`px-3.5 py-1 rounded-full text-sm font-semibold text-white ${wineGrad}`}>
           {hi}
         </span>
       </div>
@@ -212,15 +184,8 @@ export function FiltresSheet({
     <div className="fixed inset-0 z-50 overflow-y-auto bg-bg">
       {/* ---------- En-tête ---------- */}
       <div
-        className="sticky top-0 z-10 flex items-center justify-between px-4"
-        style={{
-          paddingTop: 'calc(12px + env(safe-area-inset-top))',
-          paddingBottom: 12,
-          background: 'linear-gradient(180deg, rgba(27,21,18,0.94), rgba(27,21,18,0.7))',
-          backdropFilter: 'saturate(1.2) blur(14px)',
-          WebkitBackdropFilter: 'saturate(1.2) blur(14px)',
-          borderBottom: '1px solid rgba(205,168,106,0.16)',
-        }}
+        className="bar-top border-b border-line sticky top-0 z-10 flex items-center justify-between px-4 pb-3"
+        style={{ paddingTop: 'calc(12px + env(safe-area-inset-top))' }}
       >
         <h1 className="font-serif text-[1.9rem] text-ink m-0">Filtres</h1>
         <div className="flex items-center gap-3">
@@ -232,13 +197,9 @@ export function FiltresSheet({
               {nbFiltres} filtre{nbFiltres > 1 ? 's' : ''} <span className="text-alerte">🚫</span>
             </button>
           )}
-          <button
-            onClick={onClose}
-            aria-label="Fermer"
-            className="w-11 h-11 grid place-items-center rounded-2xl glass text-ink text-xl"
-          >
+          <IconButton round={false} onClick={onClose} aria-label="Fermer" className="text-ink text-xl">
             ✕
-          </button>
+          </IconButton>
         </div>
       </div>
 
@@ -337,17 +298,12 @@ export function FiltresSheet({
 
       {/* ---------- CTA appliquer ---------- */}
       <div
-        className="fixed bottom-0 left-0 right-0 z-10 px-4 pt-3"
-        style={{
-          paddingBottom: 'calc(16px + env(safe-area-inset-bottom))',
-          background: 'linear-gradient(180deg, rgba(27,21,18,0.4), rgba(20,15,12,0.97))',
-          backdropFilter: 'saturate(1.2) blur(14px)',
-          WebkitBackdropFilter: 'saturate(1.2) blur(14px)',
-        }}
+        className="bar-bottom fixed bottom-0 left-0 right-0 z-10 px-4 pt-3"
+        style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}
       >
         <button
           onClick={() => onApply(draft)}
-          className="w-full py-3.5 rounded-full font-bold text-white bg-gradient-to-b from-wine-soft to-wine-deep shadow-[0_8px_22px_rgba(124,39,64,0.38)] active:scale-[0.985] transition"
+          className={`w-full py-3.5 rounded-full font-bold text-white ${wineGrad} shadow-[0_8px_22px_rgba(124,39,64,0.38)] active:scale-[0.985] transition`}
         >
           Voir les {nbBouteilles} bouteille{nbBouteilles > 1 ? 's' : ''}
         </button>

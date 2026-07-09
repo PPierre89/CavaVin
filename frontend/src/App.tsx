@@ -12,8 +12,6 @@ import { Logo } from './ui'
 type Tab = 'cave' | 'mesvins' | 'ajouter' | 'journal' | 'carnet'
 type Seg = 'bouteille' | 'emplacement' | 'cave'
 
-const barFilter = 'saturate(1.2) blur(14px)'
-
 function Shell() {
   const { username, logout } = useAuth()
   const { loading } = useData()
@@ -33,15 +31,8 @@ function Shell() {
   return (
     <>
       <header
-        className="sticky top-0 z-20 flex justify-between items-center px-[18px]"
-        style={{
-          paddingTop: 'calc(10px + env(safe-area-inset-top))',
-          paddingBottom: 10,
-          background: 'linear-gradient(180deg, rgba(27,21,18,0.88), rgba(27,21,18,0.58))',
-          backdropFilter: barFilter,
-          WebkitBackdropFilter: barFilter,
-          borderBottom: '1px solid rgba(205,168,106,0.16)',
-        }}
+        className="bar-top border-b border-line sticky top-0 z-20 flex justify-between items-center px-[18px] pb-2.5"
+        style={{ paddingTop: 'calc(10px + env(safe-area-inset-top))' }}
       >
         <div className="flex items-center gap-2.5">
           <Logo className="w-[30px] h-[30px]" />
@@ -76,14 +67,8 @@ function Shell() {
       </main>
 
       <nav
-        className="fixed bottom-0 left-0 right-0 z-30 flex justify-around"
-        style={{
-          paddingBottom: 'env(safe-area-inset-bottom)',
-          background: 'linear-gradient(180deg, rgba(27,21,18,0.68), rgba(20,15,12,0.96))',
-          backdropFilter: barFilter,
-          WebkitBackdropFilter: barFilter,
-          borderTop: '1px solid rgba(205,168,106,0.16)',
-        }}
+        className="bar-bottom border-t border-line fixed bottom-0 left-0 right-0 z-30 flex justify-around"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
         {(
           [
