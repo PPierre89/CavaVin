@@ -48,6 +48,23 @@ test("l'onglet Carnet est accessible", async ({ page }) => {
   await expect(page.getByText('Carnet de dégustation')).toBeVisible()
 })
 
+test("l'onglet Mes vins affiche la vinothèque et filtre la recherche", async ({ page }) => {
+  await seedAuth(page)
+  await mockApi(page)
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Mes vins' }).click()
+
+  // La carte vinothèque du vin scanné apparaît (domaine + millésime + quantité).
+  await expect(page.getByText('Château Cantemerle').first()).toBeVisible()
+  await expect(page.getByText('2019', { exact: true })).toBeVisible()
+  await expect(page.getByText('x12')).toBeVisible()
+
+  // La recherche filtre la liste : un terme absent vide la vinothèque.
+  await page.getByPlaceholder('Cherchez un vin dans votre cave').fill('introuvable')
+  await expect(page.getByText('Aucun vin ne correspond à votre recherche.')).toBeVisible()
+})
+
 test('ajout par recherche texte pré-remplit le vin identifié', async ({ page }) => {
   await seedAuth(page)
   await mockApi(page)
