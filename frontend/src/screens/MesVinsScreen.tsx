@@ -2,6 +2,15 @@ import { useMemo, useState } from 'react'
 import { useData } from '../data'
 import { BottleSheet } from '../components/bottle'
 import { FicheVin } from '../components/FicheVin'
+import { FiltresSheet } from '../components/FiltresSheet'
+import {
+  compteFiltres,
+  filtresVides,
+  ligneValeur,
+  matchFiltres,
+  type Filtres,
+  type Ligne,
+} from '../filtres'
 import { COULEUR_LABELS, type Bouteille, type Couleur, type Cuvee } from '../types'
 
 /* ------------------------------------------------------------------ *
@@ -20,13 +29,6 @@ const CARD_BG: Record<Couleur, string> = {
   AUTRE: 'linear-gradient(150deg, #52585f, #9aa0ab)',
 }
 
-const FILTERS: [Couleur, string][] = [
-  ['ROUGE', 'Rouges'],
-  ['BLANC', 'Blancs'],
-  ['ROSE', 'Rosés'],
-  ['BULLES', 'Bulles'],
-]
-
 /** Formate un prix « 25.00 » -> « 25,00 € ». */
 function formatPrix(prix: string | null): string {
   if (prix == null) return '--€'
@@ -36,15 +38,6 @@ function formatPrix(prix: string | null): string {
 /** Symbole monétaire à partir d'un code ISO. */
 function devise(code: string): string {
   return { EUR: '€', USD: '$', GBP: '£' }[code] ?? code
-}
-
-/** Une entrée vinothèque : une cuvée + un millésime, quantités cumulées. */
-interface Ligne {
-  key: string
-  ref: Bouteille
-  cuvee: Cuvee | undefined
-  couleur: Couleur
-  quantite: number
 }
 
 /* Petit badge « Oeni+ 👑 » pour les infos premium verrouillées. */
@@ -60,7 +53,7 @@ export default function MesVinsScreen() {
   const { cuvees, bouteilles, cuveeColor } = useData()
   const [query, setQuery] = useState('')
   const [showFilters, setShowFilters] = useState(false)
-  const [couleurs, setCouleurs] = useState<Set<Couleur>>(new Set())
+  const [filtres, setFiltres] = useState<Filtres>(() => filtresVides())
   const [fiche, setFiche] = useState<Bouteille | null>(null)
   const [options, setOptions] = useState<Bouteille | null>(null)
 
@@ -98,26 +91,26 @@ export default function MesVinsScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bouteilles, cuveeMap, cuveeColor])
 
+  // Bornes du curseur « Valeur des vins » : min/max des valeurs marché connues.
+  const bounds = useMemo<[number, number]>(() => {
+    const valeurs = lignes.map(ligneValeur).filter((v): v is number => v != null)
+    if (valeurs.length === 0) return [0, 0]
+    return [Math.floor(Math.min(...valeurs)), Math.ceil(Math.max(...valeurs))]
+  }, [lignes])
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return lignes.filter((l) => {
-      if (couleurs.size && !couleurs.has(l.couleur)) return false
+      if (!matchFiltres(l, filtres, bounds)) return false
       if (!q) return true
       const foin = `${l.ref.domaine_nom} ${l.ref.cuvee_nom} ${l.cuvee?.appellation ?? ''} ${
         l.cuvee?.region ?? ''
       } ${l.ref.millesime ?? ''}`.toLowerCase()
       return foin.includes(q)
     })
-  }, [lignes, query, couleurs])
+  }, [lignes, query, filtres, bounds])
 
-  const toggleCouleur = (c: Couleur) =>
-    setCouleurs((prev) => {
-      const next = new Set(prev)
-      if (next.has(c)) next.delete(c)
-      else next.add(c)
-      return next
-    })
-
+  const nbFiltres = compteFiltres(filtres, bounds)
   const totalBouteilles = lignes.reduce((n, l) => n + l.quantite, 0)
 
   return (
@@ -138,47 +131,22 @@ export default function MesVinsScreen() {
           className="flex-1 text-[16px] px-4 py-3 rounded-2xl glass text-ink outline-none placeholder:text-[#8a7a6d] focus:border-gold/35"
         />
         <button
-          onClick={() => setShowFilters((v) => !v)}
+          onClick={() => setShowFilters(true)}
           aria-label="Filtrer"
           className={`shrink-0 w-12 rounded-2xl grid place-items-center text-lg transition ${
-            showFilters || couleurs.size
-              ? 'bg-gradient-to-b from-wine-soft to-wine-deep text-white'
-              : 'glass text-muted'
+            nbFiltres ? 'bg-gradient-to-b from-wine-soft to-wine-deep text-white' : 'glass text-muted'
           }`}
         >
           <span className="relative">
             🔽
-            {couleurs.size > 0 && (
+            {nbFiltres > 0 && (
               <span className="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 rounded-full bg-gold text-[0.6rem] font-bold text-bg grid place-items-center">
-                {couleurs.size}
+                {nbFiltres}
               </span>
             )}
           </span>
         </button>
       </div>
-
-      {showFilters && (
-        <div className="flex flex-wrap gap-2 mb-3">
-          {FILTERS.map(([c, lbl]) => (
-            <button
-              key={c}
-              onClick={() => toggleCouleur(c)}
-              className={`px-3.5 py-2 rounded-full text-sm border transition ${
-                couleurs.has(c)
-                  ? 'bg-gradient-to-b from-wine-soft to-wine-deep border-wine text-white'
-                  : 'glass border-transparent text-muted'
-              }`}
-            >
-              {lbl}
-            </button>
-          ))}
-          {couleurs.size > 0 && (
-            <button onClick={() => setCouleurs(new Set())} className="px-3.5 py-2 text-sm text-gold">
-              Réinitialiser
-            </button>
-          )}
-        </div>
-      )}
 
       {/* ---------- Liste vinothèque ---------- */}
       {lignes.length === 0 ? (
@@ -272,6 +240,18 @@ export default function MesVinsScreen() {
       )}
 
       <BottleSheet b={options} onClose={() => setOptions(null)} />
+
+      <FiltresSheet
+        open={showFilters}
+        onClose={() => setShowFilters(false)}
+        onApply={(f) => {
+          setFiltres(f)
+          setShowFilters(false)
+        }}
+        initial={filtres}
+        lignes={lignes}
+        bounds={bounds}
+      />
     </div>
   )
 }

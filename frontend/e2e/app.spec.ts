@@ -65,6 +65,27 @@ test("l'onglet Mes vins affiche la vinothèque et filtre la recherche", async ({
   await expect(page.getByText('Aucun vin ne correspond à votre recherche.')).toBeVisible()
 })
 
+test('le panneau Filtres restreint la vinothèque par type de vin', async ({ page }) => {
+  await seedAuth(page)
+  await mockApi(page)
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Mes vins' }).click()
+  await page.getByRole('button', { name: 'Filtrer' }).click()
+
+  // Le panneau s'ouvre et le CTA affiche le total des bouteilles.
+  await expect(page.getByRole('heading', { name: 'Filtres' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Voir les 12 bouteilles/ })).toBeVisible()
+
+  // Filtrer sur « Blanc » exclut le rouge scanné : le compteur tombe à 0.
+  await page.getByRole('button', { name: 'Blanc' }).click()
+  await page.getByRole('button', { name: /Voir les 0 bouteille/ }).click()
+  await expect(page.getByText('Aucun vin ne correspond à votre recherche.')).toBeVisible()
+
+  // Le badge du bouton filtre reflète le nombre de critères actifs.
+  await expect(page.getByLabel('Filtrer').getByText('1')).toBeVisible()
+})
+
 test('ajout par recherche texte pré-remplit le vin identifié', async ({ page }) => {
   await seedAuth(page)
   await mockApi(page)
