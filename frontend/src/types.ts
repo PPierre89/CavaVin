@@ -54,6 +54,10 @@ export interface Bouteille {
   prix_achat: string | null
   apogee_debut: number | null
   apogee_fin: number | null
+  // Fenêtre d'apogée effective : saisie manuelle si présente, sinon estimée
+  // côté serveur depuis la couleur + le millésime.
+  apogee_debut_effectif: number | null
+  apogee_fin_effectif: number | null
 }
 
 /* ---------- Fiche vin consolidée (GET /api/cuvees/{id}/fiche/) ---------- */
@@ -83,6 +87,7 @@ export interface FicheMillesime {
   quantite: number
   apogee_debut: number | null
   apogee_fin: number | null
+  statut: Statut
 }
 export interface FicheCuvee {
   cuvee: {
@@ -150,6 +155,12 @@ export const STATUT_LABELS: Record<Statut, string> = {
   A_GARDER: 'À garder',
   A_BOIRE: 'À boire',
   DEPASSE: 'Dépassé',
+}
+/* Couleur du code statut de dégustation (fenêtre d'apogée). */
+export const STATUT_COLORS: Record<Statut, string> = {
+  A_GARDER: 'var(--color-gold)',
+  A_BOIRE: 'var(--color-ok)',
+  DEPASSE: 'var(--color-alerte)',
 }
 export const TYPE_LABELS: Record<TypeEmplacement, string> = {
   ARMOIRE: 'Armoire',

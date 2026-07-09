@@ -2,7 +2,15 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { api, errMsg } from '../api'
 import { useData } from '../data'
 import { useToast } from '../toast'
-import { COULEUR_LABELS, type Bouteille, type Couleur, type FicheCuvee, type PrixMarche } from '../types'
+import {
+  COULEUR_LABELS,
+  STATUT_COLORS,
+  STATUT_LABELS,
+  type Bouteille,
+  type Couleur,
+  type FicheCuvee,
+  type PrixMarche,
+} from '../types'
 import { TastingSheet } from './TastingSheet'
 import { formatDate, formatDateTime } from '../dates'
 
@@ -124,7 +132,7 @@ export function FicheVin({
   const selected = millesimes.find((b) => b.id === selId) ?? bouteille
   const totalStock = millesimes.reduce((sum, b) => sum + b.quantite, 0)
   const maxStock = Math.max(1, ...millesimes.map((b) => b.quantite))
-  const apogee = formatApogee(selected.apogee_debut, selected.apogee_fin)
+  const apogee = formatApogee(selected.apogee_debut_effectif, selected.apogee_fin_effectif)
 
   // Mouvements de stock concernant cette cuvée (onglet Historique).
   const idsCuvee = useMemo(() => new Set(millesimes.map((b) => b.id)), [millesimes])
@@ -231,6 +239,12 @@ export function FicheVin({
                 {fiche.cuvee.classification}
               </span>
             )}
+            <span
+              className="px-4 py-1.5 rounded-full text-sm font-semibold border"
+              style={{ color: STATUT_COLORS[selected.statut], borderColor: STATUT_COLORS[selected.statut] }}
+            >
+              {STATUT_LABELS[selected.statut]}
+            </span>
           </div>
           <div className="text-muted text-sm mt-3">{appellation}</div>
           {(fiche?.cuvee.region || fiche?.cuvee.pays) && (

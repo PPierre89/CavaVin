@@ -16,7 +16,9 @@ from .serializers import (
 
 class BouteilleViewSet(viewsets.ModelViewSet):
     serializer_class = BouteilleSerializer
-    filterset_fields = ["statut", "cuvee", "emplacement", "millesime", "cuvee__couleur"]
+    # « statut » n'est plus filtrable : il est désormais calculé (fenêtre
+    # d'apogée × année courante), pas stocké de façon fiable.
+    filterset_fields = ["cuvee", "emplacement", "millesime", "cuvee__couleur"]
     search_fields = ["cuvee__nom", "cuvee__domaine__nom"]
     ordering_fields = ["millesime", "cree_le", "prix_achat"]
 

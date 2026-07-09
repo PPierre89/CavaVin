@@ -37,10 +37,12 @@ const BOUTEILLE = {
   emplacement: 10,
   emplacement_chemin: 'Armoire 1',
   quantite: 12,
-  statut: 'A_GARDER',
+  statut: 'A_BOIRE',
   prix_achat: '40.00',
-  apogee_debut: 2024,
-  apogee_fin: 2035,
+  apogee_debut: null,
+  apogee_fin: null,
+  apogee_debut_effectif: 2022,
+  apogee_fin_effectif: 2031,
 }
 
 const FICHE = {
@@ -67,7 +69,9 @@ const FICHE = {
   prix_marche: { min: 38, max: 65, devise: 'EUR' },
   ma_note: null,
   prix_achat_moyen: '40.00',
-  millesimes: [{ millesime: 2019, quantite: 12, apogee_debut: 2024, apogee_fin: 2035 }],
+  millesimes: [
+    { millesime: 2019, quantite: 12, apogee_debut: 2022, apogee_fin: 2031, statut: 'A_BOIRE' },
+  ],
   stock_total: 12,
   enrichissable: true,
   enrichi_le: '2026-07-08T10:00:00Z',

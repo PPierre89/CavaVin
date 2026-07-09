@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.conf import settings
@@ -12,7 +13,7 @@ from rest_framework.views import APIView
 
 from apps.inventory.models import Bouteille, NoteDegustation
 
-from . import sommellerie, wine_profile
+from . import apogee, sommellerie, wine_profile
 from .enrichment import (
     EnrichmentError,
     get_enabled_providers,
@@ -103,8 +104,12 @@ def _build_fiche(cuvee, user):
         )
 
     # Millésimes en stock, regroupés (une cuvée peut avoir plusieurs lignes par
-    # millésime, à des emplacements différents).
-    millesimes = list(
+    # millésime, à des emplacements différents). Pour chaque millésime, on
+    # calcule la fenêtre d'apogée effective (saisie manuelle si présente, sinon
+    # estimée depuis la couleur) et le statut de dégustation associé.
+    annee = date.today().year
+    millesimes = []
+    for groupe in (
         bouteilles.filter(quantite__gt=0)
         .values("millesime")
         .annotate(
@@ -113,7 +118,14 @@ def _build_fiche(cuvee, user):
             apogee_fin=Max("apogee_fin"),
         )
         .order_by(F("millesime").desc(nulls_last=True))
-    )
+    ):
+        debut, fin = groupe["apogee_debut"], groupe["apogee_fin"]
+        if debut is None and fin is None:
+            debut, fin = apogee.fenetre_apogee(cuvee.couleur, groupe["millesime"])
+        groupe["apogee_debut"] = debut
+        groupe["apogee_fin"] = fin
+        groupe["statut"] = apogee.statut_pour_fenetre(debut, fin, annee)
+        millesimes.append(groupe)
 
     # Enrichissement wineapi persisté sur la cuvée (repli sur le conseil couleur).
     profil = wine_profile.profil_gustatif(

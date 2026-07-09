@@ -1,6 +1,7 @@
 import json
 import os
 import urllib.error
+from datetime import date
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
@@ -17,7 +18,7 @@ from .enrichment import EnrichmentError, NormalizedWine
 from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.wineapi import WineApiProvider
-from . import sommellerie, wine_profile
+from . import apogee, sommellerie, wine_profile
 from .ingest import enrich_cuvee_from_wineapi, upsert_cuvee
 from .models import Cepage, Cuvee, Domaine
 from .serializers import ScanEtiquetteSerializer
@@ -59,6 +60,46 @@ class NormalizeTests(SimpleTestCase):
         self.assertEqual(normalize.parse_vintage("Château X 2018"), 2018)
         self.assertEqual(normalize.parse_vintage(None, "Cuvée 1998 Réserve"), 1998)
         self.assertIsNone(normalize.parse_vintage("sans année", ""))
+
+
+class ApogeeTests(SimpleTestCase):
+    """Calcul pur de la fenêtre de dégustation et du statut — pas de base."""
+
+    def test_fenetre_depuis_couleur_et_millesime(self):
+        # Rouge : 3 à 12 ans de garde après la récolte.
+        self.assertEqual(apogee.fenetre_apogee("ROUGE", 2015), (2018, 2027))
+        # Blanc : 1 à 5 ans.
+        self.assertEqual(apogee.fenetre_apogee("BLANC", 2020), (2021, 2025))
+
+    def test_couleur_inconnue_retombe_sur_le_defaut(self):
+        self.assertEqual(apogee.fenetre_apogee("INEXISTANTE", 2020), (2021, 2026))
+
+    def test_vin_non_millesime_sans_fenetre(self):
+        self.assertEqual(apogee.fenetre_apogee("ROUGE", None), (None, None))
+
+    def test_statut_selon_l_annee(self):
+        # Fenêtre 2018-2027.
+        self.assertEqual(apogee.statut_pour_fenetre(2018, 2027, 2016), apogee.A_GARDER)
+        self.assertEqual(apogee.statut_pour_fenetre(2018, 2027, 2020), apogee.A_BOIRE)
+        self.assertEqual(apogee.statut_pour_fenetre(2018, 2027, 2030), apogee.DEPASSE)
+        # Bornes incluses.
+        self.assertEqual(apogee.statut_pour_fenetre(2018, 2027, 2018), apogee.A_BOIRE)
+        self.assertEqual(apogee.statut_pour_fenetre(2018, 2027, 2027), apogee.A_BOIRE)
+
+    def test_statut_fenetre_partielle_ou_absente(self):
+        # Seule la borne de fin connue.
+        self.assertEqual(apogee.statut_pour_fenetre(None, 2027, 2030), apogee.DEPASSE)
+        self.assertEqual(apogee.statut_pour_fenetre(None, 2027, 2020), apogee.A_BOIRE)
+        # Seule la borne de début connue.
+        self.assertEqual(apogee.statut_pour_fenetre(2018, None, 2016), apogee.A_GARDER)
+        # Aucune borne (vin non datable) -> statut neutre.
+        self.assertEqual(apogee.statut_pour_fenetre(None, None, 2020), apogee.A_GARDER)
+
+    def test_statut_utilise_l_annee_courante_par_defaut(self):
+        annee = date.today().year
+        self.assertEqual(
+            apogee.statut_pour_fenetre(annee - 1, annee + 1), apogee.A_BOIRE
+        )
 
 
 def _fake_urlopen(payload_bytes):

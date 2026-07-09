@@ -11,7 +11,14 @@ import {
   type Filtres,
   type Ligne,
 } from '../filtres'
-import { COULEUR_LABELS, type Bouteille, type Couleur, type Cuvee } from '../types'
+import {
+  COULEUR_LABELS,
+  STATUT_COLORS,
+  STATUT_LABELS,
+  type Bouteille,
+  type Couleur,
+  type Cuvee,
+} from '../types'
 
 /* ------------------------------------------------------------------ *
  *  « Mes vins » — vue vinothèque : la liste à plat de tous les vins
@@ -208,8 +215,14 @@ export default function MesVinsScreen() {
                   </div>
                   {lieu && <div className="text-muted text-[0.8rem] mt-1.5 truncate">{lieu}</div>}
                   <div className="flex items-center justify-between gap-2 mt-2">
-                    <span className="text-[0.78rem] px-2.5 py-1 rounded-full border border-gold/20 text-muted whitespace-nowrap">
-                      Phase : <OeniLock />
+                    <span
+                      className="text-[0.78rem] px-2.5 py-1 rounded-full border font-medium whitespace-nowrap"
+                      style={{
+                        color: STATUT_COLORS[l.ref.statut],
+                        borderColor: STATUT_COLORS[l.ref.statut],
+                      }}
+                    >
+                      {STATUT_LABELS[l.ref.statut]}
                     </span>
                     <span className="text-muted text-[0.78rem] whitespace-nowrap">75cl</span>
                   </div>

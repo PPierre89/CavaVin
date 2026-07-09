@@ -14,9 +14,9 @@ Cette première itération couvre le socle de données et l'API REST pour :
 - **Epic 1 (Acquisition, sans la partie IA/OCR)** : saisie manuelle rapide d'un `Domaine`, d'une `Cuvee`
   (cépages, appellation, couleur, code-barres) et ajout "en vrac" de bouteilles (`Bouteille`, quantité,
   emplacement optionnel si non encore placé).
-- Début Epic 3/4 : champs `apogee_debut`/`apogee_fin` sur `Bouteille` pour le futur calcul de fenêtre
-  de dégustation, `statut` (à garder / à boire / dépassé) pour le code couleur, et `MouvementStock`
-  pour l'historique des sorties/consommations ("bouteilles mortes").
+- **Epic 3/4 (fenêtre de dégustation)** : calcul de la **fenêtre d'apogée** et du **statut**
+  (à garder / à boire / dépassé) qui pilote le code couleur — voir la section dédiée ci-dessous — et
+  `MouvementStock` pour l'historique des sorties/consommations ("bouteilles mortes").
 
 L'action `POST /api/bouteilles/{id}/consommer/` retire N bouteilles du stock et journalise le
 mouvement de façon atomique.
@@ -111,11 +111,28 @@ commentaire, curseurs acidité/tanin/fruit, date). CRUD via `/api/notes-degustat
 côté mobile, l'onglet **Carnet** liste toutes les dégustations et « Commencer une dégustation »
 ouvre la saisie.
 
+### Fenêtre de dégustation & statut (apogée)
+
+Chaque bouteille se voit calculer une **fenêtre d'apogée** (« quand la boire ») et un **statut de
+dégustation** — `À garder`, `À boire` ou `Dépassé` — qui alimente le **code couleur** de la cave
+(anneau vert = à boire, rouge = dépassé sur les alvéoles de « Ma cave »).
+
+- **Logique métier pure** (`backend/apps/catalog/apogee.py`, testée, sans base de données) : à partir
+  de la **couleur** du vin et de son **millésime**, on estime un potentiel de garde typique (un rouge
+  s'ouvre ~3 à ~12 ans après la récolte, un blanc ~1 à ~5 ans, un rosé se boit dans les deux ans…),
+  d'où une année de début et de fin d'apogée, puis le statut par comparaison à l'**année courante**.
+- **La saisie manuelle prime** : si `apogee_debut`/`apogee_fin` sont renseignés sur la `Bouteille`,
+  ils sont respectés tels quels ; sinon la fenêtre est estimée. L'API expose la **fenêtre effective**
+  (`apogee_debut_effectif`/`apogee_fin_effectif`) et un `statut` **calculé en lecture** (le champ
+  stocké n'est plus le pilote de l'affichage).
+- Côté fiche vin, chaque **millésime en stock** porte sa fenêtre et son statut ; l'onglet **Mes vins**
+  et la feuille bouteille affichent la pastille de statut colorée et la fenêtre de dégustation.
+
 ### Pas encore fait (roadmap)
 
 - Mode hors-ligne avec synchronisation asynchrone.
-- Recommandation mets-vins enrichie (LLM) et calcul algorithmique d'apogée (le conseil actuel est
-  dérivé de la couleur).
+- Recommandation mets-vins enrichie (LLM) et **apogée affinée par cépage / qualité du millésime**
+  (l'estimation actuelle est dérivée de la couleur et du millésime).
 - Valorisation financière (cote en temps réel) et qualité du millésime par région/année.
 - Partage de cave / carnet en lecture seule.
 
