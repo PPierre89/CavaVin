@@ -213,15 +213,25 @@ Deux workflows GitHub Actions automatisent la vérification et la livraison. Ils
   - Un **résumé de couverture** est écrit dans le récapitulatif du job (onglet *Summary* du run),
     et le **rapport HTML** est publié en artefact téléchargeable (`coverage-html`, conservé 14 jours).
 - **Frontend** : `npm ci`, puis **lint** (`oxlint`) et **type-check + build** (`tsc -b && vite build`).
+- **E2E (Playwright)** : job dédié qui **build le SPA, le sert** (webServer Playwright) et lance les
+  tests bout-en-bout (`frontend/e2e/`). L'API est **mockée** (`page.route`) — aucun backend Django
+  requis, tests déterministes. Le rapport HTML est publié en artefact (`playwright-report`).
 
-Reproduire la mesure de couverture en local :
+Reproduire en local :
 
 ```bash
+# Backend — couverture
 cd backend
 pip install -r requirements.txt coverage
 coverage run manage.py test      # config lue depuis .coveragerc
 coverage report                  # résumé + application du seuil
 coverage html                    # rapport détaillé dans backend/htmlcov/
+
+# Frontend — E2E
+cd frontend
+npm ci
+npx playwright install chromium  # ou PLAYWRIGHT_CHROMIUM_PATH=<chemin> si déjà présent
+npm run test:e2e
 ```
 
 ### `docker.yml` — build & publication de l'image

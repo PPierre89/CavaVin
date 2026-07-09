@@ -1,0 +1,124 @@
+import type { Page, Route } from '@playwright/test'
+
+// Jeu de données mocké, cohérent avec les types de src/types.ts.
+export const TOKEN = 'test-access-token'
+
+const CUVEE = {
+  id: 5,
+  domaine: 1,
+  domaine_nom: 'Château Cantemerle',
+  nom: 'Grand Cru Classé',
+  appellation: 'Haut-Médoc',
+  couleur: 'ROUGE',
+  cepages_noms: ['Merlot', 'Cabernet Sauvignon'],
+  code_barres: '',
+  reference_externe_id: 'w1',
+}
+
+const CAVE = { id: 1, nom: 'Ma cave', description: '' }
+
+const EMPLACEMENT = {
+  id: 10,
+  cave: 1,
+  parent: null,
+  nom: 'Armoire 1',
+  type_emplacement: 'ARMOIRE',
+  capacite: 12,
+  chemin: 'Armoire 1',
+  occupation_actuelle: 12,
+}
+
+const BOUTEILLE = {
+  id: 100,
+  cuvee: 5,
+  cuvee_nom: 'Grand Cru Classé',
+  domaine_nom: 'Château Cantemerle',
+  millesime: 2019,
+  emplacement: 10,
+  emplacement_chemin: 'Armoire 1',
+  quantite: 12,
+  statut: 'A_GARDER',
+  prix_achat: '40.00',
+  apogee_debut: 2024,
+  apogee_fin: 2035,
+}
+
+const FICHE = {
+  cuvee: {
+    id: 5,
+    nom: 'Grand Cru Classé',
+    appellation: 'Haut-Médoc',
+    couleur: 'ROUGE',
+    domaine_nom: 'Château Cantemerle',
+    cepages: ['Merlot', 'Cabernet Sauvignon'],
+    region: 'Haut-Médoc',
+    pays: 'France',
+    classification: 'Grand Cru Classé',
+    description: 'Un Médoc élégant et structuré.',
+    elaborate: '',
+    degre_alcool: 13.5,
+    image_url: '',
+  },
+  conseil_degustation: { temperature: '16-18', carafage: '1h-2h' },
+  profil_gustatif: [{ gauche: 'Léger', droite: 'Puissant', valeur: 0.8 }],
+  accords_mets: [{ nom: 'Bœuf', emoji: '🥩', confiance: 0.95 }],
+  note_communaute: { note: 3.9, nb: 26 },
+  avis: [],
+  prix_marche: { min: 38, max: 65, devise: 'EUR' },
+  ma_note: null,
+  prix_achat_moyen: '40.00',
+  millesimes: [{ millesime: 2019, quantite: 12, apogee_debut: 2024, apogee_fin: 2035 }],
+  stock_total: 12,
+  enrichissable: true,
+  enrichi_le: '2026-07-08T10:00:00Z',
+}
+
+const IDENTIFY = {
+  source: 'wineapi',
+  created: true,
+  cuvee: CUVEE,
+  millesime: 2019,
+  confidence: 0.92,
+  infos: { region: 'Haut-Médoc' },
+  suggestions: [],
+}
+
+/** Réponses par défaut, indexées par « MÉTHODE /chemin/ ». Surchargeables par test. */
+function defaultRoutes(): Record<string, unknown> {
+  return {
+    'POST /api/auth/token/': { access: TOKEN, refresh: 'r' },
+    'POST /api/auth/register/': { access: TOKEN, refresh: 'r', username: 'tester' },
+    'GET /api/caves/': [CAVE],
+    'GET /api/emplacements/': [EMPLACEMENT],
+    'GET /api/bouteilles/': [BOUTEILLE],
+    'GET /api/cuvees/': [CUVEE],
+    'GET /api/mouvements/': [],
+    'GET /api/cuvees/5/fiche/': FICHE,
+    'GET /api/notes-degustation/': [],
+    'POST /api/identifier-vin/': IDENTIFY,
+  }
+}
+
+/** Intercepte tous les appels /api/ et répond avec le jeu mocké (200 par défaut). */
+export async function mockApi(page: Page, overrides: Record<string, unknown> = {}) {
+  const routes = { ...defaultRoutes(), ...overrides }
+  await page.route('**/api/**', async (route: Route) => {
+    const url = new URL(route.request().url())
+    const key = `${route.request().method()} ${url.pathname}`
+    const body = key in routes ? routes[key] : []
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(body),
+    })
+  })
+}
+
+/** Pré-remplit un token en localStorage pour arriver directement connecté. */
+export async function seedAuth(page: Page) {
+  await page.addInitScript((token) => {
+    localStorage.setItem('adv_access', token as string)
+    localStorage.setItem('adv_refresh', 'r')
+    localStorage.setItem('adv_user', 'tester')
+  }, TOKEN)
+}
