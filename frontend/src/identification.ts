@@ -31,3 +31,30 @@ export function identifyByLabel(file: File) {
   fd.append('image', file, file.name || 'etiquette.jpg')
   return api<IdentifiedWine>('POST', '/api/scan-etiquette/', fd)
 }
+
+/** Normalise une chaîne pour la recherche : minuscules, sans accents ni espaces superflus. */
+function normalize(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // retire les diacritiques (é -> e, ô -> o…)
+    .trim()
+}
+
+/**
+ * Recherche dynamique, en mémoire, dans le catalogue déjà chargé côté client —
+ * aucun appel réseau, donc AUCUN quota wineapi consommé. C'est la brique de la
+ * recherche « au fil de la frappe » : elle propose d'abord les cuvées déjà
+ * connues (évitant un appel externe pour un vin déjà en base). Tous les mots de
+ * la requête doivent apparaître dans le domaine, le nom, l'appellation ou la
+ * région de la cuvée.
+ */
+export function searchLocalCuvees(cuvees: Cuvee[], query: string, limit = 6): Cuvee[] {
+  const mots = normalize(query).split(/\s+/).filter(Boolean)
+  if (mots.length === 0) return []
+  const matches = cuvees.filter((c) => {
+    const foin = normalize(`${c.domaine_nom} ${c.nom} ${c.appellation ?? ''} ${c.region ?? ''}`)
+    return mots.every((m) => foin.includes(m))
+  })
+  return matches.slice(0, limit)
+}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { errMsg } from '../api'
 import { useToast } from '../toast'
 import { ghostCls, inputCls, primaryCls } from '../ui'
@@ -8,8 +8,10 @@ import {
   identifyByText,
   isValidEan,
   MAX_LABEL_SIZE,
+  searchLocalCuvees,
   type IdentifiedWine,
 } from '../identification'
+import type { Cuvee } from '../types'
 
 /* ------------------------------------------------------------------ *
  *  Module d'identification d'un vin — regroupe les trois méthodes :
@@ -17,6 +19,12 @@ import {
  *  visuelle) et recherche par nom. Découplé du formulaire d'ajout : il
  *  remonte le vin identifié via `onIdentified`, à charge de l'appelant
  *  de pré-remplir son formulaire.
+ *
+ *  Recherche par nom — dynamique et économe en quota : au fil de la
+ *  frappe, on propose les cuvées DÉJÀ en base (filtrage en mémoire, sans
+ *  réseau). L'appel à wineapi.io (consommateur de quota) n'est déclenché
+ *  qu'explicitement, via le bouton 🔎 / « Rechercher en ligne », ou par
+ *  Entrée quand aucune cuvée locale ne correspond.
  * ------------------------------------------------------------------ */
 
 /**
@@ -70,12 +78,18 @@ function useBarcodeScanner(onDetected: (ean: string) => void) {
 
 export function VinIdentification({
   onIdentified,
+  cuvees,
 }: {
   onIdentified: (wine: IdentifiedWine, sourceLabel: string) => void
+  // Catalogue déjà chargé côté client : sert la recherche locale « au fil de la
+  // frappe » sans aucun appel réseau (donc sans consommer le quota wineapi).
+  cuvees: Cuvee[]
 }) {
   const toast = useToast()
   const fileRef = useRef<HTMLInputElement>(null)
   const [search, setSearch] = useState('')
+  // Champ de recherche actif : conditionne l'affichage des suggestions.
+  const [focused, setFocused] = useState(false)
   // Libellé de l'opération d'identification en cours (null = aucune).
   const [pending, setPending] = useState<string | null>(null)
 
@@ -143,10 +157,29 @@ export function VinIdentification({
     )
   }
 
-  function doSearch() {
-    const q = search.trim()
+  const q = search.trim()
+  // Suggestions locales (mémoire, zéro appel réseau) recalculées à chaque frappe.
+  const matches = useMemo(() => searchLocalCuvees(cuvees, q), [cuvees, q])
+
+  /** Sélection d'une cuvée déjà en base : aucun appel externe, aucun quota. */
+  function pickLocal(c: Cuvee) {
+    setSearch('')
+    setFocused(false)
+    onIdentified({ source: 'local', cuvee: c, infos: { region: c.region ?? null } }, 'Déjà en base')
+  }
+
+  /** Recherche en ligne (wineapi.io) — explicite, car elle consomme le quota. */
+  function searchOnline() {
     if (q.length < 2) return toast('Saisis au moins 2 caractères.', 'err')
+    setFocused(false)
     run('text', () => identifyByText(q), 'Identifié', 'Vin non identifié. Ajoute-le manuellement.')
+  }
+
+  // Entrée : on privilégie la première suggestion locale (gratuite) ; à défaut,
+  // seulement, on bascule sur la recherche en ligne.
+  function onSearchEnter() {
+    if (matches.length) pickLocal(matches[0])
+    else searchOnline()
   }
 
   if (scanner.scanning) {
@@ -188,17 +221,59 @@ export function VinIdentification({
         className="hidden"
         onChange={onLabelFile}
       />
-      <div className="flex gap-2 mt-2.5">
-        <input
-          className={inputCls}
-          placeholder="ou rechercher par nom (Petrus 2015)"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), doSearch())}
-        />
-        <button onClick={doSearch} disabled={busy} className={`${ghostCls} shrink-0 disabled:opacity-60`}>
-          🔎
-        </button>
+      <div className="relative mt-2.5">
+        <div className="flex gap-2">
+          <input
+            className={inputCls}
+            placeholder="ou rechercher par nom (Petrus 2015)"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onFocus={() => setFocused(true)}
+            // Léger délai : laisse le clic sur une suggestion se déclencher avant
+            // la fermeture du panneau.
+            onBlur={() => setTimeout(() => setFocused(false), 120)}
+            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), onSearchEnter())}
+          />
+          <button
+            onClick={searchOnline}
+            disabled={busy}
+            className={`${ghostCls} shrink-0 disabled:opacity-60`}
+          >
+            {pending === 'text' ? '⏳' : '🔎'}
+          </button>
+        </div>
+
+        {focused && q.length >= 1 && (
+          <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-gold/15 bg-[#241a16] shadow-[0_10px_30px_rgba(0,0,0,0.5)] overflow-hidden">
+            {matches.map((c) => (
+              <button
+                key={c.id}
+                // onMouseDown (et non onClick) pour agir avant le blur de l'input.
+                onMouseDown={(e) => (e.preventDefault(), pickLocal(c))}
+                className="w-full text-left px-3.5 py-2.5 border-b border-gold/10 last:border-b-0 hover:bg-white/5 transition"
+              >
+                <div className="text-muted text-[0.78rem] truncate">{c.domaine_nom}</div>
+                <div className="text-ink text-sm truncate">
+                  {c.nom}
+                  {c.appellation ? ` · ${c.appellation}` : ''}
+                </div>
+              </button>
+            ))}
+            {q.length >= 2 ? (
+              <button
+                onMouseDown={(e) => (e.preventDefault(), searchOnline())}
+                disabled={busy}
+                className="w-full text-left px-3.5 py-2.5 text-sm text-gold hover:bg-white/5 transition disabled:opacity-60"
+              >
+                🌐 Rechercher « {q} » en ligne
+              </button>
+            ) : (
+              matches.length === 0 && (
+                <div className="px-3.5 py-2.5 text-muted text-sm">Continue à taper…</div>
+              )
+            )}
+          </div>
+        )}
       </div>
       <button onClick={manualEntry} disabled={busy} className="w-full mt-2 text-xs text-muted underline">
         saisir le code-barres à la main

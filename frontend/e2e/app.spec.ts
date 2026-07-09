@@ -91,15 +91,37 @@ test('le panneau Filtres restreint la vinothèque par type de vin', async ({ pag
   await expect(page.getByLabel('Filtrer').getByText('1')).toBeVisible()
 })
 
-test('ajout par recherche texte pré-remplit le vin identifié', async ({ page }) => {
+test('recherche dynamique : une cuvée déjà en base est suggérée sans appel réseau', async ({
+  page,
+}) => {
+  await seedAuth(page)
+  await page.goto('/')
+  // Aucun mock sur /api/identifier-vin/ : le test échouerait si un appel externe
+  // partait. On ne mocke que le strict nécessaire au chargement de l'app, et on
+  // fait échouer explicitement l'endpoint consommateur de quota.
+  await mockApi(page)
+  await page.route('**/api/identifier-vin/', (route) => route.abort())
+
+  await page.getByRole('button', { name: 'Ajouter' }).click()
+  // Au fil de la frappe, la cuvée du catalogue local remonte en suggestion.
+  await page.getByPlaceholder(/rechercher par nom/).fill('cantemerle')
+  await page.getByText('Grand Cru Classé · Haut-Médoc').click()
+
+  // Le vin est pré-rempli depuis la base, sans passer par wineapi.
+  await expect(page.getByText(/Déjà en base/)).toBeVisible()
+})
+
+test('ajout par recherche texte en ligne pré-remplit le vin identifié', async ({ page }) => {
   await seedAuth(page)
   await mockApi(page)
   await page.goto('/')
 
   await page.getByRole('button', { name: 'Ajouter' }).click()
-  await page.getByPlaceholder(/rechercher par nom/).fill('Cantemerle')
+  // « Margaux » n'est pas dans le catalogue local : la recherche en ligne est
+  // le seul recours (bouton 🔎), et déclenche l'appel wineapi.
+  await page.getByPlaceholder(/rechercher par nom/).fill('Margaux')
   await page.getByRole('button', { name: '🔎' }).click()
 
-  // Un toast confirme l'identification.
+  // Un toast confirme l'identification en ligne.
   await expect(page.getByText(/Identifié/)).toBeVisible()
 })
