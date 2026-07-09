@@ -89,9 +89,14 @@ code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` 
   région/pays, appellation, classification, description & élaboration, corps/acidité, degré d'alcool,
   image, code LWIN, cépages, **note & nombre d'avis communautaires**, **avis de critiques**
   (score, texte, date), **accords mets-vins notés** (aliment + confiance), **fourchette de prix
-  marché** et **prix par marchand** (`prices` : caviste, tarif, devise, lien). L'enrichissement a lieu
+  marché** et **prix par marchand** (`prices` : caviste, tarif, devise, lien). Au-delà de ces champs
+  mappés en colonnes, la **réponse brute complète** du dernier `GET /wines/{id}` est aussi conservée
+  telle quelle (`Cuvee.wineapi_detail`), pour ne **jamais perdre une information remontée** — même non
+  encore exploitée ou ajoutée plus tard par l'API — et pouvoir re-dériver les champs sans re-consommer
+  le quota. L'enrichissement a lieu
   **à l'identification** (texte/image) et à la **synchro manuelle** (bouton 🔄). La fiche **lit alors
-  la base, sans appel réseau** — ce qui préserve le quota wineapi. Un vin importé avant cette
+  la base, sans appel réseau** — ce qui préserve le quota wineapi. Un ré-appel (« actualiser »)
+  **met à jour** les données (prix, scores…) et rafraîchit le snapshot brut. Un vin importé avant cette
   persistance est enrichi **paresseusement au premier accès** à sa fiche (une seule fois). Les champs
   absents retombent sur le conseil couleur. Quand wineapi signale un détail encore incomplet
   (`X-Update-Status: pending` / `pendingEnrichment`, enrichissement asynchrone en cours), il **n'est

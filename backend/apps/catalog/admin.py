@@ -17,10 +17,12 @@ class CepageAdmin(admin.ModelAdmin):
 
 @admin.register(Cuvee)
 class CuveeAdmin(admin.ModelAdmin):
-    list_display = ["nom", "domaine", "couleur", "appellation"]
+    list_display = ["nom", "domaine", "couleur", "appellation", "enrichi_le"]
     list_filter = ["couleur"]
     search_fields = ["nom", "domaine__nom", "code_barres"]
     autocomplete_fields = ["domaine", "cepages"]
+    # Snapshot brut wineapi : consultable mais non éditable (alimenté par la synchro).
+    readonly_fields = ["wineapi_detail", "enrichi_le"]
 
 
 admin.site.site_header = "Cave à Vin - Administration"

@@ -35,6 +35,10 @@ def enrich_cuvee_from_wineapi(cuvee: Cuvee, detail: dict | None) -> Cuvee:
         if valeur not in (None, "", []):
             setattr(cuvee, champ, valeur)
 
+    # Conserve la réponse brute complète (toutes les informations remontées, même
+    # celles non mappées ci-dessus). Le dernier appel fait foi : « actualiser »
+    # remplace le snapshot par les données fraîches (prix, scores...).
+    cuvee.wineapi_detail = detail
     cuvee.enrichi_le = timezone.now()
     cuvee.save()
 

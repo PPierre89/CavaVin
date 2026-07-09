@@ -76,6 +76,14 @@ class Cuvee(models.Model):
     prix_marchands = models.JSONField(
         default=list, blank=True, help_text="Prix marchands wineapi [{marchand, prix, devise, url}]."
     )
+    # Payload brut complet du dernier `GET /wines/{id}` wineapi.io. On conserve la
+    # réponse telle quelle (au-delà des seuls champs mappés ci-dessus) pour ne
+    # jamais perdre une information remontée par l'API — y compris les champs non
+    # encore exploités ou ajoutés plus tard — et pouvoir re-dériver les champs de
+    # fiche sans re-consommer le quota.
+    wineapi_detail = models.JSONField(
+        null=True, blank=True, help_text="Réponse brute du dernier GET /wines/{id} wineapi.io."
+    )
     enrichi_le = models.DateTimeField(null=True, blank=True, help_text="Dernière synchro wineapi.")
 
     class Meta:

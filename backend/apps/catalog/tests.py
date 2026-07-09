@@ -891,6 +891,24 @@ class EnrichCuveeTests(TestCase):
         self.assertEqual(self.cuvee.description, "Déjà là")  # conservé
         self.assertEqual(self.cuvee.corps, "Full-bodied")  # ajouté
 
+    def test_conserve_le_payload_brut_complet(self):
+        """Toutes les infos remontées sont stockées : le détail brut est persisté
+        tel quel, y compris les champs non mappés en colonnes."""
+        enrich_cuvee_from_wineapi(self.cuvee, _WINEAPI_FULL)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.wineapi_detail, _WINEAPI_FULL)
+        # Un champ non mappé en colonne (ex: la couleur des cépages) reste accessible.
+        self.assertEqual(self.cuvee.wineapi_detail["grapes"][0]["color"], "red")
+
+    def test_le_dernier_appel_rafraichit_le_snapshot(self):
+        """« Actualiser » remplace le snapshot par les données fraîches (prix...)."""
+        enrich_cuvee_from_wineapi(self.cuvee, _WINEAPI_FULL)
+        frais = {**_WINEAPI_FULL, "priceRange": {"min": 40, "max": 70, "currency": "EUR"}}
+        enrich_cuvee_from_wineapi(self.cuvee, frais)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.wineapi_detail["priceRange"]["max"], 70)
+        self.assertEqual(str(self.cuvee.prix_max), "70.00")
+
     def test_upsert_enrichit_via_raw(self):
         wine = NormalizedWine(
             domaine_nom="Dom", cuvee_nom="Cuv", reference_externe_id="w2",
