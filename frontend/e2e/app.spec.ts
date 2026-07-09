@@ -37,6 +37,9 @@ test('ouverture de la fiche vin depuis une alvéole', async ({ page }) => {
   await expect(page.getByText('Conseil de dégustation')).toBeVisible()
   await expect(page.getByText('3.9/5')).toBeVisible()
   await expect(page.getByText('Un Médoc élégant et structuré.')).toBeVisible()
+  // Statut de dégustation calculé + fenêtre d'apogée effective.
+  await expect(page.getByText('À boire').first()).toBeVisible()
+  await expect(page.getByText('2022-2031')).toBeVisible()
 })
 
 test("l'onglet Carnet est accessible", async ({ page }) => {
@@ -59,6 +62,8 @@ test("l'onglet Mes vins affiche la vinothèque et filtre la recherche", async ({
   await expect(page.getByText('Château Cantemerle').first()).toBeVisible()
   await expect(page.getByText('2019', { exact: true })).toBeVisible()
   await expect(page.getByText('x12')).toBeVisible()
+  // Le statut de dégustation calculé apparaît sur la carte vinothèque.
+  await expect(page.getByText('À boire').first()).toBeVisible()
 
   // La recherche filtre la liste : un terme absent vide la vinothèque.
   await page.getByPlaceholder('Cherchez un vin dans votre cave').fill('introuvable')

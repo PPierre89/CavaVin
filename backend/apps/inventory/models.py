@@ -4,6 +4,8 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
+from apps.catalog import apogee
+
 
 class Bouteille(models.Model):
     """
@@ -68,6 +70,24 @@ class Bouteille(models.Model):
     def clean(self):
         if self.apogee_debut and self.apogee_fin and self.apogee_debut > self.apogee_fin:
             raise ValidationError("L'année de début d'apogée doit précéder l'année de fin.")
+
+    def fenetre_apogee(self):
+        """Fenêtre d'apogée effective (année de début, année de fin).
+
+        La saisie manuelle prime : si au moins une borne est renseignée sur la
+        bouteille, on la respecte telle quelle. Sinon on l'estime depuis la
+        couleur de la cuvée et le millésime (base sommelière, cf. apogee.py).
+        """
+        if self.apogee_debut is not None or self.apogee_fin is not None:
+            return (self.apogee_debut, self.apogee_fin)
+        return apogee.fenetre_apogee(self.cuvee.couleur, self.millesime)
+
+    @property
+    def statut_apogee(self):
+        """Statut calculé (à garder / à boire / dépassé) déduit de la fenêtre
+        d'apogée effective et de l'année courante — pilote le code couleur."""
+        debut, fin = self.fenetre_apogee()
+        return apogee.statut_pour_fenetre(debut, fin)
 
 
 class MouvementStock(models.Model):

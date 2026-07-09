@@ -5,7 +5,7 @@ import { useToast } from '../toast'
 import { Card, CardTitle, Field, inputCls, primaryCls } from '../ui'
 import { VinIdentification } from '../components/VinIdentification'
 import type { IdentifiedWine } from '../identification'
-import type { Couleur, Cuvee, Domaine, Statut } from '../types'
+import type { Couleur, Cuvee, Domaine } from '../types'
 
 type Seg = 'bouteille' | 'emplacement' | 'cave'
 
@@ -104,7 +104,6 @@ function BottleForm({ onDone }: { onDone: () => void }) {
         millesime: g('millesime') ? parseInt(g('millesime'), 10) : null,
         quantite: parseInt(g('quantite') || '1', 10),
         emplacement: g('emplacement') ? parseInt(g('emplacement'), 10) : null,
-        statut: g('statut') as Statut,
         prix_achat: g('prix') ? parseFloat(g('prix')) : null,
         date_achat: g('date_achat') || null,
         apogee_debut: apogeeDebut ? parseInt(apogeeDebut, 10) : null,
@@ -186,29 +185,20 @@ function BottleForm({ onDone }: { onDone: () => void }) {
           <Field label="Quantité">
             <input name="quantite" type="number" inputMode="numeric" min={1} defaultValue={1} className={inputCls} />
           </Field>
-          <Field label="Statut">
-            <select name="statut" className={inputCls} defaultValue="A_GARDER">
-              <option value="A_GARDER">À garder</option>
-              <option value="A_BOIRE">À boire</option>
-              <option value="DEPASSE">Dépassé</option>
-            </select>
-          </Field>
-        </div>
-        <div className="grid grid-cols-2 gap-2.5">
           <Field label="Millésime" hint="facultatif">
             <input ref={millesimeRef} name="millesime" type="number" inputMode="numeric" placeholder="2018" className={inputCls} />
           </Field>
-          <Field label="Emplacement" hint="facultatif">
-            <select name="emplacement" className={inputCls} defaultValue="">
-              <option value="">— non placée —</option>
-              {emplacements.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.chemin}
-                </option>
-              ))}
-            </select>
-          </Field>
         </div>
+        <Field label="Emplacement" hint="facultatif">
+          <select name="emplacement" className={inputCls} defaultValue="">
+            <option value="">— non placée —</option>
+            {emplacements.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.chemin}
+              </option>
+            ))}
+          </select>
+        </Field>
         <div className="grid grid-cols-2 gap-2.5">
           <Field label="Prix (€)" hint="facultatif">
             <input name="prix" type="number" inputMode="decimal" step="0.01" placeholder="24.90" className={inputCls} />
@@ -225,6 +215,10 @@ function BottleForm({ onDone }: { onDone: () => void }) {
             <input name="apogee_fin" type="number" inputMode="numeric" placeholder="2030" className={inputCls} />
           </Field>
         </div>
+        <p className="text-muted text-xs mt-1">
+          Le statut (à garder / à boire / dépassé) est calculé automatiquement à partir du millésime et
+          de la couleur. Renseigne l'apogée pour l'affiner.
+        </p>
         <Field label="Notes" hint="facultatif">
           <textarea name="notes" rows={2} className={inputCls} placeholder="Occasion, cadeau, coup de cœur…" />
         </Field>

@@ -24,6 +24,13 @@ class BouteilleSerializer(serializers.ModelSerializer):
     cuvee_nom = serializers.CharField(source="cuvee.nom", read_only=True)
     domaine_nom = serializers.CharField(source="cuvee.domaine.nom", read_only=True)
     emplacement_chemin = serializers.SerializerMethodField()
+    # Statut de dégustation *calculé* (à garder / à boire / dépassé), déduit de la
+    # fenêtre d'apogée effective et de l'année courante. C'est lui qui pilote le
+    # code couleur ; il remplace en lecture la valeur stockée (souvent neutre).
+    statut = serializers.CharField(source="statut_apogee", read_only=True)
+    # Fenêtre d'apogée effective : saisie manuelle si présente, sinon estimée.
+    apogee_debut_effectif = serializers.SerializerMethodField()
+    apogee_fin_effectif = serializers.SerializerMethodField()
 
     class Meta:
         model = Bouteille
@@ -42,6 +49,8 @@ class BouteilleSerializer(serializers.ModelSerializer):
             "date_achat",
             "apogee_debut",
             "apogee_fin",
+            "apogee_debut_effectif",
+            "apogee_fin_effectif",
             "notes",
             "cree_le",
             "maj_le",
@@ -50,6 +59,12 @@ class BouteilleSerializer(serializers.ModelSerializer):
 
     def get_emplacement_chemin(self, obj) -> str | None:
         return obj.emplacement.chemin() if obj.emplacement else None
+
+    def get_apogee_debut_effectif(self, obj) -> int | None:
+        return obj.fenetre_apogee()[0]
+
+    def get_apogee_fin_effectif(self, obj) -> int | None:
+        return obj.fenetre_apogee()[1]
 
     def validate_emplacement(self, emplacement):
         request = self.context.get("request")

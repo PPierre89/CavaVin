@@ -3,7 +3,22 @@ import { api, errMsg } from '../api'
 import { useData } from '../data'
 import { useToast } from '../toast'
 import { Sheet, inputCls, labelCls, primaryCls } from '../ui'
-import { COULEUR_LABELS, STATUT_LABELS, type Bouteille, type Couleur, type Statut } from '../types'
+import {
+  COULEUR_LABELS,
+  STATUT_COLORS,
+  STATUT_LABELS,
+  type Bouteille,
+  type Couleur,
+  type Statut,
+} from '../types'
+
+/** Formate une fenêtre d'apogée (« 2024-2035 », « dès 2024 », « avant 2035 »). */
+function formatApogee(debut: number | null, fin: number | null): string | null {
+  if (debut && fin) return `${debut}–${fin}`
+  if (debut) return `dès ${debut}`
+  if (fin) return `avant ${fin}`
+  return null
+}
 
 const SLOT_BG: Record<Couleur, string> = {
   ROUGE: 'radial-gradient(circle at 32% 30%, #a84a62, #8e2f45)',
@@ -101,9 +116,17 @@ export function BottleSheet({ b, onClose }: { b: Bouteille | null; onClose: () =
             <span className="text-xs px-2.5 py-1 rounded-full border border-gold-soft text-gold">
               {COULEUR_LABELS[cuveeColor(b)]}
             </span>
-            <span className="text-xs px-2.5 py-1 rounded-full border border-gold/15 text-muted">
+            <span
+              className="text-xs px-2.5 py-1 rounded-full border font-medium"
+              style={{ color: STATUT_COLORS[b.statut], borderColor: STATUT_COLORS[b.statut] }}
+            >
               {STATUT_LABELS[b.statut]}
             </span>
+            {formatApogee(b.apogee_debut_effectif, b.apogee_fin_effectif) && (
+              <span className="text-xs px-2.5 py-1 rounded-full border border-gold/15 text-muted">
+                🍷 {formatApogee(b.apogee_debut_effectif, b.apogee_fin_effectif)}
+              </span>
+            )}
             <span className="text-xs px-2.5 py-1 rounded-full border border-gold/15 text-muted">
               × {b.quantite} en stock
             </span>

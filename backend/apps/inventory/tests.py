@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -161,6 +162,56 @@ class NoteDegustationTests(APITestCase):
         resp = self.client.get(self.url, {"cuvee": self.cuvee.pk})
         results = resp.data["results"] if isinstance(resp.data, dict) else resp.data
         self.assertEqual(len(results), 1)
+
+
+class ApogeeStatutTests(APITestCase):
+    """La fenêtre d'apogée et le statut sont calculés (couleur × millésime × année)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="alice", password="x")
+        self.domaine = Domaine.objects.create(nom="Domaine Apogée")
+        self.rouge = Cuvee.objects.create(
+            domaine=self.domaine, nom="Garde", couleur=Cuvee.Couleur.ROUGE
+        )
+        self.client.force_authenticate(self.user)
+
+    def test_statut_calcule_expose_par_le_serializer(self):
+        # Rouge millésime N-6 : fenêtre N-3..N+6 -> à boire aujourd'hui.
+        annee = timezone.now().year
+        bouteille = Bouteille.objects.create(
+            proprietaire=self.user, cuvee=self.rouge, millesime=annee - 6, quantite=3
+        )
+        resp = self.client.get(reverse("bouteille-detail", args=[bouteille.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["statut"], Bouteille.Statut.A_BOIRE)
+        self.assertEqual(resp.data["apogee_debut_effectif"], annee - 3)
+        self.assertEqual(resp.data["apogee_fin_effectif"], annee + 6)
+
+    def test_saisie_manuelle_prime_sur_l_estimation(self):
+        bouteille = Bouteille.objects.create(
+            proprietaire=self.user,
+            cuvee=self.rouge,
+            millesime=2015,
+            quantite=1,
+            apogee_debut=2016,
+            apogee_fin=2018,  # fenêtre dépassée
+        )
+        resp = self.client.get(reverse("bouteille-detail", args=[bouteille.pk]))
+        self.assertEqual(resp.data["apogee_debut_effectif"], 2016)
+        self.assertEqual(resp.data["apogee_fin_effectif"], 2018)
+        self.assertEqual(resp.data["statut"], Bouteille.Statut.DEPASSE)
+
+    def test_fiche_millesime_porte_fenetre_et_statut(self):
+        annee = timezone.now().year
+        Bouteille.objects.create(
+            proprietaire=self.user, cuvee=self.rouge, millesime=annee - 6, quantite=2
+        )
+        resp = self.client.get(reverse("cuvee-fiche", args=[self.rouge.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        millesime = resp.data["millesimes"][0]
+        self.assertEqual(millesime["apogee_debut"], annee - 3)
+        self.assertEqual(millesime["apogee_fin"], annee + 6)
+        self.assertEqual(millesime["statut"], Bouteille.Statut.A_BOIRE)
 
 
 class FicheMaNoteTests(APITestCase):
