@@ -8,6 +8,7 @@ import JournalScreen from './screens/JournalScreen'
 import CarnetScreen from './screens/CarnetScreen'
 import MesVinsScreen from './screens/MesVinsScreen'
 import { Logo } from './ui'
+import { APP_VERSION } from './version'
 
 type Tab = 'cave' | 'mesvins' | 'ajouter' | 'journal' | 'carnet'
 type Seg = 'bouteille' | 'emplacement' | 'cave'
@@ -41,12 +42,15 @@ function Shell() {
             <span className="text-[0.56rem] tracking-[3px] uppercase text-gold mt-[3px]">des vins</span>
           </div>
         </div>
-        <span className="text-[0.75rem] text-muted text-right">
-          {username} ·{' '}
-          <button onClick={logout} className="text-gold">
-            sortir
-          </button>
-        </span>
+        <div className="flex flex-col items-end leading-tight">
+          <span className="text-[0.75rem] text-muted text-right">
+            {username} ·{' '}
+            <button onClick={logout} className="text-gold">
+              sortir
+            </button>
+          </span>
+          <span className="text-[0.58rem] text-muted/60 tabular-nums">v{APP_VERSION}</span>
+        </div>
       </header>
 
       <main

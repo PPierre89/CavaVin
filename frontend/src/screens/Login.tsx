@@ -3,6 +3,7 @@ import { useAuth } from '../auth'
 import { errMsg } from '../api'
 import { useToast } from '../toast'
 import { Logo, inputCls, primaryCls } from '../ui'
+import { APP_VERSION } from '../version'
 
 export default function Login() {
   const { login, register } = useAuth()
@@ -95,6 +96,8 @@ export default function Login() {
           )}
         </button>
       </form>
+
+      <div className="text-[0.62rem] text-muted/60 mt-6 tabular-nums">v{APP_VERSION}</div>
     </div>
   )
 }

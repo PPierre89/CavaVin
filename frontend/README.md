@@ -58,6 +58,9 @@ frontend/
   `border-line`, `glass`, `rounded-card`…) : réutiliser ces tokens plutôt que des valeurs brutes.
 - Ajout de vin par défaut = **photo d'étiquette** ; scan code-barres et recherche par nom sont des
   méthodes de repli (`VinIdentification` / `identification.ts`).
+- **Version de l'app** : source de vérité unique dans `package.json`, injectée à la compilation par
+  Vite (`define: __APP_VERSION__`, exposée via `src/version.ts`) et affichée discrètement dans l'UI
+  (en-tête et écran de connexion). Bumper la version = éditer `package.json`.
 
 ## Production
 
