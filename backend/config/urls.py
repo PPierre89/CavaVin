@@ -3,7 +3,6 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import (
-    TokenObtainPairView,
     TokenRefreshView,
     TokenVerifyView,
 )
@@ -23,7 +22,7 @@ from apps.inventory.views import (
     NoteDegustationViewSet,
     RangementViewSet,
 )
-from .auth import RegisterView
+from .auth import RegisterView, ThrottledTokenObtainPairView
 from .views import index
 
 router = DefaultRouter()
@@ -46,7 +45,7 @@ urlpatterns = [
     path("api/scan-etiquette/", ScanEtiquetteView.as_view(), name="scan-etiquette"),
     path("api/auth/", include("rest_framework.urls")),
     path("api/auth/register/", RegisterView.as_view(), name="register"),
-    path("api/auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("api/auth/token/", ThrottledTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/auth/token/verify/", TokenVerifyView.as_view(), name="token_verify"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
