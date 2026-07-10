@@ -34,6 +34,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Bootstrap unique : sans tag de version préexistant, semantic-release
+      # démarrerait sa première release à 1.0.0. On pose donc l'ancre v0.1.0 au
+      # premier passage pour rester sur la ligne 0.x — la prochaine feat donnera
+      # v0.2.0. Idempotent : ne fait rien dès qu'un tag v* existe.
+      - name: Bootstrap de la version initiale (v0.1.0)
+        run: |
+          if [ -z "$(git tag -l 'v*')" ]; then
+            echo "Aucun tag de version : création de l'ancre v0.1.0."
+            git tag v0.1.0
+            git push origin v0.1.0
+          else
+            echo "Tag(s) de version déjà présent(s) — rien à faire."
+          fi
+
       - name: Semantic Release
         id: semantic
         uses: cycjimmy/semantic-release-action@v4
