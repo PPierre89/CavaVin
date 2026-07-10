@@ -3,7 +3,13 @@ import { api, errMsg } from '../api'
 import { useData } from '../data'
 import { useToast } from '../toast'
 import { Sheet, StatutBadge, inputCls, labelCls, primaryCls } from '../ui'
-import { COULEUR_LABELS, type Bouteille, type Couleur, type Statut } from '../types'
+import {
+  COULEUR_LABELS,
+  type Bouteille,
+  type Couleur,
+  type Disposition,
+  type Statut,
+} from '../types'
 
 /** Formate une fenêtre d'apogée (« 2024-2035 », « dès 2024 », « avant 2035 »). */
 function formatApogee(debut: number | null, fin: number | null): string | null {
@@ -54,6 +60,49 @@ export function Slot({
       style={{ width: size, height: size, background: SLOT_BG[couleur], borderColor: ring, color: light ? '#5b4b1f' : '#fff' }}
       className="rounded-full border-[3px] shadow-[inset_0_-3px_6px_rgba(0,0,0,0.35)] active:scale-95 transition"
     />
+  )
+}
+
+/**
+ * Rendu d'une rangée en grille : `cols` bouteilles de large sur `rows` niveaux.
+ * La disposition décalée fait glisser une rangée sur deux d'une demi-bouteille,
+ * pour reproduire l'empilement en quinconce d'un vrai casier à vin.
+ */
+export function RackGrid({
+  cols,
+  rows,
+  disposition = 'ALIGNE',
+  size = 38,
+  gap = 10,
+  renderSlot,
+}: {
+  cols: number
+  rows: number
+  disposition?: Disposition
+  size?: number
+  gap?: number
+  renderSlot: (index: number) => React.ReactNode
+}) {
+  const half = (size + gap) / 2
+  const rowEls: React.ReactNode[] = []
+  for (let r = 0; r < rows; r++) {
+    const slots: React.ReactNode[] = []
+    for (let c = 0; c < cols; c++) slots.push(renderSlot(r * cols + c))
+    let marginLeft = 0
+    if (disposition === 'DECALE_DROITE') marginLeft = r % 2 === 1 ? half : 0
+    else if (disposition === 'DECALE_GAUCHE') marginLeft = r % 2 === 0 ? half : 0
+    rowEls.push(
+      <div key={r} className="flex w-max" style={{ gap, marginLeft }}>
+        {slots}
+      </div>,
+    )
+  }
+  return (
+    <div className="overflow-x-auto no-scrollbar">
+      <div className="flex flex-col w-max" style={{ gap }}>
+        {rowEls}
+      </div>
+    </div>
   )
 }
 

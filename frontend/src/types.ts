@@ -1,6 +1,7 @@
 export type Couleur = 'ROUGE' | 'BLANC' | 'ROSE' | 'BULLES' | 'AUTRE'
 export type Statut = 'A_GARDER' | 'A_BOIRE' | 'DEPASSE'
 export type TypeEmplacement = 'ARMOIRE' | 'CASIER' | 'CLAYETTE' | 'CAISSE' | 'CASE'
+export type Disposition = 'ALIGNE' | 'DECALE_GAUCHE' | 'DECALE_DROITE'
 
 export interface Cave {
   id: number
@@ -20,6 +21,9 @@ export interface Emplacement {
   nom: string
   type_emplacement: TypeEmplacement
   capacite: number | null
+  nb_colonnes: number | null
+  nb_rangees: number | null
+  disposition: Disposition
   chemin: string
   occupation_actuelle: number
 }
@@ -185,4 +189,9 @@ export const TYPE_LABELS: Record<TypeEmplacement, string> = {
   CLAYETTE: 'Clayette',
   CAISSE: 'Caisse bois',
   CASE: 'Case',
+}
+export const DISPOSITION_LABELS: Record<Disposition, string> = {
+  ALIGNE: 'Aligné',
+  DECALE_GAUCHE: 'Décalé à gauche',
+  DECALE_DROITE: 'Décalé à droite',
 }

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useData } from '../data'
 import { Card, Chip } from '../ui'
-import { BottleSheet, Slot } from '../components/bottle'
+import { BottleSheet, RackGrid, Slot } from '../components/bottle'
 import { FicheVin } from '../components/FicheVin'
 import { TYPE_LABELS, type Bouteille, type Emplacement } from '../types'
 
@@ -46,7 +46,10 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
   const Node = ({ emp }: { emp: Emplacement }) => {
     const bottles = bottlesFor(emp.id)
     const children = emplacements.filter((e) => e.parent === emp.id)
-    const cap = emp.capacite
+    const isGrid = !!(emp.nb_colonnes && emp.nb_rangees)
+    const cap = emp.capacite ?? (isGrid ? emp.nb_colonnes! * emp.nb_rangees! : null)
+    // Développe le stock (quantité) en emplacements individuels, plafonnés pour
+    // l'affichage. Chaque case pleine reste cliquable vers la fiche du vin.
     const slots: React.ReactNode[] = []
     let rendus = 0
     for (const b of bottles) {
@@ -73,6 +76,7 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
           <div>
             <span className="block text-gold text-[0.68rem] uppercase tracking-wider mb-0.5">
               {TYPE_LABELS[emp.type_emplacement]}
+              {isGrid && ` · ${emp.nb_colonnes}×${emp.nb_rangees}`}
             </span>
             <span className="text-[0.92rem] font-semibold">{emp.nom}</span>
           </div>
@@ -81,7 +85,19 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
             {cap ? ` / ${cap}` : ''} btl
           </span>
         </div>
-        {slots.length > 0 && <div className="flex flex-wrap gap-2.5 mt-3">{slots}</div>}
+        {slots.length > 0 &&
+          (isGrid ? (
+            <div className="mt-3">
+              <RackGrid
+                cols={emp.nb_colonnes!}
+                rows={emp.nb_rangees!}
+                disposition={emp.disposition}
+                renderSlot={(i) => slots[i] ?? <Slot key={`pad-${i}`} empty />}
+              />
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2.5 mt-3">{slots}</div>
+          ))}
         {children.map((c) => (
           <div key={c.id} className="mt-2.5">
             <Node emp={c} />

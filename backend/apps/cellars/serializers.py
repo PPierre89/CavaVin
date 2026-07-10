@@ -18,6 +18,9 @@ class EmplacementSerializer(serializers.ModelSerializer):
             "capacite",
             "ligne",
             "colonne",
+            "nb_colonnes",
+            "nb_rangees",
+            "disposition",
             "chemin",
             "occupation_actuelle",
         ]
@@ -25,6 +28,21 @@ class EmplacementSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         cave = attrs.get("cave") or (self.instance.cave if self.instance else None)
         parent = attrs.get("parent") or (self.instance.parent if self.instance else None)
+
+        # Une grille se décrit par ses deux dimensions : refuser une demi-grille
+        # évite une capacité incohérente ou un rendu bancal côté client.
+        def resolved(field):
+            if field in attrs:
+                return attrs[field]
+            return getattr(self.instance, field, None) if self.instance else None
+
+        cols, rows = resolved("nb_colonnes"), resolved("nb_rangees")
+        if bool(cols) != bool(rows):
+            raise serializers.ValidationError(
+                {
+                    "nb_colonnes": "Renseignez la largeur et la hauteur ensemble, ou aucune des deux."
+                }
+            )
 
         request = self.context.get("request")
         if cave and request and cave.proprietaire != request.user:

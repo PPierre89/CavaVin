@@ -73,3 +73,66 @@ class EmplacementCycleTests(APITestCase):
         resp = self.client.patch(url, {"parent": self.clayette.pk})
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("parent", resp.data)
+
+
+class EmplacementGrilleTests(APITestCase):
+    """La grille (largeur × hauteur) pilote automatiquement la capacité."""
+
+    def setUp(self):
+        user = get_user_model().objects.create_user(username="bob", password="x")
+        self.cave = Cave.objects.create(proprietaire=user, nom="Cave")
+        self.client.force_authenticate(user)
+
+    def _url(self):
+        return reverse("emplacement-list")
+
+    def test_capacite_deduite_de_la_grille(self):
+        emp = Emplacement.objects.create(
+            cave=self.cave,
+            nom="Armoire",
+            type_emplacement=Emplacement.TypeEmplacement.ARMOIRE,
+            nb_colonnes=6,
+            nb_rangees=5,
+        )
+        emp.refresh_from_db()
+        self.assertEqual(emp.capacite, 30)
+
+    def test_capacite_recalculee_a_la_modification(self):
+        emp = Emplacement.objects.create(
+            cave=self.cave, nom="Armoire",
+            type_emplacement=Emplacement.TypeEmplacement.ARMOIRE,
+            nb_colonnes=6, nb_rangees=5,
+        )
+        emp.nb_rangees = 4
+        emp.save()
+        emp.refresh_from_db()
+        self.assertEqual(emp.capacite, 24)
+
+    def test_api_cree_une_grille(self):
+        resp = self.client.post(
+            self._url(),
+            {
+                "cave": self.cave.pk,
+                "nom": "Armoire 1",
+                "type_emplacement": Emplacement.TypeEmplacement.ARMOIRE,
+                "nb_colonnes": 4,
+                "nb_rangees": 3,
+                "disposition": Emplacement.Disposition.DECALE_DROITE,
+            },
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp.data["capacite"], 12)
+        self.assertEqual(resp.data["disposition"], "DECALE_DROITE")
+
+    def test_api_refuse_une_demi_grille(self):
+        resp = self.client.post(
+            self._url(),
+            {
+                "cave": self.cave.pk,
+                "nom": "Armoire bancale",
+                "type_emplacement": Emplacement.TypeEmplacement.ARMOIRE,
+                "nb_colonnes": 6,
+            },
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("nb_colonnes", resp.data)
