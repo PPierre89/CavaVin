@@ -5,12 +5,13 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .models import Bouteille, MouvementStock, NoteDegustation
+from .models import Bouteille, MouvementStock, NoteDegustation, Rangement
 from .serializers import (
     BouteilleSerializer,
     ConsommerSerializer,
     MouvementStockSerializer,
     NoteDegustationSerializer,
+    RangementSerializer,
 )
 
 
@@ -58,12 +59,29 @@ class BouteilleViewSet(viewsets.ModelViewSet):
             )
 
         bouteille.refresh_from_db()
+        # La consommation peut rendre des cases excédentaires : on les libère.
+        bouteille.synchroniser_rangements()
         return Response(
             {
                 "bouteille": BouteilleSerializer(bouteille, context={"request": request}).data,
                 "mouvement": MouvementStockSerializer(mouvement).data,
             },
             status=status.HTTP_200_OK,
+        )
+
+
+class RangementViewSet(viewsets.ModelViewSet):
+    """Placement case par case des bouteilles dans les grilles d'emplacement."""
+
+    serializer_class = RangementSerializer
+    filterset_fields = ["emplacement", "bouteille", "emplacement__cave"]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_authenticated:
+            return Rangement.objects.none()
+        return Rangement.objects.filter(bouteille__proprietaire=user).select_related(
+            "bouteille__cuvee", "emplacement"
         )
 
 

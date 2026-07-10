@@ -64,6 +64,14 @@ export interface Bouteille {
   apogee_fin_effectif: number | null
 }
 
+/** Placement case par case : une bouteille physique dans une case d'une grille. */
+export interface Rangement {
+  id: number
+  bouteille: number
+  emplacement: number
+  case: number
+}
+
 /* ---------- Fiche vin consolidée (GET /api/cuvees/{id}/fiche/) ---------- */
 export interface AxeGustatif {
   gauche: string

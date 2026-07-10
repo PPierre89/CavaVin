@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { api, apiAllPages } from './api'
-import type { Bouteille, Cave, Couleur, Cuvee, Emplacement, Mouvement } from './types'
+import type { Bouteille, Cave, Couleur, Cuvee, Emplacement, Mouvement, Rangement } from './types'
 
 interface DataCtx {
   caves: Cave[]
@@ -16,6 +16,7 @@ interface DataCtx {
   setCaveId: (id: number) => void
   emplacements: Emplacement[]
   bouteilles: Bouteille[]
+  rangements: Rangement[]
   cuvees: Cuvee[]
   mouvements: Mouvement[]
   loading: boolean
@@ -33,19 +34,22 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [caveId, setCaveIdState] = useState<number | null>(null)
   const [emplacements, setEmplacements] = useState<Emplacement[]>([])
   const [bouteilles, setBouteilles] = useState<Bouteille[]>([])
+  const [rangements, setRangements] = useState<Rangement[]>([])
   const [cuvees, setCuvees] = useState<Cuvee[]>([])
   const [mouvements, setMouvements] = useState<Mouvement[]>([])
   const [loading, setLoading] = useState(true)
 
   const refreshFor = useCallback(async (cid: number | null) => {
-    const [emps, btls, cvs, mvts] = await Promise.all([
+    const [emps, btls, rgs, cvs, mvts] = await Promise.all([
       cid ? apiAllPages<Emplacement>(`/api/emplacements/?cave=${cid}`) : Promise.resolve([]),
       apiAllPages<Bouteille>('/api/bouteilles/'),
+      cid ? apiAllPages<Rangement>(`/api/rangements/?emplacement__cave=${cid}`) : Promise.resolve([]),
       apiAllPages<Cuvee>('/api/cuvees/'),
       api<{ results?: Mouvement[] } | Mouvement[]>('GET', '/api/mouvements/?ordering=-date'),
     ])
     setEmplacements(emps)
     setBouteilles(btls)
+    setRangements(rgs)
     setCuvees(cvs)
     setMouvements((Array.isArray(mvts) ? mvts : mvts.results || []).slice(0, 30))
   }, [])
@@ -90,6 +94,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         setCaveId,
         emplacements,
         bouteilles,
+        rangements,
         cuvees,
         mouvements,
         loading,

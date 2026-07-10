@@ -43,12 +43,20 @@ export function Slot({
   onClick?: () => void
 }) {
   if (empty || !couleur) {
-    return (
-      <div
-        style={{ width: size, height: size }}
-        className="rounded-full border-2 border-dashed border-gold/15"
-      />
-    )
+    const emptyCls = 'rounded-full border-2 border-dashed border-gold/15'
+    // Une case vide devient cliquable dès qu'on fournit un onClick (placement
+    // case par case) ; sinon elle reste un simple repère visuel.
+    if (onClick) {
+      return (
+        <button
+          onClick={onClick}
+          title={title}
+          style={{ width: size, height: size }}
+          className={`${emptyCls} active:scale-95 hover:border-gold/40 transition`}
+        />
+      )
+    }
+    return <div style={{ width: size, height: size }} className={emptyCls} />
   }
   const ring =
     statut === 'A_BOIRE' ? 'var(--color-ok)' : statut === 'DEPASSE' ? 'var(--color-alerte)' : 'transparent'

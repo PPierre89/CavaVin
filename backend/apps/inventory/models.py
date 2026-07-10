@@ -89,6 +89,51 @@ class Bouteille(models.Model):
         debut, fin = self.fenetre_apogee()
         return apogee.statut_pour_fenetre(debut, fin)
 
+    def synchroniser_rangements(self):
+        """Libère les cases en trop quand la quantité diminue (ou tombe à 0).
+
+        Une ligne de stock ne peut pas occuper plus de cases qu'elle ne compte
+        d'unités : après une consommation, on retire d'abord les cases d'index
+        les plus élevés (les dernières rangées).
+        """
+        surplus = self.rangements.count() - self.quantite
+        if surplus > 0:
+            a_liberer = list(
+                self.rangements.order_by("-case").values_list("pk", flat=True)[:surplus]
+            )
+            Rangement.objects.filter(pk__in=a_liberer).delete()
+
+
+class Rangement(models.Model):
+    """
+    Assignation d'une bouteille physique à une case précise d'un emplacement en
+    grille (placement « case par case »). Une case ne contient qu'une bouteille ;
+    une ligne de stock (Bouteille de quantité N) peut occuper jusqu'à N cases,
+    rangées une par une.
+    """
+
+    bouteille = models.ForeignKey(
+        Bouteille, on_delete=models.CASCADE, related_name="rangements"
+    )
+    emplacement = models.ForeignKey(
+        "cellars.Emplacement", on_delete=models.CASCADE, related_name="rangements"
+    )
+    case = models.PositiveIntegerField(
+        help_text="Index 0-based de la case dans la grille (ligne × nb_colonnes + colonne)."
+    )
+
+    class Meta:
+        ordering = ["emplacement_id", "case"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["emplacement", "case"],
+                name="rangement_case_unique_par_emplacement",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.bouteille} → case {self.case}"
+
 
 class MouvementStock(models.Model):
     """Historique des entrées/sorties/consommations sur une ligne de stock."""
