@@ -23,6 +23,7 @@ from .enrichment import (
 from .enrichment.normalize import strip_vintage
 from .ingest import enrich_cuvee_from_wineapi, upsert_cuvee
 from .models import Cepage, Cuvee, Domaine
+from .permissions import LectureOuEcritureSansSuppression
 from .serializers import (
     CepageSerializer,
     CuveeSerializer,
@@ -66,6 +67,7 @@ def _enriched_response(wine, cuvee, created):
 class DomaineViewSet(viewsets.ModelViewSet):
     queryset = Domaine.objects.all()
     serializer_class = DomaineSerializer
+    permission_classes = [LectureOuEcritureSansSuppression]
     search_fields = ["nom", "region", "pays"]
     filterset_fields = ["region", "pays"]
 
@@ -73,6 +75,7 @@ class DomaineViewSet(viewsets.ModelViewSet):
 class CepageViewSet(viewsets.ModelViewSet):
     queryset = Cepage.objects.all()
     serializer_class = CepageSerializer
+    permission_classes = [LectureOuEcritureSansSuppression]
     search_fields = ["nom"]
 
 
@@ -204,6 +207,7 @@ def _build_fiche(cuvee, user):
 class CuveeViewSet(viewsets.ModelViewSet):
     queryset = Cuvee.objects.select_related("domaine").prefetch_related("cepages")
     serializer_class = CuveeSerializer
+    permission_classes = [LectureOuEcritureSansSuppression]
     search_fields = ["nom", "domaine__nom", "appellation", "code_barres"]
     filterset_fields = ["couleur", "domaine"]
 

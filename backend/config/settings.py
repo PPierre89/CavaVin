@@ -42,6 +42,16 @@ CSRF_TRUSTED_ORIGINS = [
 # DJANGO_TRUST_PROXY_SSL=True.
 if os.getenv("DJANGO_TRUST_PROXY_SSL", "False") == "True":
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    # L'accès se fait alors en HTTPS : on n'expose plus les cookies sensibles
+    # (session admin, jeton CSRF) sur une éventuelle connexion en clair.
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    # HSTS : opt-in (défaut 0 = désactivé) pour ne pas verrouiller par erreur un
+    # accès LAN en HTTPS. Mets p. ex. DJANGO_HSTS_SECONDS=31536000 (1 an) une fois
+    # le HTTPS stable et permanent sur le domaine d'accès distant.
+    SECURE_HSTS_SECONDS = int(os.getenv("DJANGO_HSTS_SECONDS", "0"))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_HSTS_SECONDS > 0
+    SECURE_HSTS_PRELOAD = SECURE_HSTS_SECONDS > 0
 
 
 INSTALLED_APPS = [
@@ -148,6 +158,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Traduit ProtectedError (suppression d'un objet encore référencé) en 409
+    # au lieu d'un 500 brut.
+    "EXCEPTION_HANDLER": "config.exceptions.exception_handler",
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",

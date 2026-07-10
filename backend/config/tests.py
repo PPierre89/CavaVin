@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -47,3 +49,26 @@ class RegisterViewTests(APITestCase):
         resp = self.client.post(self.url, {"username": "alice", "password": "123"})
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertNotIn("access", resp.data)
+
+
+class LoginThrottleTests(APITestCase):
+    """Le login JWT (`/api/auth/token/`) est plafonné (scope ``auth``) pour couper
+    le brute-force de mot de passe : au-delà de la limite -> 429."""
+
+    def setUp(self):
+        cache.clear()  # compteur de throttle "auth"
+        self.url = reverse("token_obtain_pair")
+        User.objects.create_user(username="bob", password="un-mot-de-passe-costaud")
+
+    # DRF fige DEFAULT_THROTTLE_RATES à l'import : on patche l'attribut de classe.
+    @patch.dict(
+        "rest_framework.throttling.SimpleRateThrottle.THROTTLE_RATES",
+        {"auth": "3/min"},
+    )
+    def test_429_apres_trop_de_tentatives(self):
+        for _ in range(3):
+            resp = self.client.post(self.url, {"username": "bob", "password": "faux"})
+            self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        # La tentative suivante est bloquée par le throttle, pas par les identifiants.
+        resp = self.client.post(self.url, {"username": "bob", "password": "faux"})
+        self.assertEqual(resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)

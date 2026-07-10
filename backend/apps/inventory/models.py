@@ -175,8 +175,12 @@ class NoteDegustation(models.Model):
     proprietaire = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="degustations"
     )
+    # PROTECT (et non CASCADE) : une note de dégustation est une donnée *privée*.
+    # Supprimer une cuvée du catalogue mutualisé ne doit jamais effacer en cascade
+    # le carnet d'un autre utilisateur (garde-fou RGPD, en plus de la permission
+    # qui réserve déjà la suppression du catalogue au staff).
     cuvee = models.ForeignKey(
-        "catalog.Cuvee", on_delete=models.CASCADE, related_name="degustations"
+        "catalog.Cuvee", on_delete=models.PROTECT, related_name="degustations"
     )
     millesime = models.PositiveIntegerField(
         null=True, blank=True, help_text="Millésime dégusté (facultatif)."

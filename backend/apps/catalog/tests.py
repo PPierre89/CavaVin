@@ -1025,3 +1025,86 @@ class FicheDepuisBaseTests(APITestCase):
         mock_detail.assert_called_once_with("w9")
         neuf.refresh_from_db()
         self.assertIsNotNone(neuf.enrichi_le)  # persisté au premier accès
+
+
+class CatalogueSuppressionPermissionTests(APITestCase):
+    """Le catalogue mutualisé est écrivable par tout utilisateur authentifié, mais
+    sa *suppression* est réservée au staff : effacer une référence partagée peut
+    détruire en cascade des données privées d'autres utilisateurs (RGPD)."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Château Partagé")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine, nom="Cuvée Partagée", couleur="ROUGE"
+        )
+
+    def test_utilisateur_lambda_ne_peut_pas_supprimer_une_cuvee(self):
+        self.client.force_authenticate(User.objects.create_user("alice", password="x"))
+        resp = self.client.delete(reverse("cuvee-detail", args=[self.cuvee.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(Cuvee.objects.filter(pk=self.cuvee.pk).exists())
+
+    def test_utilisateur_lambda_peut_toujours_editer_le_catalogue(self):
+        # L'écriture (catalogue communautaire) reste ouverte aux authentifiés.
+        self.client.force_authenticate(User.objects.create_user("alice", password="x"))
+        resp = self.client.patch(
+            reverse("cuvee-detail", args=[self.cuvee.pk]), {"appellation": "Médoc"}
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_staff_peut_supprimer_une_cuvee_libre(self):
+        staff = User.objects.create_user("admin", password="x", is_staff=True)
+        self.client.force_authenticate(staff)
+        resp = self.client.delete(reverse("cuvee-detail", args=[self.cuvee.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Cuvee.objects.filter(pk=self.cuvee.pk).exists())
+
+    def test_anonyme_ne_peut_pas_supprimer(self):
+        resp = self.client.delete(reverse("domaine-detail", args=[self.domaine.pk]))
+        self.assertIn(
+            resp.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )
+
+
+class SuppressionProtegeeTests(APITestCase):
+    """La suppression d'une référence encore utilisée renvoie un 409 propre (et non
+    un 500), et n'efface jamais les données privées liées."""
+
+    def setUp(self):
+        from apps.inventory.models import Bouteille, NoteDegustation
+
+        self.Bouteille = Bouteille
+        self.NoteDegustation = NoteDegustation
+        self.staff = User.objects.create_user("admin", password="x", is_staff=True)
+        self.autre = User.objects.create_user("bob", password="x")
+        self.domaine = Domaine.objects.create(nom="Château Y")
+        self.cuvee = Cuvee.objects.create(domaine=self.domaine, nom="C", couleur="ROUGE")
+
+    def test_supprimer_une_cuvee_avec_stock_renvoie_409(self):
+        self.Bouteille.objects.create(proprietaire=self.autre, cuvee=self.cuvee, quantite=1)
+        self.client.force_authenticate(self.staff)
+        resp = self.client.delete(reverse("cuvee-detail", args=[self.cuvee.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+        self.assertTrue(Cuvee.objects.filter(pk=self.cuvee.pk).exists())
+
+    def test_supprimer_une_cuvee_notee_par_autrui_renvoie_409_sans_perte(self):
+        # Une note de dégustation est privée : sa cuvée ne doit pas disparaître
+        # (PROTECT) et surtout la note ne doit pas être détruite en cascade.
+        self.NoteDegustation.objects.create(proprietaire=self.autre, cuvee=self.cuvee, note="4.5")
+        self.client.force_authenticate(self.staff)
+        resp = self.client.delete(reverse("cuvee-detail", args=[self.cuvee.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(
+            self.NoteDegustation.objects.filter(proprietaire=self.autre).count(), 1
+        )
+
+    def test_supprimer_un_domaine_dont_une_cuvee_a_du_stock_renvoie_409(self):
+        # Domaine -> cuvée est en CASCADE, mais cuvée -> bouteille est en PROTECT :
+        # la cascade bute sur le stock et remonte un 409 au lieu d'un 500.
+        self.Bouteille.objects.create(proprietaire=self.autre, cuvee=self.cuvee, quantite=1)
+        self.client.force_authenticate(self.staff)
+        resp = self.client.delete(reverse("domaine-detail", args=[self.domaine.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+        self.assertTrue(Domaine.objects.filter(pk=self.domaine.pk).exists())
+        self.assertTrue(Cuvee.objects.filter(pk=self.cuvee.pk).exists())

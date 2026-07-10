@@ -4,8 +4,21 @@ from rest_framework import generics, permissions, serializers
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView
 
 User = get_user_model()
+
+
+class ThrottledTokenObtainPairView(TokenObtainPairView):
+    """Login JWT (`/api/auth/token/`) soumis au throttle ``auth`` (anti-brute-force).
+
+    La vue standard de simplejwt n'a aucune limite : sans ça, le mot de passe
+    d'un compte peut être deviné par force brute sans plafond. Le scope ``auth``
+    (cf. settings) limite les tentatives par IP/utilisateur, comme l'inscription.
+    """
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
 
 
 class RegisterSerializer(serializers.ModelSerializer):
