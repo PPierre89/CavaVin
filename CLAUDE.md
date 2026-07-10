@@ -164,14 +164,25 @@ CI runs on every PR to `main` and on `main` (`.github/workflows/ci.yml`); all th
 2. **Frontend (build)** — `npm ci`, `npm run lint` (oxlint), `npm run build` (tsc + vite).
 3. **E2E (Playwright)** — builds & serves the SPA with the **API mocked** (`page.route`); no Django.
 
-`docker.yml` builds/publishes `ghcr.io/ppierre89/cavavin:latest` (+ `sha-` and semver tags) on `main`.
+### Versioning & release (automated)
+Versioning is **fully automated** via `release.yml` (semantic-release) — never bump a version by hand:
+- On every push to `main`, commits since the last tag are analysed by **Conventional Commits**:
+  `feat` → minor, `fix`/`refactor`/`perf`/`build`/`revert` → patch, `BREAKING CHANGE:`/`type!` →
+  major, and `docs`/`test`/`ci`/`chore`/`style` → **no release**.
+- A release creates the `vX.Y.Z` tag + GitHub release, then calls `docker.yml` to bake the version
+  into the image (`APP_VERSION` build-arg → frontend `__APP_VERSION__` via `src/version.ts`, and
+  backend `settings.APP_VERSION` → drf-spectacular schema `VERSION`) and publish
+  `ghcr.io/ppierre89/cavavin` with `latest` + `X.Y.Z`/`X.Y`/`X` + `sha-` tags.
+- The **git tag is the single source of truth** for the version; `frontend/package.json`'s version is
+  only a local-dev fallback. `latest` now tracks the latest **release**, not every push.
+- **Write Conventional Commit messages** (in French: `feat(cave): …`, `fix(api): …`) — the repo's
+  history already follows this, and the version/publish pipeline depends on it.
 
 ## Working agreements
 - Keep changes consistent with the existing French naming and comment style.
+- Write **Conventional Commit** messages (`type(scope): …`) — they drive automated versioning (above).
 - Any model change requires a migration (`makemigrations`) committed alongside it.
 - Never lower `gunicorn.conf.py`'s timeout or the wineapi timeouts below the worker timeout — slow
   vision calls will otherwise get `WORKER TIMEOUT`-killed instead of returning a clean 404.
 - Preserve the privacy split, per-owner queryset filtering, throttles, and quota guards when
   touching API or enrichment code.
-</content>
-</invoke>

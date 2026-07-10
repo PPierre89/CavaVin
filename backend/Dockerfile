@@ -1,7 +1,14 @@
 # Contexte de build = racine du repo (pour inclure frontend/ ET backend/).
 
+# Version de l'app (tag semver), calculée par la CI et passée en --build-arg.
+# Bakée dans le front (__APP_VERSION__) ET le back (APP_VERSION) pour un affichage
+# et un schéma d'API cohérents. Défaut de dev si build manuel sans arg.
+ARG APP_VERSION=0.0.0-dev
+
 # --- Étape 1 : build du SPA React (Vite) ---
 FROM node:22-alpine AS frontend
+ARG APP_VERSION
+ENV APP_VERSION=$APP_VERSION
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -11,8 +18,10 @@ RUN npm run build
 # --- Étape 2 : runtime Django ---
 FROM python:3.12-slim
 
+ARG APP_VERSION
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    APP_VERSION=$APP_VERSION
 
 WORKDIR /app
 

@@ -175,10 +175,15 @@ REST_FRAMEWORK = {
     },
 }
 
+# Version de l'app : source de vérité unique = le tag de release (semver),
+# injecté par la CI dans l'environnement (APP_VERSION) et baké dans l'image
+# Docker. En local (hors release), on retombe sur une valeur de dev.
+APP_VERSION = os.getenv("APP_VERSION", "0.0.0-dev")
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "Cave à Vin API",
     "DESCRIPTION": "API de gestion de cave à vin : catalogue, emplacements, stock et mouvements.",
-    "VERSION": "0.1.0",
+    "VERSION": APP_VERSION,
     "SERVE_INCLUDE_SCHEMA": False,
 }
 

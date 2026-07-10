@@ -247,8 +247,8 @@ conteneur, `SQLITE_PATH` place le fichier SQLite sur un volume persistant — vo
 
 ## Intégration continue & déploiement (CI/CD)
 
-Deux workflows GitHub Actions automatisent la vérification et la livraison. Ils tournent sur chaque
-**Pull Request vers `main`** et sur **`main`**.
+Trois workflows GitHub Actions automatisent la vérification, le versionnage et la livraison, sur
+chaque **Pull Request vers `main`** et sur **`main`**.
 
 ### `ci.yml` — tests, couverture & build front
 
@@ -282,17 +282,36 @@ npx playwright install chromium  # ou PLAYWRIGHT_CHROMIUM_PATH=<chemin> si déj�
 npm run test:e2e
 ```
 
+### `release.yml` — versionnage automatique (semantic-release)
+
+À chaque push sur `main`, [semantic-release](https://semantic-release.gitbook.io/) analyse les
+**commits conventionnels** depuis le dernier tag et en déduit la prochaine version — **plus aucun
+numéro de version à gérer à la main** :
+
+| Type de commit | Effet |
+| --- | --- |
+| `feat(...)` | bump **mineur** (`0.1.0` → `0.2.0`) |
+| `fix` · `refactor` · `perf` · `build` · `revert` | bump **patch** (`0.1.0` → `0.1.1`) |
+| footer `BREAKING CHANGE:` ou `type!` | bump **majeur** (`0.x` → `1.0.0`) |
+| `docs` · `test` · `ci` · `chore` · `style` | **aucune release** (pas de redéploiement) |
+
+Quand une version est publiée, le workflow crée le **tag `vX.Y.Z`** + la **release GitHub** (notes
+générées depuis les commits), puis appelle `docker.yml` pour publier l'image versionnée. La règle est
+donc : **écris des messages de commit conventionnels** (`feat(cave): …`, `fix(api): …`) — la version
+et la publication suivent automatiquement. Les commits qui ne changent rien au runtime (`docs`, `ci`…)
+ne déclenchent volontairement ni version ni redéploiement.
+
 ### `docker.yml` — build & publication de l'image
 
 - Sur **PR** : build de vérification du `Dockerfile` multi-stage (front + back), **sans publication**.
-- Sur **`main`** : publie `ghcr.io/ppierre89/cavavin:latest` **et** un tag immuable `sha-xxxx`
-  (déploiement continu — le NAS récupère `latest`).
-- Sur un **tag de version `vX.Y.Z`** (`git tag v1.2.0 && git push --tags`) : publie les tags
-  sémantiques `1.2.0`, `1.2`, `1` pour épingler une release précise.
-- Déclenchement **manuel** possible via l'onglet *Actions* (`workflow_dispatch`).
+- **Appelé par `release.yml`** (à chaque nouvelle version) : bake la version calculée dans l'image
+  (`APP_VERSION` → front `__APP_VERSION__` + schéma d'API back) et publie sur
+  `ghcr.io/ppierre89/cavavin` les tags `latest`, `X.Y.Z`, `X.Y`, `X` et `sha-xxxx`.
 
-Le récapitulatif du job liste les tags effectivement publiés. La mise à jour du NAS reste
-`docker compose pull && docker compose up -d` (voir ci-dessous).
+La **version est la source de vérité unique** : le tag semver, baké dans l'image, s'affiche dans l'UI
+(en-tête / écran de connexion) et dans le schéma OpenAPI (`/api/schema/`). Le récapitulatif du job
+liste les tags publiés. La mise à jour du NAS reste `docker compose pull && docker compose up -d`
+(voir ci-dessous) : `latest` suit désormais la dernière **release** plutôt que chaque push.
 
 ## Lancer en local (sans Docker)
 

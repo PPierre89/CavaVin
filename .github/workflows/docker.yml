@@ -1,20 +1,24 @@
 name: Docker
 
-# Construit l'image sur chaque PR (vérifie que le Dockerfile build) et la publie
-# sur GitHub Container Registry (ghcr.io) :
-#   - `latest` + `sha-xxxx` à chaque push sur main (déploiement continu) ;
-#   - `vX.Y.Z` (+ `X.Y`, `X`) sur chaque tag de version `v*` (release) ;
-#   - déclenchement manuel possible via l'onglet Actions (workflow_dispatch).
+# Deux usages :
+#   - sur PR vers main : build de vérification du Dockerfile multi-stage (front +
+#     back), SANS publication ni version (garde-fou : l'image compile) ;
+#   - appelé par release.yml (workflow_call) avec la version calculée : bake
+#     APP_VERSION dans l'image et publie sur ghcr.io (latest + tags semver).
+# La publication est ainsi pilotée par la release automatique (voir release.yml),
+# plus par un simple push sur main.
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
   pull_request:
     branches: [main]
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version semver à baker et publier (sans le préfixe v)."
+        required: true
+        type: string
 
 concurrency:
-  group: docker-${{ github.ref }}
+  group: docker-${{ github.ref }}-${{ inputs.version || 'pr' }}
   cancel-in-progress: true
 
 jobs:
@@ -30,38 +34,51 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Connexion au registre uniquement hors PR (les PR ne publient pas).
+      # Connexion au registre uniquement en mode publication (release) ; les PR se
+      # contentent de vérifier que l'image build.
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: inputs.version != ''
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata (tags & labels)
+      # Calcule la version à baker et la liste des tags de l'image. En release, on
+      # dérive latest + X.Y.Z + X.Y + X + sha-xxxx ; en PR, un tag jetable non poussé.
+      - name: Compute version & tags
         id: meta
-        uses: docker/metadata-action@v5
-        with:
-          # metadata-action met le nom en minuscules (ghcr.io/ppierre89/cavavin).
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=short
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+        run: |
+          IMG="ghcr.io/${GITHUB_REPOSITORY,,}"
+          if [ -n "${{ inputs.version }}" ]; then
+            V="${{ inputs.version }}"
+            SHA="$(git rev-parse --short HEAD)"
+            echo "app_version=$V" >> "$GITHUB_OUTPUT"
+            {
+              echo "tags<<EOF"
+              echo "$IMG:$V"
+              echo "$IMG:${V%.*}"
+              echo "$IMG:${V%%.*}"
+              echo "$IMG:sha-$SHA"
+              echo "$IMG:latest"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "app_version=0.0.0-pr" >> "$GITHUB_OUTPUT"
+            echo "tags=$IMG:pr-verify" >> "$GITHUB_OUTPUT"
+          fi
 
       # Contexte = racine du repo (le Dockerfile multi-stage build frontend/ + backend/).
+      # APP_VERSION est bakée dans le front (__APP_VERSION__) et le back (schéma API).
       - name: Build and push
-        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./backend/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ inputs.version != '' }}
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.app_version }}
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -71,10 +88,10 @@ jobs:
         run: |
           {
             echo "### Image Docker"
-            if [ "${{ github.event_name }}" = "pull_request" ]; then
-              echo "🔍 Build de vérification (PR) — **non publiée**."
+            if [ -n "${{ inputs.version }}" ]; then
+              echo "🚀 Publiée sur \`ghcr.io/${GITHUB_REPOSITORY,,}\` — version \`${{ steps.meta.outputs.app_version }}\` :"
             else
-              echo "🚀 Publiée sur \`ghcr.io/${{ github.repository }}\` :"
+              echo "🔍 Build de vérification (PR) — **non publiée**."
             fi
             echo '```'
             echo "${{ steps.meta.outputs.tags }}"

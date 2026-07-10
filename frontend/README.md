@@ -58,9 +58,11 @@ frontend/
   `border-line`, `glass`, `rounded-card`…) : réutiliser ces tokens plutôt que des valeurs brutes.
 - Ajout de vin par défaut = **photo d'étiquette** ; scan code-barres et recherche par nom sont des
   méthodes de repli (`VinIdentification` / `identification.ts`).
-- **Version de l'app** : source de vérité unique dans `package.json`, injectée à la compilation par
-  Vite (`define: __APP_VERSION__`, exposée via `src/version.ts`) et affichée discrètement dans l'UI
-  (en-tête et écran de connexion). Bumper la version = éditer `package.json`.
+- **Version de l'app** : injectée à la compilation dans `__APP_VERSION__` (exposée via
+  `src/version.ts`), affichée discrètement dans l'UI (en-tête et écran de connexion). En release, la
+  CI passe la version calculée (tag semver) via la variable `APP_VERSION` ; en local, on retombe sur
+  `package.json`. La version n'est donc **pas éditée à la main** : elle découle des commits
+  conventionnels (voir la section CI/CD du [README racine](../README.md)).
 
 ## Production
 

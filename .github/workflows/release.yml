@@ -1,0 +1,71 @@
+name: Release
+
+# Versionnage automatique. À chaque push sur main, semantic-release analyse les
+# commits conventionnels depuis le dernier tag et en déduit la prochaine version :
+#   - feat(...)            → bump mineur   (0.1.0 → 0.2.0)
+#   - fix / refactor / perf / build / revert → bump patch (0.1.0 → 0.1.1)
+#   - un footer « BREAKING CHANGE: … » ou « type! » → bump majeur (0.x → 1.0.0)
+#   - docs / test / ci / chore / style → aucune release (pas de redéploiement)
+# Quand une version est publiée, le tag vX.Y.Z + la release GitHub sont créés, puis
+# l'image Docker versionnée est buildée et poussée (job appelant docker.yml).
+on:
+  push:
+    branches: [main]
+
+# Ne pas annuler une release déjà en cours (tag + publication d'image).
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write # créer le tag et la release GitHub
+
+jobs:
+  release:
+    name: Version & tag (semantic-release)
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.semantic.outputs.new_release_published }}
+      version: ${{ steps.semantic.outputs.new_release_version }}
+    steps:
+      # fetch-depth 0 : semantic-release a besoin de tout l'historique et des tags
+      # pour déterminer la dernière version publiée.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Bootstrap unique : sans tag de version préexistant, semantic-release
+      # démarrerait sa première release à 1.0.0. On pose donc l'ancre v0.1.0 au
+      # premier passage pour rester sur la ligne 0.x — la prochaine feat donnera
+      # v0.2.0. Idempotent : ne fait rien dès qu'un tag v* existe.
+      - name: Bootstrap de la version initiale (v0.1.0)
+        run: |
+          if [ -z "$(git tag -l 'v*')" ]; then
+            echo "Aucun tag de version : création de l'ancre v0.1.0."
+            git tag v0.1.0
+            git push origin v0.1.0
+          else
+            echo "Tag(s) de version déjà présent(s) — rien à faire."
+          fi
+
+      - name: Semantic Release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          semantic_version: 24
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    name: Publier l'image versionnée
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    permissions:
+      contents: read
+      packages: write
+    # Réutilise le workflow Docker en lui passant la version calculée : il bake
+    # APP_VERSION dans l'image (front + back) et publie latest + tags semver.
+    uses: ./.github/workflows/docker.yml
+    with:
+      version: ${{ needs.release.outputs.version }}
+    secrets: inherit
