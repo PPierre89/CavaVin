@@ -139,9 +139,11 @@ class RangementSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         request = self.context.get("request")
         user = request.user if request else None
-        bouteille = attrs["bouteille"]
-        emplacement = attrs["emplacement"]
-        case = attrs["case"]
+        # PATCH partiel (ex. déplacer une case) : on complète depuis l'instance.
+        instance = self.instance
+        bouteille = attrs.get("bouteille") or (instance.bouteille if instance else None)
+        emplacement = attrs.get("emplacement") or (instance.emplacement if instance else None)
+        case = attrs.get("case", instance.case if instance else None)
 
         # Cloisonnement par propriétaire (RGPD) : on ne range que ses propres
         # bouteilles, et seulement dans ses propres emplacements.

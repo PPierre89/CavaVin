@@ -140,3 +140,72 @@ test('ajout par recherche texte en ligne pré-remplit le vin identifié', async 
   // Un toast confirme l'identification en ligne.
   await expect(page.getByText(/Identifié/)).toBeVisible()
 })
+
+test('glisser-déposer range une bouteille dans une case de la grille', async ({ page }) => {
+  // Une armoire en grille (3×2) + une bouteille non rangée à glisser.
+  const GRILLE = {
+    id: 20,
+    cave: 1,
+    parent: null,
+    nom: 'Armoire G',
+    type_emplacement: 'ARMOIRE',
+    capacite: 6,
+    nb_colonnes: 3,
+    nb_rangees: 2,
+    disposition: 'ALIGNE',
+    chemin: 'Armoire G',
+    occupation_actuelle: 0,
+  }
+  const NON_RANGEE = {
+    id: 200,
+    cuvee: 5,
+    cuvee_nom: 'Grand Cru Classé',
+    domaine_nom: 'Château Cantemerle',
+    millesime: 2019,
+    emplacement: null,
+    emplacement_chemin: null,
+    quantite: 1,
+    statut: 'A_BOIRE',
+    prix_achat: '40.00',
+    apogee_debut: null,
+    apogee_fin: null,
+    apogee_debut_effectif: 2022,
+    apogee_fin_effectif: 2031,
+  }
+
+  await seedAuth(page)
+  await mockApi(page, {
+    'GET /api/emplacements/': [GRILLE],
+    'GET /api/bouteilles/': [NON_RANGEE],
+  })
+  // Capture le POST de rangement (route plus prioritaire car enregistrée après).
+  let posted: { emplacement?: number; case?: number; bouteille?: number } | null = null
+  await page.route('**/api/rangements/**', async (route) => {
+    if (route.request().method() === 'POST') {
+      posted = route.request().postDataJSON()
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 999, ...posted }),
+      })
+    } else {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    }
+  })
+  await page.goto('/')
+
+  const source = page.getByTitle('Glisser vers une case')
+  const cible = page.locator('[data-emp="20"][data-case="0"]')
+  await expect(source).toBeVisible()
+  await expect(cible).toBeVisible()
+
+  const s = (await source.boundingBox())!
+  const d = (await cible.boundingBox())!
+  await page.mouse.move(s.x + s.width / 2, s.y + s.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(d.x + d.width / 2, d.y + d.height / 2, { steps: 12 })
+  await page.mouse.up()
+
+  await expect(page.getByText(/rangée/)).toBeVisible()
+  expect(posted).toEqual({ bouteille: 200, emplacement: 20, case: 0 })
+})
