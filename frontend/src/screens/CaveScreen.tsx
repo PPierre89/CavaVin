@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import { api, errMsg } from '../api'
 import { useData } from '../data'
+import { useToast } from '../toast'
 import { Card, Chip } from '../ui'
 import { BottleSheet, RackGrid, Slot } from '../components/bottle'
 import { PlacementSheet, type CellRef } from '../components/PlacementSheet'
@@ -7,12 +9,33 @@ import { FicheVin } from '../components/FicheVin'
 import { TYPE_LABELS, type Bouteille, type Emplacement } from '../types'
 
 const MAX_SLOTS = 96
+// Seuil (px) au-delà duquel un appui devient un glisser — en deçà, c'est un tap.
+const DRAG_SEUIL = 7
+
+/** Origine d'un glisser : une case déjà rangée (pour la déplacer). */
+interface DragOrigin {
+  rangementId: number
+  empId: number
+  case: number
+}
+interface Pending {
+  bouteille: Bouteille
+  origin?: DragOrigin
+  startX: number
+  startY: number
+  active: boolean
+}
 
 export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplacement') => void }) {
-  const { caves, caveId, setCaveId, emplacements, bouteilles, rangements, cuveeColor } = useData()
+  const { caves, caveId, setCaveId, emplacements, bouteilles, rangements, cuveeColor, refresh } =
+    useData()
+  const toast = useToast()
   const [selected, setSelected] = useState<Bouteille | null>(null)
   const [fiche, setFiche] = useState<Bouteille | null>(null)
   const [cell, setCell] = useState<CellRef | null>(null)
+  // Glisser en cours : bouteille fantôme suivant le pointeur + case survolée.
+  const [drag, setDrag] = useState<{ bouteille: Bouteille; x: number; y: number } | null>(null)
+  const [hover, setHover] = useState<{ empId: number; case: number } | null>(null)
 
   const active = bouteilles.filter((b) => b.quantite > 0)
   const stats = useMemo(() => {
@@ -60,6 +83,108 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
     return 0
   }
 
+  // ---- Glisser-déposer (pointer events : compatible tactile + souris) ----
+  // Les handlers restent stables ; ils lisent l'état courant via des refs.
+  const pending = useRef<Pending | null>(null)
+  const suppressClick = useRef(false)
+  const dropData = useRef({ rangByCell, empById })
+  dropData.current = { rangByCell, empById }
+  const doRefresh = useRef(refresh)
+  doRefresh.current = refresh
+  const doToast = useRef(toast)
+  doToast.current = toast
+
+  const finishDrop = useCallback(async (p: Pending, empId: number, caseIdx: number) => {
+    const { rangByCell: rbc, empById: ebi } = dropData.current
+    const emp = ebi.get(empId)
+    if (!emp) return
+    const occupant = rbc.get(empId)?.get(caseIdx)
+    // Reposée sur sa propre case : rien à faire.
+    if (p.origin && p.origin.empId === empId && p.origin.case === caseIdx) return
+    if (occupant && !(p.origin && occupant.id === p.origin.rangementId)) {
+      doToast.current('Cette case est déjà occupée.', 'err')
+      return
+    }
+    try {
+      if (!p.origin) {
+        await api('POST', '/api/rangements/', {
+          bouteille: p.bouteille.id,
+          emplacement: empId,
+          case: caseIdx,
+        })
+      } else if (p.origin.empId === empId) {
+        await api('PATCH', `/api/rangements/${p.origin.rangementId}/`, { case: caseIdx })
+      } else {
+        doToast.current("Déplacement d'une grille à l'autre non pris en charge.", 'err')
+        return
+      }
+      doToast.current('Bouteille rangée. 🍷', 'ok')
+      await doRefresh.current()
+    } catch (e) {
+      doToast.current(errMsg(e, 'Placement impossible.'), 'err')
+    }
+  }, [])
+
+  const cellUnder = (x: number, y: number) => {
+    const el = document.elementFromPoint(x, y) as HTMLElement | null
+    return el?.closest<HTMLElement>('[data-cell]') ?? null
+  }
+
+  const onMove = useCallback((e: PointerEvent) => {
+    const p = pending.current
+    if (!p) return
+    if (!p.active) {
+      if (Math.hypot(e.clientX - p.startX, e.clientY - p.startY) < DRAG_SEUIL) return
+      p.active = true
+    }
+    const target = cellUnder(e.clientX, e.clientY)
+    setHover(
+      target
+        ? { empId: Number(target.dataset.emp), case: Number(target.dataset.case) }
+        : null,
+    )
+    setDrag({ bouteille: p.bouteille, x: e.clientX, y: e.clientY })
+  }, [])
+
+  const onUp = useCallback(
+    (e: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      const p = pending.current
+      pending.current = null
+      setDrag(null)
+      setHover(null)
+      if (!p || !p.active) return
+      // Un vrai glisser vient d'avoir lieu : neutraliser le clic qui suit.
+      suppressClick.current = true
+      setTimeout(() => (suppressClick.current = false), 150)
+      const target = cellUnder(e.clientX, e.clientY)
+      if (target) {
+        void finishDrop(p, Number(target.dataset.emp), Number(target.dataset.case))
+      }
+    },
+    [onMove, finishDrop],
+  )
+
+  const startDrag = useCallback(
+    (e: React.PointerEvent, bouteille: Bouteille, origin?: DragOrigin) => {
+      if (e.button !== 0 && e.pointerType === 'mouse') return
+      pending.current = { bouteille, origin, startX: e.clientX, startY: e.clientY, active: false }
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+    },
+    [onMove, onUp],
+  )
+
+  // Un clic (tap) qui suit immédiatement un glisser est ignoré.
+  const tap = (fn: () => void) => () => {
+    if (suppressClick.current) {
+      suppressClick.current = false
+      return
+    }
+    fn()
+  }
+
   const roots = emplacements.filter((e) => e.parent === null)
   const unplaced = active.filter((b) => aRanger(b) > 0)
   const bottlesFor = (id: number) => active.filter((b) => b.emplacement === id)
@@ -80,8 +205,8 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
 
     let body: React.ReactNode = null
     if (isGrid) {
-      // Grille interactive : chaque case reflète son rangement et se tape pour
-      // ranger une bouteille (case vide) ou gérer celle qui l'occupe (case pleine).
+      // Grille interactive : chaque case est une cible de dépôt (data-cell) ;
+      // on peut y taper (feuille de placement) ou y glisser une bouteille.
       const byCase = rangByCell.get(emp.id)
       body = (
         <div className="mt-3">
@@ -92,18 +217,35 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
             renderSlot={(i) => {
               const r = byCase?.get(i)
               const b = r ? bottleById.get(r.bouteille) : undefined
-              if (b) {
-                return (
-                  <Slot
-                    key={i}
-                    couleur={cuveeColor(b)}
-                    statut={b.statut}
-                    title={`${b.domaine_nom} — ${b.cuvee_nom} ${b.millesime || ''}`}
-                    onClick={() => setCell({ emp, index: i })}
-                  />
-                )
-              }
-              return <Slot key={i} empty onClick={() => setCell({ emp, index: i })} />
+              const cible = hover?.empId === emp.id && hover?.case === i
+              return (
+                <span
+                  key={i}
+                  data-cell="1"
+                  data-emp={emp.id}
+                  data-case={i}
+                  style={{ touchAction: 'none' }}
+                  onPointerDown={
+                    b && r
+                      ? (e) => startDrag(e, b, { rangementId: r.id, empId: emp.id, case: i })
+                      : undefined
+                  }
+                  className={`rounded-full transition ${
+                    cible ? 'ring-2 ring-gold ring-offset-2 ring-offset-transparent' : ''
+                  }`}
+                >
+                  {b ? (
+                    <Slot
+                      couleur={cuveeColor(b)}
+                      statut={b.statut}
+                      title={`${b.domaine_nom} — ${b.cuvee_nom} ${b.millesime || ''}`}
+                      onClick={tap(() => setCell({ emp, index: i }))}
+                    />
+                  ) : (
+                    <Slot empty onClick={tap(() => setCell({ emp, index: i }))} />
+                  )}
+                </span>
+              )
             }}
           />
         </div>
@@ -224,14 +366,26 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
         <Card>
           <h2 className="font-serif text-[1.12rem] text-gold m-0 mb-1">En attente de placement</h2>
           <p className="text-muted text-xs mb-3">
-            Tapez une case vide d'une grille pour y ranger une bouteille.
+            Glissez une bouteille sur une case, ou tapez une case vide d'une grille.
           </p>
           {unplaced.map((b) => (
             <div
               key={b.id}
               className="flex items-center gap-2.5 py-2.5 border-b border-gold/10 last:border-0 text-sm"
             >
-              <Slot couleur={cuveeColor(b)} statut={b.statut} size={30} onClick={() => setFiche(b)} />
+              <span
+                style={{ touchAction: 'none' }}
+                onPointerDown={(e) => startDrag(e, b)}
+                className="cursor-grab active:cursor-grabbing"
+                title="Glisser vers une case"
+              >
+                <Slot
+                  couleur={cuveeColor(b)}
+                  statut={b.statut}
+                  size={30}
+                  onClick={tap(() => setFiche(b))}
+                />
+              </span>
               <span className="flex-1 min-w-0 truncate">
                 {b.domaine_nom} — {b.cuvee_nom} {b.millesime || ''} × {aRanger(b)}
               </span>
@@ -265,6 +419,16 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
       />
 
       <BottleSheet b={selected} onClose={() => setSelected(null)} />
+
+      {/* Bouteille fantôme qui suit le pointeur pendant le glisser. */}
+      {drag && (
+        <div
+          className="fixed z-[60] pointer-events-none opacity-90"
+          style={{ left: drag.x, top: drag.y, transform: 'translate(-50%, -50%)' }}
+        >
+          <Slot couleur={cuveeColor(drag.bouteille)} statut={drag.bouteille.statut} size={42} />
+        </div>
+      )}
     </div>
   )
 }

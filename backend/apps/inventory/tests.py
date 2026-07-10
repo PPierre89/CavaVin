@@ -336,3 +336,19 @@ class RangementTests(APITestCase):
         resp = self.client.patch(detail, {"emplacement": None}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(self.bouteille.rangements.count(), 0)
+
+    def test_deplacer_une_case_par_patch(self):
+        """Glisser une bouteille vers une autre case = PATCH partiel du rangement."""
+        rang_id = self._ranger(0).data["id"]
+        url = reverse("rangement-detail", args=[rang_id])
+        resp = self.client.patch(url, {"case": 4}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["case"], 4)
+
+    def test_deplacer_sur_une_case_occupee_refuse(self):
+        r0 = self._ranger(0).data["id"]
+        self._ranger(1)
+        url = reverse("rangement-detail", args=[r0])
+        resp = self.client.patch(url, {"case": 1}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("case", resp.data)
