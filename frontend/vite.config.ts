@@ -1,11 +1,20 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+// Version de l'app : source de vérité unique = package.json, injectée à la
+// compilation dans la constante globale __APP_VERSION__ (affichée dans l'UI).
+const pkg = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf-8'),
+)
 
 // L'app est buildée en statique puis servie par Django/WhiteNoise (mono-conteneur).
 // En dev, `npm run dev` sert sur :5173 et proxifie l'API vers Django :8000.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   build: { outDir: 'dist', emptyOutDir: true },
   server: {
     proxy: {
