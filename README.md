@@ -186,7 +186,9 @@ L'ancien template vanilla (`backend/templates/index.html`) reste comme fallback 
 - **Stats en tête de cave** (total, rouges, blancs, autres), sélecteur de caves en chips
   horizontales, toasts de confirmation/erreur.
 
-Elle réutilise la session Django — connecte-toi via `/admin/login/?next=/`.
+Authentification par **JWT** : écran de connexion / inscription intégré (`POST /api/auth/register/`
+et `/api/auth/token/`), token stocké côté navigateur et rafraîchi automatiquement. L'ancien template
+vanilla, lui, réutilisait la session Django (`/admin/login/`).
 
 ## Confidentialité des données (RGPD)
 
@@ -206,8 +208,11 @@ Deux mécanismes cohabitent :
 
 - **Session (DRF)** : utilisée par le mini frontend et le bouton "Authorize" (cookieAuth) du
   Swagger, via `/admin/login/`.
-- **JWT (djangorestframework-simplejwt)** : pensé pour les futurs clients externes (mobile, SPA,
-  self-hosted). Endpoints :
+- **JWT (djangorestframework-simplejwt)** : utilisé par le SPA React et pensé pour les clients
+  externes (mobile, self-hosted). Endpoints :
+  - `POST /api/auth/register/` — `{"username", "password", "email"?}` → crée le compte et renvoie
+    directement `{"username", "access", "refresh"}` (throttle `auth`, anti-abus). C'est l'onboarding
+    utilisé par l'écran d'inscription du SPA.
   - `POST /api/auth/token/` — `{"username": "...", "password": "..."}` → `{"access", "refresh"}`
   - `POST /api/auth/token/refresh/` — `{"refresh": "..."}` → nouveau `access` (rotation activée)
   - `POST /api/auth/token/verify/` — vérifie la validité d'un token
@@ -219,13 +224,19 @@ Deux mécanismes cohabitent :
 ```
 cave-a-vin/
 ├── backend/
-│   ├── config/          # settings, urls, wsgi/asgi
+│   ├── config/          # settings, urls, auth (register), wsgi/asgi
 │   ├── apps/
-│   │   ├── catalog/     # Domaine, Cepage, Cuvee — référentiel vin
-│   │   ├── cellars/     # Cave, Emplacement — structure physique
-│   │   └── inventory/   # Bouteille (stock), MouvementStock — mouvements
+│   │   ├── catalog/     # Domaine, Cepage, Cuvee — référentiel vin partagé
+│   │   │   ├── enrichment/    # providers enfichables (Open Food Facts, wineapi.io, stub Vivino)
+│   │   │   ├── ingest.py      # persistance mutualisée (upsert_cuvee, enrich_cuvee_from_wineapi)
+│   │   │   ├── wine_profile.py# mapping pur détail wineapi → Cuvee (source de vérité unique)
+│   │   │   ├── apogee.py      # logique pure fenêtre/statut de dégustation
+│   │   │   └── sommellerie.py # conseil de service pur (dérivé de la couleur)
+│   │   ├── cellars/     # Cave, Emplacement — structure physique (privé)
+│   │   └── inventory/   # Bouteille (stock), MouvementStock, NoteDegustation (privé)
 │   ├── requirements.txt
 │   └── Dockerfile
+├── frontend/             # SPA React + Vite + Tailwind (voir frontend/README.md)
 ├── docker-compose.yml    # app tout-en-un (Django/gunicorn + SQLite)
 └── .env.example
 ```
@@ -372,11 +383,15 @@ plus `SECURE_SSL_REDIRECT`, `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE` dans `
   (les bouteilles comptées sont celles directement assignées à l'emplacement ; chaque
   sous-emplacement a sa propre capacité).
 - `MouvementStock` : historique des entrées/sorties/consommations sur une `Bouteille`.
+- `NoteDegustation` (privé) : carnet de dégustation — plusieurs appréciations personnelles par cuvée
+  (note /5, commentaire, curseurs acidité/tanin/fruit, date), cloisonnées par propriétaire.
 
 ## Prochaines étapes suggérées
 
-1. Endpoint d'import "scan étiquette" (upload image → OCR → pré-remplissage `Cuvee`/`Bouteille`).
-2. Endpoint de recommandation mets-vins (entrée: description du menu, sortie: bouteilles suggérées).
-3. Modèle `NoteDegustation` (Epic 4) et endpoint de partage en lecture seule d'une `Cave`.
-4. Endpoint d'inscription (actuellement les comptes se créent via `manage.py createsuperuser` /
-   l'admin Django) pour un vrai onboarding utilisateur.
+1. Endpoint de recommandation mets-vins (entrée: description du menu, sortie: bouteilles suggérées),
+   éventuellement enrichi par LLM.
+2. Partage en lecture seule d'une `Cave` / du carnet de dégustation.
+3. Apogée affinée par cépage et par qualité du millésime (l'estimation actuelle dérive de la couleur
+   et du millésime).
+4. Valorisation financière temps réel (au-delà de l'historique de prix wineapi déjà persisté) et
+   mode hors-ligne avec synchronisation asynchrone.
