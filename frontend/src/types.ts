@@ -185,13 +185,6 @@ export const STATUT_LABELS: Record<Statut, string> = {
   A_BOIRE: 'À boire',
   DEPASSE: 'Dépassé',
 }
-/* Couleur du code statut de dégustation (fenêtre d'apogée) : « à garder »
-   neutre, « à boire » signalé en or, « dépassé » en alerte. */
-export const STATUT_COLORS: Record<Statut, string> = {
-  A_GARDER: 'var(--color-muted-strong)',
-  A_BOIRE: 'var(--color-gold)',
-  DEPASSE: 'var(--color-alerte)',
-}
 /* Aplat CSS de chaque couleur de vin (silhouettes, alvéoles, légendes). */
 export const COULEUR_VARS: Record<Couleur, string> = {
   ROUGE: 'var(--color-rouge)',

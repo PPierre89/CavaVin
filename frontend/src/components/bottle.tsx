@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { api, errMsg } from '../api'
 import { useData } from '../data'
 import { useToast } from '../toast'
 import { Sheet, StatutBadge, inputCls, labelCls, primaryCls } from '../ui'
+import { formatApogee } from '../format'
 import {
   COULEUR_LABELS,
   COULEUR_VARS,
@@ -11,14 +12,6 @@ import {
   type Disposition,
   type Statut,
 } from '../types'
-
-/** Formate une fenêtre d'apogée (« 2024-2035 », « dès 2024 », « avant 2035 »). */
-function formatApogee(debut: number | null, fin: number | null): string | null {
-  if (debut && fin) return `${debut}–${fin}`
-  if (debut) return `dès ${debut}`
-  if (fin) return `avant ${fin}`
-  return null
-}
 
 /* Silhouette de bouteille colorée (liste « Mes vins », accueil, panneaux). */
 export function BottleBar({
@@ -34,6 +27,49 @@ export function BottleBar({
       className={`shrink-0 rounded-[2px_2px_5px_5px] ${className}`}
       style={{ background: COULEUR_VARS[couleur] }}
     />
+  )
+}
+
+/* Badge de quantité « ×N » (cartes de liste). */
+export function QtyBadge({ n }: { n: number }) {
+  return (
+    <span className="text-[11px] px-2 py-0.5 rounded-[10px] bg-surface-2 text-muted-strong">
+      ×{n}
+    </span>
+  )
+}
+
+/* Ligne de liste « vin » : silhouette + titre + sous-titre, contenu additionnel
+   en children et zone droite libre. Partagée par l'accueil, la vinothèque et
+   les sélecteurs de vin. */
+export function LigneVin({
+  couleur,
+  titre,
+  sousTitre,
+  droite,
+  onClick,
+  children,
+}: {
+  couleur: Couleur
+  titre: string
+  sousTitre?: string
+  droite?: ReactNode
+  onClick?: () => void
+  children?: ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="glass rounded-[10px] p-3 w-full flex items-center gap-3 text-left active:scale-[0.99] transition"
+    >
+      <BottleBar couleur={couleur} />
+      <span className="flex-1 min-w-0 flex flex-col gap-[3px]">
+        <span className="text-[13px] truncate">{titre}</span>
+        {sousTitre && <span className="text-[11px] text-muted truncate">{sousTitre}</span>}
+        {children}
+      </span>
+      {droite}
+    </button>
   )
 }
 

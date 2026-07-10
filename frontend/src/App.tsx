@@ -18,13 +18,14 @@ type Seg = 'bouteille' | 'emplacement' | 'cave'
 
 /* ---------- Icônes géométriques de la barre d'onglets ---------- */
 function TabIcon({ tab, active }: { tab: Tab; active: boolean }) {
-  const fill = active ? 'var(--color-wine)' : 'var(--color-placeholder)'
-  const line = active ? 'var(--color-wine-soft)' : 'var(--color-placeholder)'
+  const fill = active ? 'bg-wine' : 'bg-placeholder'
+  const line = active ? 'border-wine-soft' : 'border-placeholder'
+  const bar = active ? 'bg-wine-soft' : 'bg-placeholder'
   if (tab === 'accueil') {
-    return <span className="w-[18px] h-[18px] rounded-[5px]" style={{ background: fill }} />
+    return <span className={`w-[18px] h-[18px] rounded-[5px] ${fill}`} />
   }
   if (tab === 'vin') {
-    return <span className="w-2 h-4 rounded-[2px_2px_5px_5px]" style={{ background: fill }} />
+    return <span className={`w-2 h-4 rounded-[2px_2px_5px_5px] ${fill}`} />
   }
   if (tab === 'cave') {
     // Grappe : trois grains puis deux en quinconce, comme le logo.
@@ -33,8 +34,7 @@ function TabIcon({ tab, active }: { tab: Tab; active: boolean }) {
         {[0, 1, 2, 3, 4].map((i) => (
           <span
             key={i}
-            className="w-1.5 h-1.5 rounded-full"
-            style={{ background: fill, marginLeft: i >= 3 ? 3 : 0 }}
+            className={`w-1.5 h-1.5 rounded-full ${fill} ${i >= 3 ? 'ml-[3px]' : ''}`}
           />
         ))}
       </span>
@@ -42,12 +42,11 @@ function TabIcon({ tab, active }: { tab: Tab; active: boolean }) {
   }
   return (
     <span
-      className="w-4 h-[18px] rounded-[2px] border-[1.5px] flex flex-col justify-center gap-[3px] px-[3px]"
-      style={{ borderColor: line }}
+      className={`w-4 h-[18px] rounded-[2px] border-[1.5px] flex flex-col justify-center gap-[3px] px-[3px] ${line}`}
       aria-hidden="true"
     >
-      <span className="h-[1.5px]" style={{ background: line }} />
-      <span className="h-[1.5px]" style={{ background: line }} />
+      <span className={`h-[1.5px] ${bar}`} />
+      <span className={`h-[1.5px] ${bar}`} />
     </span>
   )
 }
@@ -81,8 +80,7 @@ function Shell() {
         <button
           onClick={() => setCompte(true)}
           aria-label="Mon compte"
-          className="w-[30px] h-[30px] rounded-full bg-gold grid place-items-center text-[13px] font-bold"
-          style={{ color: 'oklch(15% 0.012 40)' }}
+          className="w-[30px] h-[30px] rounded-full bg-gold grid place-items-center text-[13px] font-bold text-ink-dark"
         >
           {(username || '?').charAt(0).toUpperCase()}
         </button>

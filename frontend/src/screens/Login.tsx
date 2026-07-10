@@ -34,7 +34,7 @@ export default function Login() {
       <div className="font-serif font-medium text-[2.6rem] leading-none text-ink-bright">
         CavaVin
       </div>
-      <div className="text-[0.78rem] tracking-[0.22em] uppercase mt-2 mb-7" style={{ color: 'oklch(70% 0.05 70)' }}>
+      <div className="text-[0.78rem] tracking-[0.22em] uppercase mt-2 mb-7 text-muted-strong">
         Cave &amp; Dégustation
       </div>
 

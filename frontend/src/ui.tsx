@@ -10,11 +10,9 @@ import { STATUT_LABELS, type Statut } from './types'
  *  d'éviter la duplication des mêmes chaînes Tailwind d'un fichier à l'autre.
  * ------------------------------------------------------------------ */
 
-/* ---------- Aplats signature ---------- */
+/* ---------- Aplat signature ---------- */
 // Aplat « lie-de-vin » : états actifs, boutons primaires, chips sélectionnées.
 export const wineFill = 'bg-wine'
-// Aplat doré : éléments de data-viz (barres, jauges) et accents premium.
-export const goldFill = 'bg-gold'
 
 /* ---------- Logo grappe de raisin « CavaVin » ---------- */
 // Cinq grains (3 + 2 en quinconce) et une rafle verte, comme sur la maquette
@@ -22,18 +20,13 @@ export const goldFill = 'bg-gold'
 export function Logo({ className = 'w-8 h-8' }: { className?: string }) {
   return (
     <svg viewBox="0 0 64 64" className={`block ${className}`} aria-hidden="true">
-      <path
-        d="M32 8v14"
-        stroke="var(--color-vigne)"
-        strokeWidth="4"
-        strokeLinecap="round"
-      />
-      <g fill="var(--color-wine)">
+      <path d="M32 8v14" className="stroke-vigne" strokeWidth="4" strokeLinecap="round" />
+      <g className="fill-wine">
         <circle cx="17" cy="32" r="8" />
         <circle cx="32" cy="32" r="8" />
         <circle cx="47" cy="32" r="8" />
       </g>
-      <g fill="var(--color-wine-soft)">
+      <g className="fill-wine-soft">
         <circle cx="24.5" cy="46" r="8" />
         <circle cx="39.5" cy="46" r="8" />
       </g>
@@ -48,6 +41,14 @@ export const labelCls = 'block text-xs mt-3 mb-1.5 text-muted uppercase tracking
 export const primaryCls = `w-full mt-4 py-3.5 rounded-xl font-semibold text-ink-bright ${wineFill} active:scale-[0.985] transition disabled:opacity-60`
 export const ghostCls =
   'px-3.5 py-2.5 rounded-xl border border-line text-muted text-sm bg-transparent active:scale-[0.985] transition'
+/* Carte mate compacte (rayon 10px de la maquette) : tuiles info, lignes de liste. */
+export const tileCls = 'glass rounded-[10px] px-3 py-2.5'
+/* Petite pilule sélectionnable (chips couleur, sélecteur de millésime). */
+// eslint-disable-next-line react-refresh/only-export-components
+export const pillCls = (active?: boolean) =>
+  `shrink-0 px-3.5 py-1.5 rounded-full text-xs transition ${
+    active ? `${wineFill} text-ink-bright font-semibold` : 'border border-line text-ink'
+  }`
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return <div className={`glass rounded-card p-4 mb-3.5 ${className}`}>{children}</div>
@@ -130,10 +131,10 @@ export function Chip({
 /* ---------- Badge de statut de dégustation (code couleur apogée) ----------
    Pilules pleines comme sur la maquette : « À garder » neutre, « À boire »
    sur fond or sombre, « Dépassé » sur fond rouge sombre. */
-const STATUT_BADGE_STYLES: Record<Statut, { background: string; color: string }> = {
-  A_GARDER: { background: 'var(--color-surface-2)', color: 'var(--color-muted-strong)' },
-  A_BOIRE: { background: 'oklch(33% 0.11 85)', color: 'oklch(90% 0.02 85)' },
-  DEPASSE: { background: 'oklch(30% 0.1 25)', color: 'oklch(82% 0.08 25)' },
+const STATUT_BADGE_CLS: Record<Statut, string> = {
+  A_GARDER: 'bg-surface-2 text-muted-strong',
+  A_BOIRE: 'bg-boire-bg text-boire-ink',
+  DEPASSE: 'bg-depasse-bg text-depasse-ink',
 }
 
 export function StatutBadge({
@@ -145,8 +146,7 @@ export function StatutBadge({
 }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full whitespace-nowrap ${className}`}
-      style={STATUT_BADGE_STYLES[statut]}
+      className={`inline-flex items-center rounded-full whitespace-nowrap ${STATUT_BADGE_CLS[statut]} ${className}`}
     >
       {STATUT_LABELS[statut]}
     </span>

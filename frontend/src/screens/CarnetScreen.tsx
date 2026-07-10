@@ -2,15 +2,7 @@ import { useEffect, useState } from 'react'
 import { apiAllPages } from '../api'
 import { Card, CardTitle } from '../ui'
 import { formatDate } from '../dates'
-import { COULEUR_LABELS, type Couleur, type NoteDegustation } from '../types'
-
-const DOT: Record<Couleur, string> = {
-  ROUGE: 'var(--color-rouge)',
-  BLANC: 'var(--color-blanc)',
-  ROSE: 'var(--color-rose)',
-  BULLES: 'var(--color-bulles)',
-  AUTRE: 'var(--color-autre)',
-}
+import { COULEUR_LABELS, COULEUR_VARS, type NoteDegustation } from '../types'
 
 function Stars({ note }: { note: number }) {
   return (
@@ -51,7 +43,7 @@ export default function CarnetScreen() {
               <div className="flex items-center gap-2.5">
                 <span
                   className="w-2.5 h-2.5 rounded-full shrink-0"
-                  style={{ background: DOT[n.couleur] ?? DOT.AUTRE }}
+                  style={{ background: COULEUR_VARS[n.couleur] ?? COULEUR_VARS.AUTRE }}
                   title={COULEUR_LABELS[n.couleur]}
                 />
                 <span className="flex-1 min-w-0 truncate text-sm">

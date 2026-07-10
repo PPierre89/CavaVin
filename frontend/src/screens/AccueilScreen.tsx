@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useData } from '../data'
-import { BottleBar, BottleSheet } from '../components/bottle'
+import { BottleSheet, LigneVin, QtyBadge } from '../components/bottle'
 import { ChoixVinSheet } from '../components/ChoixVinSheet'
 import { FicheVin } from '../components/FicheVin'
 import { TastingSheet } from '../components/TastingSheet'
 import { formatDate } from '../dates'
+import { tileCls } from '../ui'
 import type { Bouteille } from '../types'
 
 /* ------------------------------------------------------------------ *
@@ -76,8 +77,7 @@ export default function AccueilScreen({ onAjouter }: { onAjouter: () => void }) 
         </button>
         <button
           onClick={() => setChoix('degustation')}
-          className="flex-1 text-center py-3 px-2 rounded-xl border text-[13px] font-semibold active:scale-[0.985] transition"
-          style={{ borderColor: 'oklch(45% 0.13 85)', color: 'oklch(75% 0.1 85)' }}
+          className="flex-1 text-center py-3 px-2 rounded-xl border border-gold-dim text-gold-pale text-[13px] font-semibold active:scale-[0.985] transition"
         >
           Nouvelle&nbsp;dégustation
         </button>
@@ -98,22 +98,14 @@ export default function AccueilScreen({ onAjouter }: { onAjouter: () => void }) 
       ) : (
         <div className="flex flex-col gap-2.5">
           {aBoire.slice(0, 6).map((b) => (
-            <button
+            <LigneVin
               key={b.id}
+              couleur={cuveeColor(b)}
+              titre={b.cuvee_nom}
+              sousTitre={[b.millesime, regionOf(b)].filter(Boolean).join(' · ') || b.domaine_nom}
+              droite={<QtyBadge n={b.quantite} />}
               onClick={() => setFiche(b)}
-              className="glass rounded-[10px] p-3 flex items-center gap-3 text-left active:scale-[0.99] transition"
-            >
-              <BottleBar couleur={cuveeColor(b)} />
-              <span className="flex-1 min-w-0">
-                <span className="block text-[13px] truncate">{b.cuvee_nom}</span>
-                <span className="block text-[11px] text-muted truncate">
-                  {[b.millesime, regionOf(b)].filter(Boolean).join(' · ') || b.domaine_nom}
-                </span>
-              </span>
-              <span className="text-[11px] px-2 py-0.5 rounded-[10px] bg-surface-2 text-muted-strong">
-                ×{b.quantite}
-              </span>
-            </button>
+            />
           ))}
         </div>
       )}
@@ -129,10 +121,7 @@ export default function AccueilScreen({ onAjouter }: { onAjouter: () => void }) 
           {mouvements.slice(0, 8).map((m) => {
             const lbl = mouvementLabel(m.type_mouvement, m.quantite)
             return (
-              <div
-                key={m.id}
-                className="glass rounded-[10px] px-3 py-2.5 flex items-center justify-between gap-3"
-              >
+              <div key={m.id} className={`${tileCls} flex items-center justify-between gap-3`}>
                 <span className="min-w-0">
                   <span className="block text-[13px] truncate">{bottleName(m.bouteille)}</span>
                   <span className="block text-[11px] text-muted">
