@@ -1,7 +1,7 @@
 from django.db.models import Sum
 from rest_framework import serializers
 
-from .models import Bouteille, MouvementStock, NoteDegustation
+from .models import Bouteille, MouvementStock, NoteDegustation, Rangement
 
 
 class MouvementStockSerializer(serializers.ModelSerializer):
@@ -111,6 +111,91 @@ class BouteilleSerializer(serializers.ModelSerializer):
                     }
                 )
         return attrs
+
+    def update(self, instance, validated_data):
+        ancien_emplacement = instance.emplacement_id
+        instance = super().update(instance, validated_data)
+        # Déménager une ligne invalide ses cases (elles pointent l'ancienne grille) ;
+        # la remettre « non rangée » les libère de même. Sinon, une baisse de
+        # quantité peut rendre des cases excédentaires : on les libère.
+        if instance.emplacement_id != ancien_emplacement:
+            instance.rangements.all().delete()
+        else:
+            instance.synchroniser_rangements()
+        return instance
+
+
+class RangementSerializer(serializers.ModelSerializer):
+    """Range une bouteille dans une case précise d'un emplacement en grille."""
+
+    class Meta:
+        model = Rangement
+        fields = ["id", "bouteille", "emplacement", "case"]
+        # On désactive le UniqueTogetherValidator auto (message générique) au
+        # profit du contrôle explicite ci-dessous, plus parlant ; la contrainte
+        # d'unicité en base reste le garde-fou ultime contre les accès concurrents.
+        validators = []
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = request.user if request else None
+        bouteille = attrs["bouteille"]
+        emplacement = attrs["emplacement"]
+        case = attrs["case"]
+
+        # Cloisonnement par propriétaire (RGPD) : on ne range que ses propres
+        # bouteilles, et seulement dans ses propres emplacements.
+        if user and bouteille.proprietaire_id and bouteille.proprietaire_id != user.id:
+            raise serializers.ValidationError(
+                {"bouteille": "Cette bouteille ne vous appartient pas."}
+            )
+        if user and emplacement.cave.proprietaire_id != user.id:
+            raise serializers.ValidationError(
+                {"emplacement": "Cet emplacement ne vous appartient pas."}
+            )
+
+        # Le placement case par case suppose une grille définie.
+        if not (emplacement.nb_colonnes and emplacement.nb_rangees):
+            raise serializers.ValidationError(
+                {"emplacement": "Cet emplacement n'a pas de grille de rangement."}
+            )
+        capacite = emplacement.capacite or 0
+        if case < 0 or case >= capacite:
+            raise serializers.ValidationError(
+                {"case": f"Case hors de la grille (0 à {capacite - 1})."}
+            )
+
+        # La ligne doit être libre ou déjà dans cet emplacement (pas ailleurs).
+        if bouteille.emplacement_id not in (None, emplacement.id):
+            raise serializers.ValidationError(
+                {"bouteille": "Cette bouteille est déjà rangée dans un autre emplacement."}
+            )
+
+        # Une case ne reçoit qu'une bouteille.
+        occupee = Rangement.objects.filter(emplacement=emplacement, case=case)
+        if self.instance:
+            occupee = occupee.exclude(pk=self.instance.pk)
+        if occupee.exists():
+            raise serializers.ValidationError({"case": "Cette case est déjà occupée."})
+
+        # On ne range pas plus d'unités que la ligne n'en compte.
+        deja = bouteille.rangements
+        if self.instance:
+            deja = deja.exclude(pk=self.instance.pk)
+        if deja.count() >= bouteille.quantite:
+            raise serializers.ValidationError(
+                {"bouteille": "Toutes les bouteilles de cette ligne sont déjà rangées."}
+            )
+        return attrs
+
+    def create(self, validated_data):
+        bouteille = validated_data["bouteille"]
+        emplacement = validated_data["emplacement"]
+        # Ranger une bouteille non placée la rattache à la grille concernée.
+        if bouteille.emplacement_id is None:
+            bouteille.emplacement = emplacement
+            bouteille.save(update_fields=["emplacement", "maj_le"])
+        return super().create(validated_data)
 
 
 class ConsommerSerializer(serializers.Serializer):

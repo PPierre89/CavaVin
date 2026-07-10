@@ -21,6 +21,7 @@ from apps.inventory.views import (
     BouteilleViewSet,
     MouvementStockViewSet,
     NoteDegustationViewSet,
+    RangementViewSet,
 )
 from .auth import RegisterView
 from .views import index
@@ -32,6 +33,7 @@ router.register("cuvees", CuveeViewSet, basename="cuvee")
 router.register("caves", CaveViewSet, basename="cave")
 router.register("emplacements", EmplacementViewSet, basename="emplacement")
 router.register("bouteilles", BouteilleViewSet, basename="bouteille")
+router.register("rangements", RangementViewSet, basename="rangement")
 router.register("mouvements", MouvementStockViewSet, basename="mouvement")
 router.register("notes-degustation", NoteDegustationViewSet, basename="note-degustation")
 

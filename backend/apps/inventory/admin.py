@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Bouteille, MouvementStock, NoteDegustation
+from .models import Bouteille, MouvementStock, NoteDegustation, Rangement
 
 
 class MouvementStockInline(admin.TabularInline):
@@ -9,13 +9,25 @@ class MouvementStockInline(admin.TabularInline):
     readonly_fields = ["date"]
 
 
+class RangementInline(admin.TabularInline):
+    model = Rangement
+    extra = 0
+
+
 @admin.register(Bouteille)
 class BouteilleAdmin(admin.ModelAdmin):
     list_display = ["cuvee", "millesime", "quantite", "statut", "emplacement"]
     list_filter = ["statut", "cuvee__couleur"]
     search_fields = ["cuvee__nom", "cuvee__domaine__nom"]
     autocomplete_fields = ["cuvee", "emplacement"]
-    inlines = [MouvementStockInline]
+    inlines = [MouvementStockInline, RangementInline]
+
+
+@admin.register(Rangement)
+class RangementAdmin(admin.ModelAdmin):
+    list_display = ["bouteille", "emplacement", "case"]
+    list_filter = ["emplacement"]
+    autocomplete_fields = ["bouteille", "emplacement"]
 
 
 @admin.register(MouvementStock)
