@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Chip, IconButton, wineGrad } from '../ui'
+import { Chip, IconButton, wineFill } from '../ui'
 import { COULEUR_LABELS, type Couleur } from '../types'
 import {
   cloneFiltres,
@@ -69,9 +69,9 @@ function DualRange({
   return (
     <div className="px-1">
       <div className="relative h-8 flex items-center">
-        <div className="absolute left-0 right-0 h-2 rounded-full bg-black/30" />
+        <div className="absolute left-0 right-0 h-2 rounded-full bg-surface-2" />
         <div
-          className="absolute h-2 rounded-full bg-gradient-to-r from-gold-soft to-gold"
+          className="absolute h-2 rounded-full bg-gold"
           style={{ left: `${pct(lo)}%`, right: `${100 - pct(hi)}%` }}
         />
         <input
@@ -94,10 +94,10 @@ function DualRange({
         />
       </div>
       <div className="flex justify-between mt-1.5">
-        <span className={`px-3.5 py-1 rounded-full text-sm font-semibold text-white ${wineGrad}`}>
+        <span className={`px-3.5 py-1 rounded-full text-sm font-semibold text-ink-bright ${wineFill}`}>
           {lo}
         </span>
-        <span className={`px-3.5 py-1 rounded-full text-sm font-semibold text-white ${wineGrad}`}>
+        <span className={`px-3.5 py-1 rounded-full text-sm font-semibold text-ink-bright ${wineFill}`}>
           {hi}
         </span>
       </div>
@@ -303,7 +303,7 @@ export function FiltresSheet({
       >
         <button
           onClick={() => onApply(draft)}
-          className={`w-full py-3.5 rounded-full font-bold text-white ${wineGrad} shadow-[0_8px_22px_rgba(124,39,64,0.38)] active:scale-[0.985] transition`}
+          className={`w-full py-3.5 rounded-full font-bold text-ink-bright ${wineFill} active:scale-[0.985] transition`}
         >
           Voir les {nbBouteilles} bouteille{nbBouteilles > 1 ? 's' : ''}
         </button>

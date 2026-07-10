@@ -30,12 +30,12 @@ export default function Login() {
 
   return (
     <div className="min-h-[100dvh] flex flex-col items-center justify-center px-6 py-10">
-      <Logo className="w-28 h-28 mb-1" />
-      <div className="font-serif italic font-semibold text-[2.6rem] leading-none text-wine-soft">
-        allée des vins
+      <Logo className="w-24 h-24 mb-2" />
+      <div className="font-serif font-medium text-[2.6rem] leading-none text-ink-bright">
+        CavaVin
       </div>
-      <div className="text-[0.78rem] tracking-[5px] uppercase text-gold mt-2 mb-7">
-        votre cave, sublimée
+      <div className="text-[0.78rem] tracking-[0.22em] uppercase mt-2 mb-7" style={{ color: 'oklch(70% 0.05 70)' }}>
+        Cave &amp; Dégustation
       </div>
 
       <form onSubmit={submit} className="glass rounded-card p-5 w-full max-w-sm">

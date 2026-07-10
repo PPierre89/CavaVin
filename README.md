@@ -128,7 +128,7 @@ l'action est soumise au throttle `enrichment` — de quoi préserver le nombre d
 appréciations personnelles sont possibles pour une même cuvée, au fil des dégustations (note /5,
 commentaire, curseurs acidité/tanin/fruit, date). CRUD via `/api/notes-degustation/`
 (filtrable par `cuvee`/`millesime`). Côté fiche vin, « Ma note » reflète l'entrée la plus récente ;
-côté mobile, l'onglet **Carnet** liste toutes les dégustations et « Commencer une dégustation »
+côté mobile, l'onglet **Carnet** liste toutes les dégustations et « Enregistrer une dégustation »
 ouvre la saisie.
 
 ### Fenêtre de dégustation & statut (apogée)
@@ -159,7 +159,8 @@ dégustation** — `À garder`, `À boire` ou `Dépassé` — qui alimente le **
 ## Frontend — SPA React + Tailwind (mobile-first)
 
 Le front est une **application React (Vite + TypeScript + Tailwind v4)** dans `frontend/`, direction
-artistique **« allée des vins »** (bordeaux, crème, or ; verre givré ; serif Cormorant Garamond),
+artistique **« CavaVin »** (thème sombre lie-de-vin/or, cartes mates ; serif Cormorant Garamond +
+Manrope — maquette « CavaVin Écrans »),
 pensée pour un usage à 90 % mobile (optimisée Pixel 9). Authentification **JWT** (écran de
 connexion / inscription).
 
@@ -174,9 +175,10 @@ L'ancien template vanilla (`backend/templates/index.html`) reste comme fallback 
 
 ### Fonctionnalités de l'interface :
 
-- **Navigation par onglets en bas d'écran** (Ma cave / Ajouter / Journal), zone tactile large,
-  safe-areas iOS gérées.
-- **Visualisation en alvéoles** : chaque bouteille est un cercle coloré (couleur du vin) avec
+- **Navigation par onglets en bas d'écran** (Accueil / Vin / Cave / Carnet), zone tactile large,
+  safe-areas iOS gérées ; l'ajout s'ouvre depuis l'accueil ou le « + » de « Mes vins », et les
+  derniers mouvements (journal) s'affichent sur l'accueil.
+- **Visualisation en alvéoles** : chaque bouteille est une case colorée (couleur du vin) avec
   un anneau de statut (vert = à boire, rouge = dépassé) ; si l'emplacement a une capacité, les
   places libres apparaissent en pointillés, façon casier réel. Rendu plafonné à 96 alvéoles
   par emplacement.

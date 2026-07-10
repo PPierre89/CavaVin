@@ -5,6 +5,7 @@ import { useToast } from '../toast'
 import { Sheet, StatutBadge, inputCls, labelCls, primaryCls } from '../ui'
 import {
   COULEUR_LABELS,
+  COULEUR_VARS,
   type Bouteille,
   type Couleur,
   type Disposition,
@@ -19,12 +20,21 @@ function formatApogee(debut: number | null, fin: number | null): string | null {
   return null
 }
 
-const SLOT_BG: Record<Couleur, string> = {
-  ROUGE: 'radial-gradient(circle at 32% 30%, #a84a62, #8e2f45)',
-  BLANC: 'radial-gradient(circle at 32% 30%, #f2e6b8, #e6d491)',
-  ROSE: 'radial-gradient(circle at 32% 30%, #f5c3d1, #e8a0b4)',
-  BULLES: 'radial-gradient(circle at 32% 30%, #ecd07a, #d9b653)',
-  AUTRE: 'radial-gradient(circle at 32% 30%, #a6acb8, #9aa0ab)',
+/* Silhouette de bouteille colorée (liste « Mes vins », accueil, panneaux). */
+export function BottleBar({
+  couleur,
+  className = 'w-3 h-9',
+}: {
+  couleur: Couleur
+  className?: string
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`shrink-0 rounded-[2px_2px_5px_5px] ${className}`}
+      style={{ background: COULEUR_VARS[couleur] }}
+    />
+  )
 }
 
 export function Slot({
@@ -43,7 +53,7 @@ export function Slot({
   onClick?: () => void
 }) {
   if (empty || !couleur) {
-    const emptyCls = 'rounded-full border-2 border-dashed border-gold/15'
+    const emptyCls = 'rounded-[6px] border-[1.5px] border-dashed border-line'
     // Une case vide devient cliquable dès qu'on fournit un onClick (placement
     // case par case) ; sinon elle reste un simple repère visuel.
     if (onClick) {
@@ -52,21 +62,22 @@ export function Slot({
           onClick={onClick}
           title={title}
           style={{ width: size, height: size }}
-          className={`${emptyCls} active:scale-95 hover:border-gold/40 transition`}
+          className={`${emptyCls} active:scale-95 hover:border-gold/60 transition`}
         />
       )
     }
     return <div style={{ width: size, height: size }} className={emptyCls} />
   }
+  // Alvéole pleine : aplat de la couleur du vin ; le statut se signale par un
+  // liseré (or « à boire », alerte « dépassé »), comme le code couleur global.
   const ring =
     statut === 'A_BOIRE' ? 'var(--color-ok)' : statut === 'DEPASSE' ? 'var(--color-alerte)' : 'transparent'
-  const light = couleur === 'BLANC' || couleur === 'ROSE' || couleur === 'BULLES'
   return (
     <button
       onClick={onClick}
       title={title}
-      style={{ width: size, height: size, background: SLOT_BG[couleur], borderColor: ring, color: light ? '#5b4b1f' : '#fff' }}
-      className="rounded-full border-[3px] shadow-[inset_0_-3px_6px_rgba(0,0,0,0.35)] active:scale-95 transition"
+      style={{ width: size, height: size, background: COULEUR_VARS[couleur], borderColor: ring }}
+      className="rounded-[6px] border-2 active:scale-95 transition"
     />
   )
 }
@@ -163,19 +174,20 @@ export function BottleSheet({ b, onClose }: { b: Bouteille | null; onClose: () =
             {b.millesime ? ` · ${b.millesime}` : ''}
           </div>
           <div className="flex flex-wrap gap-2 mt-3 mb-1">
-            <span className="text-xs px-2.5 py-1 rounded-full border border-gold-soft text-gold">
+            <span className="text-xs px-2.5 py-1 rounded-full border border-line text-ink inline-flex items-center gap-1.5">
+              <BottleBar couleur={cuveeColor(b)} className="w-1.5 h-3.5" />
               {COULEUR_LABELS[cuveeColor(b)]}
             </span>
             <StatutBadge statut={b.statut} />
             {formatApogee(b.apogee_debut_effectif, b.apogee_fin_effectif) && (
-              <span className="text-xs px-2.5 py-1 rounded-full border border-gold/15 text-muted">
-                🍷 {formatApogee(b.apogee_debut_effectif, b.apogee_fin_effectif)}
+              <span className="text-xs px-2.5 py-1 rounded-full border border-line text-muted">
+                {formatApogee(b.apogee_debut_effectif, b.apogee_fin_effectif)}
               </span>
             )}
-            <span className="text-xs px-2.5 py-1 rounded-full border border-gold/15 text-muted">
+            <span className="text-xs px-2.5 py-1 rounded-full border border-line text-muted">
               × {b.quantite} en stock
             </span>
-            <span className="text-xs px-2.5 py-1 rounded-full border border-gold/15 text-muted">
+            <span className="text-xs px-2.5 py-1 rounded-full border border-line text-muted">
               {b.emplacement_chemin ? `📍 ${b.emplacement_chemin}` : 'non placée'}
             </span>
           </div>
@@ -184,14 +196,14 @@ export function BottleSheet({ b, onClose }: { b: Bouteille | null; onClose: () =
           <div className="flex items-center gap-3.5">
             <button
               onClick={() => setQte((q) => Math.max(1, q - 1))}
-              className="w-11 h-11 rounded-full border border-gold/15 bg-black/30 text-2xl"
+              className="w-11 h-11 rounded-full border border-line bg-surface text-2xl"
             >
               −
             </button>
             <span className="font-serif text-2xl min-w-8 text-center">{qte}</span>
             <button
               onClick={() => setQte((q) => Math.min(b.quantite, q + 1))}
-              className="w-11 h-11 rounded-full border border-gold/15 bg-black/30 text-2xl"
+              className="w-11 h-11 rounded-full border border-line bg-surface text-2xl"
             >
               ＋
             </button>
@@ -202,10 +214,7 @@ export function BottleSheet({ b, onClose }: { b: Bouteille | null; onClose: () =
             value={occasion}
             onChange={(e) => setOccasion(e.target.value)}
           />
-          <button
-            onClick={consume}
-            className={`${primaryCls} from-rougevif to-wine-deep`}
-          >
+          <button onClick={consume} className={primaryCls}>
             🥂 Consommer
           </button>
 

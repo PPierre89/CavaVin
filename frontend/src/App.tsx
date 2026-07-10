@@ -2,102 +2,184 @@ import { useState } from 'react'
 import { useAuth } from './auth'
 import { DataProvider, useData } from './data'
 import Login from './screens/Login'
+import AccueilScreen from './screens/AccueilScreen'
 import CaveScreen from './screens/CaveScreen'
 import AjouterScreen from './screens/AjouterScreen'
-import JournalScreen from './screens/JournalScreen'
 import CarnetScreen from './screens/CarnetScreen'
 import MesVinsScreen from './screens/MesVinsScreen'
-import { Logo } from './ui'
+import { Logo, Sheet } from './ui'
 import { APP_VERSION } from './version'
 
-type Tab = 'cave' | 'mesvins' | 'ajouter' | 'journal' | 'carnet'
+/* Navigation à quatre onglets (maquette « CavaVin Écrans ») ; l'ajout n'est
+   plus un onglet mais une vue poussée depuis l'accueil ou « Mes vins ». */
+type Tab = 'accueil' | 'vin' | 'cave' | 'carnet'
+type View = Tab | 'ajouter'
 type Seg = 'bouteille' | 'emplacement' | 'cave'
+
+/* ---------- Icônes géométriques de la barre d'onglets ---------- */
+function TabIcon({ tab, active }: { tab: Tab; active: boolean }) {
+  const fill = active ? 'var(--color-wine)' : 'var(--color-placeholder)'
+  const line = active ? 'var(--color-wine-soft)' : 'var(--color-placeholder)'
+  if (tab === 'accueil') {
+    return <span className="w-[18px] h-[18px] rounded-[5px]" style={{ background: fill }} />
+  }
+  if (tab === 'vin') {
+    return <span className="w-2 h-4 rounded-[2px_2px_5px_5px]" style={{ background: fill }} />
+  }
+  if (tab === 'cave') {
+    // Grappe : trois grains puis deux en quinconce, comme le logo.
+    return (
+      <span className="grid grid-cols-[6px_6px_6px] gap-0.5" aria-hidden="true">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <span
+            key={i}
+            className="w-1.5 h-1.5 rounded-full"
+            style={{ background: fill, marginLeft: i >= 3 ? 3 : 0 }}
+          />
+        ))}
+      </span>
+    )
+  }
+  return (
+    <span
+      className="w-4 h-[18px] rounded-[2px] border-[1.5px] flex flex-col justify-center gap-[3px] px-[3px]"
+      style={{ borderColor: line }}
+      aria-hidden="true"
+    >
+      <span className="h-[1.5px]" style={{ background: line }} />
+      <span className="h-[1.5px]" style={{ background: line }} />
+    </span>
+  )
+}
 
 function Shell() {
   const { username, logout } = useAuth()
   const { loading } = useData()
-  const [tab, setTab] = useState<Tab>('cave')
+  const [view, setView] = useState<View>('accueil')
   const [seg, setSeg] = useState<Seg>('bouteille')
+  const [compte, setCompte] = useState(false)
 
-  const goAdd = (s: Seg) => {
-    setSeg(s)
-    setTab('ajouter')
+  const go = (v: View) => {
+    setView(v)
     window.scrollTo({ top: 0 })
   }
-  const goCave = () => {
-    setTab('cave')
-    window.scrollTo({ top: 0 })
+  const goAdd = (s: Seg) => {
+    setSeg(s)
+    go('ajouter')
   }
 
   return (
     <>
       <header
-        className="bar-top border-b border-line sticky top-0 z-20 flex justify-between items-center px-[18px] pb-2.5"
+        className="bar-top border-b border-line/50 sticky top-0 z-20 flex justify-between items-center px-[18px] pb-2.5"
         style={{ paddingTop: 'calc(10px + env(safe-area-inset-top))' }}
       >
         <div className="flex items-center gap-2.5">
-          <Logo className="w-[30px] h-[30px]" />
-          <div className="flex flex-col leading-none">
-            <span className="font-serif italic text-[1.5rem] text-wine-soft">allée</span>
-            <span className="text-[0.56rem] tracking-[3px] uppercase text-gold mt-[3px]">des vins</span>
-          </div>
+          <Logo className="w-[26px] h-[26px]" />
+          <span className="font-serif text-[1.4rem] text-ink-bright leading-none">CavaVin</span>
         </div>
-        <div className="flex flex-col items-end leading-tight">
-          <span className="text-[0.75rem] text-muted text-right">
-            {username} ·{' '}
-            <button onClick={logout} className="text-gold">
-              sortir
-            </button>
-          </span>
-          <span className="text-[0.58rem] text-muted/60 tabular-nums">v{APP_VERSION}</span>
-        </div>
+        <button
+          onClick={() => setCompte(true)}
+          aria-label="Mon compte"
+          className="w-[30px] h-[30px] rounded-full bg-gold grid place-items-center text-[13px] font-bold"
+          style={{ color: 'oklch(15% 0.012 40)' }}
+        >
+          {(username || '?').charAt(0).toUpperCase()}
+        </button>
       </header>
 
       <main
-        className="max-w-[640px] mx-auto px-3.5 pt-3.5"
-        style={{ paddingBottom: 'calc(92px + env(safe-area-inset-bottom))' }}
+        className="max-w-[640px] mx-auto px-4 pt-4"
+        style={{ paddingBottom: 'calc(104px + env(safe-area-inset-bottom))' }}
       >
         {loading ? (
           <div className="text-muted text-center mt-16">Chargement de votre cave…</div>
         ) : (
           <>
-            {tab === 'cave' && <CaveScreen onAdd={goAdd} />}
-            {tab === 'mesvins' && <MesVinsScreen />}
-            {tab === 'ajouter' && <AjouterScreen seg={seg} setSeg={setSeg} onDone={goCave} />}
-            {tab === 'journal' && <JournalScreen />}
-            {tab === 'carnet' && <CarnetScreen />}
+            {view === 'accueil' && (
+              <AccueilScreen onAjouter={() => goAdd('bouteille')} />
+            )}
+            {view === 'vin' && <MesVinsScreen onAjouter={() => goAdd('bouteille')} />}
+            {view === 'cave' && <CaveScreen onAdd={goAdd} />}
+            {view === 'ajouter' && (
+              <>
+                <button
+                  onClick={() => go('accueil')}
+                  className="flex items-center gap-2 text-muted text-sm mb-3"
+                >
+                  <svg width="9" height="15" viewBox="0 0 9 15" aria-hidden="true">
+                    <path
+                      d="M8 1L1 7.5l7 6.5"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      fill="none"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  Retour
+                </button>
+                <AjouterScreen seg={seg} setSeg={setSeg} onDone={() => go('cave')} />
+              </>
+            )}
+            {view === 'carnet' && <CarnetScreen />}
           </>
         )}
       </main>
 
       <nav
-        className="bar-bottom border-t border-line fixed bottom-0 left-0 right-0 z-30 flex justify-around"
+        className="bar-bottom border-t border-line/50 fixed bottom-0 left-0 right-0 z-30 flex flex-col"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
-        {(
-          [
-            ['cave', '🍷', 'Ma cave'],
-            ['mesvins', '🍾', 'Mes vins'],
-            ['ajouter', '＋', 'Ajouter'],
-            ['carnet', '📖', 'Carnet'],
-            ['journal', '🕘', 'Journal'],
-          ] as [Tab, string, string][]
-        ).map(([t, ico, lbl]) => (
-          <button
-            key={t}
-            onClick={() => {
-              setTab(t)
-              window.scrollTo({ top: 0 })
-            }}
-            className={`flex-1 py-2.5 flex flex-col items-center gap-0.5 text-[0.66rem] transition ${
-              tab === t ? 'text-wine-soft' : 'text-muted'
-            }`}
-          >
-            <span className="text-[1.3rem] leading-none">{ico}</span>
-            {lbl}
-          </button>
-        ))}
+        <div className="flex justify-around">
+          {(
+            [
+              ['accueil', 'Accueil'],
+              ['vin', 'Vin'],
+              ['cave', 'Cave'],
+              ['carnet', 'Carnet'],
+            ] as [Tab, string][]
+          ).map(([t, lbl]) => (
+            <button
+              key={t}
+              onClick={() => go(t)}
+              className={`flex-1 pt-2.5 pb-1 flex flex-col items-center gap-1 text-[0.66rem] transition ${
+                view === t ? 'text-ink' : 'text-muted'
+              }`}
+            >
+              <span className="h-[18px] grid place-items-center">
+                <TabIcon tab={t} active={view === t} />
+              </span>
+              {lbl}
+            </button>
+          ))}
+        </div>
+        <span className="text-center text-[0.62rem] text-muted/60 pb-1.5 tabular-nums">
+          CavaVin · v{APP_VERSION}
+        </span>
       </nav>
+
+      {/* ---------- Feuille compte ---------- */}
+      <Sheet open={compte} onClose={() => setCompte(false)}>
+        {compte && (
+          <>
+            <h3 className="font-serif text-[1.35rem] m-0">Mon compte</h3>
+            <div className="text-muted text-sm mt-1">
+              Connecté en tant que <span className="text-ink">{username}</span>
+            </div>
+            <div className="text-muted/60 text-xs mt-1 tabular-nums">CavaVin · v{APP_VERSION}</div>
+            <button
+              onClick={() => {
+                setCompte(false)
+                logout()
+              }}
+              className="w-full mt-5 py-3.5 rounded-xl border border-line text-muted active:scale-[0.985] transition"
+            >
+              Se déconnecter
+            </button>
+          </>
+        )}
+      </Sheet>
     </>
   )
 }

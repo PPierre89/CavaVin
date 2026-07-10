@@ -133,7 +133,7 @@ function BottleForm({ onDone }: { onDone: () => void }) {
       <VinIdentification onIdentified={applyIdentified} cuvees={cuvees} />
 
       <form ref={formRef} onSubmit={submit} className="mt-4">
-        <div className="text-[0.7rem] uppercase tracking-widest text-gold border-b border-gold/15 pb-1.5 mb-1">
+        <div className="text-[0.7rem] uppercase tracking-[0.1em] text-muted border-b border-line/60 pb-1.5 mb-1">
           Le vin
         </div>
         <Field label="Cuvée">
@@ -184,7 +184,7 @@ function BottleForm({ onDone }: { onDone: () => void }) {
           </>
         )}
 
-        <div className="text-[0.7rem] uppercase tracking-widest text-gold border-b border-gold/15 pb-1.5 mb-1 mt-4">
+        <div className="text-[0.7rem] uppercase tracking-[0.1em] text-muted border-b border-line/60 pb-1.5 mb-1 mt-4">
           La bouteille
         </div>
         <div className="grid grid-cols-2 gap-2.5">
@@ -257,7 +257,7 @@ function Stepper({
   max?: number
 }) {
   const btn =
-    'w-10 h-10 rounded-full border border-gold/20 bg-black/30 text-xl leading-none disabled:opacity-35 active:scale-95 transition'
+    'w-10 h-10 rounded-full border border-line bg-surface text-xl leading-none disabled:opacity-35 active:scale-95 transition'
   return (
     <div className="flex items-center gap-3">
       <button type="button" className={btn} disabled={value <= min} onClick={() => onChange(value - 1)}>
@@ -353,7 +353,7 @@ function EmplacementForm({ onDone }: { onDone: () => void }) {
               </div>
               <Stepper value={largeur} onChange={setLargeur} />
             </div>
-            <div className="flex items-center justify-between mt-4 pt-4 border-t border-gold/10">
+            <div className="flex items-center justify-between mt-4 pt-4 border-t border-line/40">
               <div>
                 <div className="text-[0.92rem] font-semibold">Hauteur</div>
                 <div className="text-muted text-xs">Nombre de rangées</div>
@@ -361,7 +361,7 @@ function EmplacementForm({ onDone }: { onDone: () => void }) {
               <Stepper value={hauteur} onChange={setHauteur} />
             </div>
 
-            <div className="mt-4 pt-4 border-t border-gold/10">
+            <div className="mt-4 pt-4 border-t border-line/40">
               <div className="text-[0.92rem] font-semibold mb-2.5">Disposition</div>
               <div className="grid grid-cols-3 gap-2">
                 {DISPOSITIONS.map((d) => (
@@ -372,7 +372,7 @@ function EmplacementForm({ onDone }: { onDone: () => void }) {
                     className={`rounded-xl border px-2 py-3 text-xs leading-tight transition ${
                       disposition === d
                         ? 'border-gold bg-gold/10 text-ink font-semibold'
-                        : 'border-gold/15 text-muted'
+                        : 'border-line text-muted'
                     }`}
                   >
                     {DISPOSITION_LABELS[d]}

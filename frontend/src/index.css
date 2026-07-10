@@ -1,36 +1,56 @@
 @import 'tailwindcss';
 
-/* ---------- Design system "allée des vins" ---------- */
+/* ---------- Design system « CavaVin » ----------
+   Palette issue de la maquette « CavaVin Écrans » : fond brun très sombre,
+   cartes mates, lie-de-vin pour les actions primaires, or pour les accents
+   (statut « à boire », valeurs, sélection). Toutes les couleurs sont en
+   oklch, reprises telles quelles de la maquette. */
 @theme {
-  --color-wine: #a83a5b;
-  --color-wine-soft: #c4657f;
-  --color-wine-deep: #7c2740;
-  --color-gold: #cda86a;
-  --color-gold-soft: #9c7f4d;
-  --color-ink: #f4ede2;
-  --color-muted: #b6a597;
-  --color-bg: #1b1512;
+  /* Fond & surfaces */
+  --color-bg: oklch(12% 0.01 40);
+  --color-surface: oklch(24% 0.022 40); /* cartes */
+  --color-surface-2: oklch(28% 0.02 40); /* badges, pistes de jauges */
+  --color-line: oklch(35% 0.02 40); /* contours discrets (chips, boutons) */
+  --color-line-strong: oklch(40% 0.03 40); /* bord de carte */
 
-  /* Couleurs de vin (alvéoles, stats, légende) */
-  --color-rouge: #8e2f45;
-  --color-rougevif: #c15571;
-  --color-blanc: #e6d491;
-  --color-rose: #e8a0b4;
-  --color-bulles: #d9b653;
-  --color-autre: #9aa0ab;
-  --color-ok: #6cae82;
-  --color-alerte: #d8695f;
+  /* Lie-de-vin (marque, actions primaires) */
+  --color-wine: oklch(40% 0.14 20);
+  --color-wine-soft: oklch(45% 0.14 20);
+  --color-wine-deep: oklch(35% 0.13 20);
+  --color-wine-bright: oklch(60% 0.14 20); /* segment actif, liquide */
 
-  /* Jetons d'interface partagés (placeholder, liseré doré, surfaces flottantes) */
-  --color-placeholder: #8a7a6d;
-  --color-line: rgba(205, 168, 106, 0.16);
-  --color-surface: #241a16;
+  /* Or (accents, statut « à boire », valeurs) */
+  --color-gold: oklch(70% 0.13 85);
+  --color-gold-soft: oklch(65% 0.13 85);
 
-  /* Rayon standard des cartes en verre */
-  --radius-card: 18px;
+  /* Textes */
+  --color-ink: oklch(94% 0.015 70);
+  --color-ink-bright: oklch(97% 0.012 70);
+  --color-muted: oklch(65% 0.02 70);
+  --color-muted-strong: oklch(75% 0.02 70);
+  --color-placeholder: oklch(55% 0.02 70);
+
+  /* Étiquette (fiche vin) & vigne (logo) */
+  --color-cream: oklch(95% 0.012 70);
+  --color-vigne: oklch(55% 0.05 130);
+
+  /* Couleurs de vin (alvéoles, silhouettes, légende) */
+  --color-rouge: oklch(40% 0.14 20);
+  --color-rougevif: oklch(60% 0.14 20);
+  --color-blanc: oklch(85% 0.05 95);
+  --color-rose: oklch(70% 0.09 20);
+  --color-bulles: oklch(80% 0.1 95);
+  --color-autre: oklch(60% 0.02 70);
+
+  /* Feedback : « à boire » se signale en or, « dépassé » en rouge alerte */
+  --color-ok: oklch(65% 0.13 85);
+  --color-alerte: oklch(58% 0.17 25);
+
+  /* Rayon standard des cartes */
+  --radius-card: 16px;
 
   --font-serif: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
-  --font-sans: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-sans: 'Manrope', -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
 html {
@@ -43,40 +63,30 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
-  background:
-    radial-gradient(135% 72% at 50% -8%, rgba(168, 58, 91, 0.18), transparent 58%),
-    radial-gradient(120% 68% at 50% 118%, rgba(205, 168, 106, 0.1), transparent 60%),
-    linear-gradient(180deg, #1d1613 0%, #140f0c 100%);
-  background-attachment: fixed;
+  background: var(--color-bg);
 }
 
-/* Cartes en verre givré, réutilisées partout via la classe .glass */
+/* Carte mate standard, réutilisée partout via la classe .glass */
 @utility glass {
-  background: rgba(43, 34, 30, 0.62);
-  -webkit-backdrop-filter: saturate(1.2) blur(14px);
-  backdrop-filter: saturate(1.2) blur(14px);
-  border: 1px solid var(--color-line);
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-line-strong);
 }
 
-/* ---------- Surfaces flottantes floutées ----------
+/* ---------- Surfaces flottantes ----------
    Barres collées (header / nav / en-tête de panneau plein écran), barres
-   d'action fixes en bas d'écran et fond des bottom sheets. Centralise le
-   même flou « saturate(1.2) blur(14px) » qui était dupliqué en style inline. */
+   d'action fixes en bas d'écran et fond des bottom sheets. */
 @utility bar-top {
-  background: linear-gradient(180deg, rgba(27, 21, 18, 0.9), rgba(27, 21, 18, 0.6));
-  -webkit-backdrop-filter: saturate(1.2) blur(14px);
-  backdrop-filter: saturate(1.2) blur(14px);
+  background: color-mix(in oklab, var(--color-bg) 88%, transparent);
+  -webkit-backdrop-filter: saturate(1.1) blur(12px);
+  backdrop-filter: saturate(1.1) blur(12px);
 }
 @utility bar-bottom {
-  background: linear-gradient(180deg, rgba(27, 21, 18, 0.4), rgba(20, 15, 12, 0.97));
-  -webkit-backdrop-filter: saturate(1.2) blur(14px);
-  backdrop-filter: saturate(1.2) blur(14px);
+  background: color-mix(in oklab, var(--color-bg) 92%, transparent);
+  -webkit-backdrop-filter: saturate(1.1) blur(12px);
+  backdrop-filter: saturate(1.1) blur(12px);
 }
 @utility sheet-surface {
-  background: linear-gradient(180deg, rgba(48, 38, 33, 0.94), rgba(32, 24, 20, 0.97));
-  -webkit-backdrop-filter: saturate(1.2) blur(14px);
-  backdrop-filter: saturate(1.2) blur(14px);
+  background: oklch(20% 0.018 40);
 }
 
 input,
@@ -85,7 +95,7 @@ textarea {
   font-family: var(--font-sans);
 }
 select option {
-  color: #1b1512;
+  color: oklch(20% 0.018 40);
 }
 /* Masque la scrollbar des chips horizontales */
 .no-scrollbar::-webkit-scrollbar {
@@ -114,8 +124,8 @@ select option {
   width: 26px;
   height: 26px;
   border-radius: 9999px;
-  background: linear-gradient(180deg, #c4657f, #7c2740);
-  border: 2px solid #cda86a;
+  background: var(--color-wine);
+  border: 2px solid var(--color-gold);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
   cursor: pointer;
 }
@@ -124,8 +134,8 @@ select option {
   width: 26px;
   height: 26px;
   border-radius: 9999px;
-  background: linear-gradient(180deg, #c4657f, #7c2740);
-  border: 2px solid #cda86a;
+  background: var(--color-wine);
+  border: 2px solid var(--color-gold);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
   cursor: pointer;
 }
