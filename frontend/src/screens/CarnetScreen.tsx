@@ -32,35 +32,42 @@ export default function CarnetScreen() {
   }, [])
 
   return (
-    <Card>
-      <CardTitle>Carnet de dégustation</CardTitle>
-      {loading ? (
-        <p className="text-muted text-sm">Chargement du carnet…</p>
-      ) : notes.length === 0 ? (
-        <p className="text-muted text-sm">
-          Aucune dégustation pour le moment. Ouvre une fiche vin et lance « Commencer une
-          dégustation » pour la consigner ici.
-        </p>
-      ) : (
-        notes.map((n) => (
-          <div key={n.id} className="py-3 border-b border-gold/10 last:border-0">
-            <div className="flex items-center gap-2.5">
-              <span
-                className="w-2.5 h-2.5 rounded-full shrink-0"
-                style={{ background: DOT[n.couleur] ?? DOT.AUTRE }}
-                title={COULEUR_LABELS[n.couleur]}
-              />
-              <span className="flex-1 min-w-0 truncate text-sm">
-                {n.domaine_nom} — {n.cuvee_nom}
-                {n.millesime ? ` ${n.millesime}` : ''}
-              </span>
-              <Stars note={Number(n.note)} />
+    <div>
+      <h1 className="font-serif text-[1.75rem] text-ink-bright m-0 mb-3 px-0.5 font-medium">
+        Carnet
+      </h1>
+      <Card>
+        <CardTitle>Carnet de dégustation</CardTitle>
+        {loading ? (
+          <p className="text-muted text-sm">Chargement du carnet…</p>
+        ) : notes.length === 0 ? (
+          <p className="text-muted text-sm">
+            Aucune dégustation pour le moment. Ouvre une fiche vin et lance « Enregistrer une
+            dégustation » pour la consigner ici.
+          </p>
+        ) : (
+          notes.map((n) => (
+            <div key={n.id} className="py-3 border-b border-line/40 last:border-0">
+              <div className="flex items-center gap-2.5">
+                <span
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ background: DOT[n.couleur] ?? DOT.AUTRE }}
+                  title={COULEUR_LABELS[n.couleur]}
+                />
+                <span className="flex-1 min-w-0 truncate text-sm">
+                  {n.domaine_nom} — {n.cuvee_nom}
+                  {n.millesime ? ` ${n.millesime}` : ''}
+                </span>
+                <Stars note={Number(n.note)} />
+              </div>
+              {n.commentaire && (
+                <p className="text-sm text-ink/90 mt-1.5 ml-5">« {n.commentaire} »</p>
+              )}
+              <div className="text-xs text-muted mt-1 ml-5">{formatDate(n.date_degustation)}</div>
             </div>
-            {n.commentaire && <p className="text-sm text-ink/90 mt-1.5 ml-5">« {n.commentaire} »</p>}
-            <div className="text-xs text-muted mt-1 ml-5">{formatDate(n.date_degustation)}</div>
-          </div>
-        ))
-      )}
-    </Card>
+          ))
+        )}
+      </Card>
+    </div>
   )
 }

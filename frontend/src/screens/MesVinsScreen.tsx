@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useData } from '../data'
-import { BottleSheet } from '../components/bottle'
+import { BottleBar, BottleSheet } from '../components/bottle'
 import { FicheVin } from '../components/FicheVin'
 import { FiltresSheet } from '../components/FiltresSheet'
 import {
@@ -11,7 +11,7 @@ import {
   type Filtres,
   type Ligne,
 } from '../filtres'
-import { StatutBadge, wineGrad } from '../ui'
+import { StatutBadge, wineFill } from '../ui'
 import { COULEUR_LABELS, type Bouteille, type Couleur, type Cuvee } from '../types'
 
 /* ------------------------------------------------------------------ *
@@ -21,19 +21,18 @@ import { COULEUR_LABELS, type Bouteille, type Couleur, type Cuvee } from '../typ
  *  cumule les quantités dispersées dans plusieurs emplacements.
  * ------------------------------------------------------------------ */
 
-/* Dégradé de la vignette bouteille, selon la couleur du vin. */
-const CARD_BG: Record<Couleur, string> = {
-  ROUGE: 'linear-gradient(150deg, #8e2f45, #c15571)',
-  BLANC: 'linear-gradient(150deg, #9c8a3d, #e6d491)',
-  ROSE: 'linear-gradient(150deg, #b5627a, #e8a0b4)',
-  BULLES: 'linear-gradient(150deg, #a8863d, #d9b653)',
-  AUTRE: 'linear-gradient(150deg, #52585f, #9aa0ab)',
-}
+/* Chips de filtre rapide par couleur, dans l'ordre de la maquette. */
+const CHIPS: [Couleur, string][] = [
+  ['ROUGE', 'Rouge'],
+  ['BLANC', 'Blanc'],
+  ['ROSE', 'Rosé'],
+  ['BULLES', 'Pétillant'],
+]
 
-/** Formate un prix « 25.00 » -> « 25,00 € ». */
-function formatPrix(prix: string | null): string {
-  if (prix == null) return '--€'
-  return `${Number(prix).toFixed(2).replace('.', ',')} €`
+/** Formate un prix « 25.00 » -> « 25 € » (compact, comme la maquette). */
+function formatPrixCourt(prix: string | null): string | null {
+  if (prix == null || prix === '') return null
+  return `${Math.round(Number(prix))} €`
 }
 
 /** Symbole monétaire à partir d'un code ISO. */
@@ -41,16 +40,7 @@ function devise(code: string): string {
   return { EUR: '€', USD: '$', GBP: '£' }[code] ?? code
 }
 
-/* Petit badge « Oeni+ 👑 » pour les infos premium verrouillées. */
-function OeniLock() {
-  return (
-    <span className="inline-flex items-center gap-1 text-gold font-semibold">
-      Oeni+ <span className="text-[0.85rem]">👑</span>
-    </span>
-  )
-}
-
-export default function MesVinsScreen() {
+export default function MesVinsScreen({ onAjouter }: { onAjouter: () => void }) {
   const { cuvees, bouteilles, cuveeColor } = useData()
   const [query, setQuery] = useState('')
   const [showFilters, setShowFilters] = useState(false)
@@ -114,115 +104,136 @@ export default function MesVinsScreen() {
   const nbFiltres = compteFiltres(filtres, bounds)
   const totalBouteilles = lignes.reduce((n, l) => n + l.quantite, 0)
 
+  // Chip rapide couleur : sélection exclusive, « Tous » remet à zéro.
+  const chipCouleur = (c: Couleur | null) => {
+    setFiltres((f) => ({
+      ...f,
+      couleurs: c === null ? new Set<Couleur>() : new Set<Couleur>([c]),
+    }))
+  }
+  const chipActive = (c: Couleur | null) =>
+    c === null ? filtres.couleurs.size === 0 : filtres.couleurs.size === 1 && filtres.couleurs.has(c)
+
+  const chipCls = (active: boolean) =>
+    `shrink-0 px-3.5 py-1.5 rounded-full text-xs transition ${
+      active ? `${wineFill} text-ink-bright font-semibold` : 'border border-line text-ink'
+    }`
+
   return (
     <div>
       <div className="flex items-baseline justify-between mb-3 px-0.5">
-        <h1 className="font-serif text-[1.7rem] text-ink m-0">Mes vins</h1>
+        <h1 className="font-serif text-[1.75rem] text-ink-bright m-0 font-medium">Mes vins</h1>
         <span className="text-xs text-muted">
           {lignes.length} réf. · {totalBouteilles} btl
         </span>
       </div>
 
-      {/* ---------- Recherche + filtre ---------- */}
-      <div className="flex gap-2 mb-3">
+      {/* ---------- Recherche + filtres + ajout ---------- */}
+      <div className="flex gap-2.5 mb-3">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Cherchez un vin dans votre cave"
-          className="flex-1 text-[16px] px-4 py-3 rounded-2xl glass text-ink outline-none placeholder:text-placeholder focus:border-gold/35"
+          className="flex-1 min-w-0 text-[16px] px-3.5 py-3 rounded-xl glass text-ink outline-none placeholder:text-placeholder focus:border-gold/60"
         />
         <button
           onClick={() => setShowFilters(true)}
           aria-label="Filtrer"
-          className={`shrink-0 w-12 rounded-2xl grid place-items-center text-lg transition ${
-            nbFiltres ? `${wineGrad} text-white` : 'glass text-muted'
+          className={`shrink-0 w-11 rounded-xl grid place-items-center transition ${
+            nbFiltres ? `${wineFill} text-ink-bright` : 'glass text-muted'
           }`}
         >
           <span className="relative">
-            🔽
+            <svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true">
+              <path
+                d="M1 2h14M3.5 7h9M6 12h4"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+              />
+            </svg>
             {nbFiltres > 0 && (
-              <span className="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 rounded-full bg-gold text-[0.6rem] font-bold text-bg grid place-items-center">
+              <span className="absolute -top-2 -right-2.5 min-w-4 h-4 px-1 rounded-full bg-gold text-[0.6rem] font-bold grid place-items-center" style={{ color: 'oklch(15% 0.012 40)' }}>
                 {nbFiltres}
               </span>
             )}
           </span>
         </button>
+        <button
+          onClick={onAjouter}
+          aria-label="Ajouter un vin"
+          className={`shrink-0 w-11 rounded-xl grid place-items-center ${wineFill} text-ink-bright active:scale-95 transition`}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+            <path d="M7 1v12M1 7h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
+
+      {/* ---------- Chips couleur ---------- */}
+      <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 mb-3">
+        <button className={chipCls(chipActive(null))} onClick={() => chipCouleur(null)}>
+          Tous
+        </button>
+        {CHIPS.map(([c, lbl]) => (
+          <button key={c} className={chipCls(chipActive(c))} onClick={() => chipCouleur(c)}>
+            {lbl}
+          </button>
+        ))}
       </div>
 
       {/* ---------- Liste vinothèque ---------- */}
       {lignes.length === 0 ? (
         <div className="glass rounded-card p-4 text-muted text-sm">
-          Aucun vin dans votre cave pour le moment. Scannez une étiquette depuis l'onglet Ajouter
-          pour commencer votre vinothèque.
+          Aucun vin dans votre cave pour le moment. Ajoutez une bouteille (photo d'étiquette,
+          code-barres ou recherche) pour commencer votre vinothèque.
         </div>
       ) : filtered.length === 0 ? (
         <div className="glass rounded-card p-4 text-muted text-sm">
           Aucun vin ne correspond à votre recherche.
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2.5">
           {filtered.map((l) => {
             const c = l.cuvee
+            const prix = formatPrixCourt(l.ref.prix_achat)
             const valeur =
               c?.prix_min && c?.prix_max
                 ? `${Math.round(Number(c.prix_min))}–${Math.round(Number(c.prix_max))} ${devise(
                     c.devise || 'EUR',
                   )}`
                 : null
-            const lieu = [c?.region || c?.appellation, c?.pays].filter(Boolean).join(', ')
+            const lieu = [c?.region || c?.appellation, l.ref.millesime]
+              .filter(Boolean)
+              .join(' · ')
             return (
               <button
                 key={l.key}
                 onClick={() => setFiche(l.ref)}
-                className="glass rounded-card p-2.5 flex gap-3 text-left active:scale-[0.99] transition"
+                className="glass rounded-[10px] p-3 flex items-center gap-3 text-left active:scale-[0.99] transition"
               >
-                {/* Vignette bouteille */}
-                <div
-                  className="relative shrink-0 w-[104px] h-[132px] rounded-2xl grid place-items-center overflow-hidden"
-                  style={{ background: CARD_BG[l.couleur] }}
-                >
-                  <span className="absolute top-1.5 left-2 text-white font-serif text-[1.05rem] font-semibold drop-shadow">
-                    {l.ref.millesime ?? 'N.M.'}
-                  </span>
-                  <span className="absolute top-1.5 right-2 text-white font-serif text-[1.05rem] font-semibold drop-shadow">
-                    x{l.quantite}
-                  </span>
-                  {c?.image_url ? (
-                    <img
-                      src={c.image_url}
-                      alt={l.ref.cuvee_nom}
-                      loading="lazy"
-                      className="h-[104px] object-contain drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)]"
-                    />
-                  ) : (
-                    <span className="text-[3.4rem] leading-none drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)]">
-                      🍷
-                    </span>
-                  )}
-                </div>
-
-                {/* Détails */}
-                <div className="flex-1 min-w-0 py-0.5">
-                  <div className="text-muted text-[0.82rem] truncate">{l.ref.domaine_nom}</div>
-                  <div className="font-serif text-[1.15rem] text-ink font-semibold leading-tight line-clamp-2">
+                <BottleBar couleur={l.couleur} />
+                <span className="flex-1 min-w-0 flex flex-col gap-[3px]">
+                  <span className="text-[13px] truncate">
                     {c?.classification || l.ref.cuvee_nom}
-                  </div>
-                  {lieu && <div className="text-muted text-[0.8rem] mt-1.5 truncate">{lieu}</div>}
-                  <div className="flex items-center justify-between gap-2 mt-2">
-                    <StatutBadge statut={l.ref.statut} className="text-[0.78rem] px-2.5 py-1 font-medium" />
-                    <span className="text-muted text-[0.78rem] whitespace-nowrap">75cl</span>
-                  </div>
-                  <div className="flex items-center gap-3 mt-2 text-[0.78rem] text-muted">
-                    <span>
-                      Prix d'achat :{' '}
-                      <span className="text-ink">{formatPrix(l.ref.prix_achat)}</span>
+                  </span>
+                  <span className="text-[11px] text-muted truncate">
+                    {lieu || l.ref.domaine_nom}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <StatutBadge
+                      statut={l.ref.statut}
+                      className="text-[10px] px-1.5 py-0.5 font-medium"
+                    />
+                    <span className="text-[10px] text-placeholder">
+                      75cl{prix ? ` · ${prix}` : valeur ? ` · ${valeur}` : ''}
                     </span>
-                    <span>
-                      Valeur : {valeur ? <span className="text-ink">{valeur}</span> : <OeniLock />}
-                    </span>
-                  </div>
+                  </span>
                   <span className="sr-only">{COULEUR_LABELS[l.couleur]}</span>
-                </div>
+                </span>
+                <span className="text-[11px] px-2 py-0.5 rounded-[10px] bg-surface-2 text-muted-strong">
+                  ×{l.quantite}
+                </span>
               </button>
             )
           })}

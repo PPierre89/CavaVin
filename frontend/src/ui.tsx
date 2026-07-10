@@ -1,61 +1,65 @@
 import { useEffect, type ButtonHTMLAttributes, type ReactNode } from 'react'
-import { STATUT_COLORS, STATUT_LABELS, type Statut } from './types'
+import { STATUT_LABELS, type Statut } from './types'
 
 /* ------------------------------------------------------------------ *
- *  Socle du design system « allée des vins ».
+ *  Socle du design system « CavaVin ».
  *
- *  Regroupe les jetons de style réutilisables (dégradés signature,
+ *  Regroupe les jetons de style réutilisables (aplats signature,
  *  classes de champs/boutons) et les primitives d'UI partagées par les
  *  écrans (Chip, badge de statut, bouton icône, contrôle segmenté…) afin
  *  d'éviter la duplication des mêmes chaînes Tailwind d'un fichier à l'autre.
  * ------------------------------------------------------------------ */
 
-/* ---------- Dégradés signature ---------- */
-// Dégradé « lie de vin » : états actifs, boutons primaires, chips sélectionnées.
-export const wineGrad = 'bg-gradient-to-b from-wine-soft to-wine-deep'
-// Dégradé doré : CTA premium et éléments de data-viz (barres, jauges).
-export const goldGrad = 'bg-gradient-to-b from-gold to-gold-soft'
+/* ---------- Aplats signature ---------- */
+// Aplat « lie-de-vin » : états actifs, boutons primaires, chips sélectionnées.
+export const wineFill = 'bg-wine'
+// Aplat doré : éléments de data-viz (barres, jauges) et accents premium.
+export const goldFill = 'bg-gold'
 
-/* ---------- Logo verre-à-vin "allée des vins" ---------- */
+/* ---------- Logo grappe de raisin « CavaVin » ---------- */
+// Cinq grains (3 + 2 en quinconce) et une rafle verte, comme sur la maquette
+// « CavaVin Identité ».
 export function Logo({ className = 'w-8 h-8' }: { className?: string }) {
   return (
-    <svg viewBox="0 0 64 64" className={`block text-wine ${className}`} aria-hidden="true">
-      <path d="M32 39V52" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-      <path d="M21 54h22" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    <svg viewBox="0 0 64 64" className={`block ${className}`} aria-hidden="true">
       <path
-        d="M16 11h32c0 16-8 29-16 29S16 27 16 11Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinejoin="round"
+        d="M32 8v14"
+        stroke="var(--color-vigne)"
+        strokeWidth="4"
+        strokeLinecap="round"
       />
-      <g fill="currentColor">
-        <circle cx="26" cy="19" r="3.4" />
-        <circle cx="34" cy="18" r="3.4" />
-        <circle cx="41" cy="20" r="3.2" />
-        <circle cx="29.5" cy="25.5" r="3.4" />
-        <circle cx="37.5" cy="25" r="3.4" />
-        <circle cx="33.5" cy="31.5" r="3.2" />
+      <g fill="var(--color-wine)">
+        <circle cx="17" cy="32" r="8" />
+        <circle cx="32" cy="32" r="8" />
+        <circle cx="47" cy="32" r="8" />
       </g>
-      <path d="M44 9c4-3 8.5-3 11.5 0-2.2 5.2-7.2 6.2-11.5 3Z" className="fill-gold" />
+      <g fill="var(--color-wine-soft)">
+        <circle cx="24.5" cy="46" r="8" />
+        <circle cx="39.5" cy="46" r="8" />
+      </g>
     </svg>
   )
 }
 
 /* ---------- Classes réutilisables ---------- */
 export const inputCls =
-  'w-full text-[16px] px-3.5 py-3 rounded-xl bg-black/30 border border-gold/15 text-ink outline-none transition focus:border-gold/35 focus:ring-2 focus:ring-wine/25 placeholder:text-placeholder'
+  'w-full text-[16px] px-3.5 py-3 rounded-xl bg-surface border border-line-strong text-ink outline-none transition focus:border-gold/60 focus:ring-2 focus:ring-wine/30 placeholder:text-placeholder'
 export const labelCls = 'block text-xs mt-3 mb-1.5 text-muted uppercase tracking-wide'
-export const primaryCls = `w-full mt-4 py-3.5 rounded-xl font-bold text-white ${wineGrad} shadow-[0_8px_22px_rgba(124,39,64,0.38)] active:scale-[0.985] transition disabled:opacity-60`
+export const primaryCls = `w-full mt-4 py-3.5 rounded-xl font-semibold text-ink-bright ${wineFill} active:scale-[0.985] transition disabled:opacity-60`
 export const ghostCls =
-  'px-3.5 py-2.5 rounded-xl border border-gold/15 text-muted text-sm bg-transparent active:scale-[0.985] transition'
+  'px-3.5 py-2.5 rounded-xl border border-line text-muted text-sm bg-transparent active:scale-[0.985] transition'
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return <div className={`glass rounded-card p-4 mb-3.5 ${className}`}>{children}</div>
 }
 
+/* Titre de section : petit libellé capitales espacées, comme sur la maquette. */
 export function CardTitle({ children }: { children: ReactNode }) {
-  return <h2 className="font-serif text-[1.12rem] text-gold m-0 mb-3">{children}</h2>
+  return (
+    <h2 className="text-xs uppercase tracking-[0.1em] text-muted font-sans font-medium m-0 mb-3">
+      {children}
+    </h2>
+  )
 }
 
 export function Field({
@@ -77,7 +81,7 @@ export function Field({
   )
 }
 
-/* ---------- Bouton icône rond en verre ---------- */
+/* ---------- Bouton icône rond ---------- */
 export function IconButton({
   round = true,
   className = '',
@@ -110,12 +114,12 @@ export function Chip({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`shrink-0 px-4 py-2.5 rounded-full text-sm border transition ${
+      className={`shrink-0 px-3.5 py-2 rounded-full text-sm border transition ${
         active
-          ? `${wineGrad} border-wine text-white`
+          ? `${wineFill} border-wine text-ink-bright font-semibold`
           : disabled
-            ? 'border-gold/10 text-muted/40'
-            : 'glass border-transparent text-muted active:scale-95'
+            ? 'border-line/50 text-muted/40'
+            : 'border-line bg-transparent text-ink active:scale-95'
       } ${className}`}
     >
       {children}
@@ -123,7 +127,15 @@ export function Chip({
   )
 }
 
-/* ---------- Badge de statut de dégustation (code couleur apogée) ---------- */
+/* ---------- Badge de statut de dégustation (code couleur apogée) ----------
+   Pilules pleines comme sur la maquette : « À garder » neutre, « À boire »
+   sur fond or sombre, « Dépassé » sur fond rouge sombre. */
+const STATUT_BADGE_STYLES: Record<Statut, { background: string; color: string }> = {
+  A_GARDER: { background: 'var(--color-surface-2)', color: 'var(--color-muted-strong)' },
+  A_BOIRE: { background: 'oklch(33% 0.11 85)', color: 'oklch(90% 0.02 85)' },
+  DEPASSE: { background: 'oklch(30% 0.1 25)', color: 'oklch(82% 0.08 25)' },
+}
+
 export function StatutBadge({
   statut,
   className = 'text-xs px-2.5 py-1 font-medium',
@@ -133,8 +145,8 @@ export function StatutBadge({
 }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full border whitespace-nowrap ${className}`}
-      style={{ color: STATUT_COLORS[statut], borderColor: STATUT_COLORS[statut] }}
+      className={`inline-flex items-center rounded-full whitespace-nowrap ${className}`}
+      style={STATUT_BADGE_STYLES[statut]}
     >
       {STATUT_LABELS[statut]}
     </span>
@@ -162,7 +174,7 @@ export function SegTabs<T extends string>({
           key={val}
           onClick={() => onChange(val)}
           className={`flex-1 py-2.5 text-sm transition ${pill ? 'rounded-full' : 'rounded-[9px]'} ${
-            value === val ? `${wineGrad} text-white font-semibold` : 'text-muted'
+            value === val ? `${wineFill} text-ink-bright font-semibold` : 'text-muted'
           }`}
         >
           {label}
@@ -198,13 +210,13 @@ export function ConfirmSheet({
           {message && <div className="text-muted text-sm mt-2">{message}</div>}
           <button
             onClick={onConfirm}
-            className="w-full mt-5 py-3.5 rounded-xl font-bold text-white bg-gradient-to-b from-rougevif to-wine-deep active:scale-[0.985] transition"
+            className="w-full mt-5 py-3.5 rounded-xl font-semibold text-ink-bright bg-alerte active:scale-[0.985] transition"
           >
             {confirmLabel}
           </button>
           <button
             onClick={onClose}
-            className="w-full mt-2.5 py-3 rounded-xl border border-gold/15 text-muted active:scale-[0.985] transition"
+            className="w-full mt-2.5 py-3 rounded-xl border border-line text-muted active:scale-[0.985] transition"
           >
             Annuler
           </button>
@@ -240,12 +252,12 @@ export function Sheet({
         }`}
       />
       <div
-        className={`sheet-surface fixed left-0 right-0 bottom-0 z-50 rounded-t-[24px] border border-gold/15 border-b-0 px-5 pt-2.5 max-h-[82vh] overflow-y-auto shadow-[0_-14px_40px_rgba(0,0,0,0.45)] transition-transform duration-[250ms] ${
+        className={`sheet-surface fixed left-0 right-0 bottom-0 z-50 rounded-t-[24px] border border-line-strong border-b-0 px-5 pt-2.5 max-h-[82vh] overflow-y-auto shadow-[0_-14px_40px_rgba(0,0,0,0.45)] transition-transform duration-[250ms] ${
           open ? 'translate-y-0' : 'translate-y-[105%]'
         }`}
         style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom))' }}
       >
-        <div className="w-10 h-1 rounded bg-gold/30 mx-auto my-1 mb-3.5" />
+        <div className="w-10 h-1 rounded bg-line-strong mx-auto my-1 mb-3.5" />
         {children}
       </div>
     </>

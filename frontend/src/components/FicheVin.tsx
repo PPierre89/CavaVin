@@ -2,42 +2,34 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { api, errMsg } from '../api'
 import { useData } from '../data'
 import { useToast } from '../toast'
-import { IconButton, SegTabs, StatutBadge, goldGrad, wineGrad } from '../ui'
+import { IconButton, Logo, wineFill } from '../ui'
 import {
   COULEUR_LABELS,
+  COULEUR_VARS,
+  STATUT_COLORS,
+  STATUT_LABELS,
   type Bouteille,
-  type Couleur,
   type FicheCuvee,
   type PointPrix,
   type PrixMarche,
   type PrixMarchand,
+  type Statut,
 } from '../types'
 import { TastingSheet } from './TastingSheet'
 import { formatDate, formatDateTime } from '../dates'
 
 /* ------------------------------------------------------------------ *
- *  Fiche vin plein écran — vue détaillée d'un vin.
+ *  Fiche vin plein écran — vue détaillée d'un vin (maquette « CavaVin
+ *  Écrans », colonne « Fiche bouteille »).
  *
  *  Toutes les données affichées viennent du backend :
  *   - référentiel + conseil de dégustation + profil gustatif + accords
  *     mets-vins + cépages + prix d'achat moyen via GET /cuvees/{id}/fiche/ ;
  *   - millésimes en stock, apogée et emplacement via la cave de l'utilisateur.
- *
- *  Les cartes « Oeni+ » (maturité, valeur actuelle) et l'historique de prix
- *  restent des emplacements premium à débloquer, comme sur les maquettes.
  * ------------------------------------------------------------------ */
 
-const HERO_BG: Record<Couleur, string> = {
-  ROUGE: 'linear-gradient(160deg, #3a1622, #6d2740 60%, #1b1512)',
-  BLANC: 'linear-gradient(160deg, #4a4327, #7c6f3d 60%, #1b1512)',
-  ROSE: 'linear-gradient(160deg, #4a2b34, #8e5266 60%, #1b1512)',
-  BULLES: 'linear-gradient(160deg, #4a4027, #8a733d 60%, #1b1512)',
-  AUTRE: 'linear-gradient(160deg, #2f333a, #52585f 60%, #1b1512)',
-}
-
-/* Classes réutilisées : CTA doré plein et bouton « ajouter » en pointillés. */
-const goldBtnCls = `w-full py-3.5 rounded-2xl font-bold text-white ${goldGrad}`
-const addBtnCls = 'w-full py-3.5 rounded-2xl border border-dashed border-gold/25 text-muted text-sm'
+/* Carte mate compacte (rayon 10px de la maquette). */
+const tileCls = 'glass rounded-[10px] px-3 py-2.5'
 
 /** Formate une fenêtre d'apogée (« 2024-2035 », « dès 2024 », « avant 2035 »). */
 function formatApogee(debut: number | null, fin: number | null): string | null {
@@ -84,9 +76,9 @@ function moisCourt(iso: string): string {
 }
 
 /* Graphe d'historique de prix : série « meilleur prix » (prix_min) dans le temps,
-   avec une bande min–max en fond. SVG maison (aucune dépendance), aligné sur le
-   style de l'app (or sur verre sombre). Requiert au moins deux points ; l'axe X
-   est mis à l'échelle sur les dates réelles de relevé (fetchedAt). */
+   avec une bande min–max en fond. SVG maison (aucune dépendance), or sur carte
+   sombre. Requiert au moins deux points ; l'axe X est mis à l'échelle sur les
+   dates réelles de relevé (fetchedAt). */
 function PriceHistoryChart({ points }: { points: PointPrix[] }) {
   const W = 320
   const H = 150
@@ -159,38 +151,69 @@ function PriceHistoryChart({ points }: { points: PointPrix[] }) {
   )
 }
 
-/* Carte du bandeau de valeur : soit une vraie valeur, soit un verrou « Oeni+ ». */
-function InfoCard({ label, value, locked }: { label: string; value?: string; locked?: boolean }) {
+/* Petite carte info (libellé + valeur), grille 2 colonnes de la maquette. */
+function InfoTile({ label, value, gold }: { label: string; value: ReactNode; gold?: boolean }) {
   return (
-    <div className="glass rounded-2xl px-3.5 py-3">
-      {locked || !value ? (
-        <div className="flex items-center gap-1.5 font-serif text-[1.15rem] text-gold">
-          Oeni+ <span className="text-[0.9rem]">👑</span>
-        </div>
-      ) : (
-        <div className="font-serif text-[1.15rem] text-ink">{value}</div>
-      )}
-      <div className="text-[0.72rem] text-muted mt-1">{label}</div>
+    <div className={tileCls}>
+      <div className="text-[11px] text-muted">{label}</div>
+      <div className={`text-[15px] mt-0.5 ${gold ? 'text-gold-soft' : 'text-ink'}`}>{value}</div>
     </div>
   )
 }
 
-function Section({ title, emoji, action, children }: {
+/* Titre de section : capitales espacées, comme la maquette. */
+function Section({ title, action, children }: {
   title: string
-  emoji?: string
   action?: ReactNode
   children: ReactNode
 }) {
   return (
-    <section className="mt-6">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="font-serif text-[1.35rem] text-ink m-0">
-          {title} {emoji && <span className="text-[1.05rem]">{emoji}</span>}
+    <section className="mt-5">
+      <div className="flex items-center justify-between mb-2.5">
+        <h2 className="text-xs uppercase tracking-[0.1em] text-muted font-sans font-medium m-0">
+          {title}
         </h2>
         {action}
       </div>
       {children}
     </section>
+  )
+}
+
+/* Jauge de maturité : trois segments (à garder / à boire / dépassé) avec un
+   curseur pointant le statut calculé de la bouteille sélectionnée. */
+const ORDRE_STATUTS: Statut[] = ['A_GARDER', 'A_BOIRE', 'DEPASSE']
+function MaturiteGauge({ statut }: { statut: Statut }) {
+  const idx = ORDRE_STATUTS.indexOf(statut)
+  return (
+    <div className={`${tileCls} flex flex-col gap-2 py-3`}>
+      <div className="flex justify-between items-center">
+        <span className="text-[11px] text-muted">Maturité</span>
+        <span className="text-[13px] font-semibold" style={{ color: STATUT_COLORS[statut] }}>
+          {STATUT_LABELS[statut]}
+        </span>
+      </div>
+      <div className="relative flex gap-1 mt-1.5">
+        {ORDRE_STATUTS.map((s, i) => (
+          <div
+            key={s}
+            className="flex-1 h-1.5 rounded-[3px]"
+            style={{ background: i === idx ? 'var(--color-wine-bright)' : 'oklch(38% 0.02 40)' }}
+          />
+        ))}
+        <div
+          className="absolute -top-[7px] w-0 h-0 border-l-4 border-r-4 border-t-[5px] border-l-transparent border-r-transparent transition-all"
+          style={{ left: `calc(${((idx * 2 + 1) / 6) * 100}% - 4px)`, borderTopColor: 'var(--color-gold)' }}
+        />
+      </div>
+      <div className="flex justify-between">
+        {ORDRE_STATUTS.map((s) => (
+          <span key={s} className="text-[10px] text-placeholder">
+            {STATUT_LABELS[s]}
+          </span>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -205,15 +228,15 @@ export function FicheVin({
   onOptions: (b: Bouteille) => void
   onRetirer: (b: Bouteille) => void
 }) {
-  const { bouteilles, cuveeColor, mouvements } = useData()
+  const { bouteilles, cuveeColor, mouvements, refresh } = useData()
   const toast = useToast()
   const couleur = cuveeColor(bouteille)
 
   const [fiche, setFiche] = useState<FicheCuvee | null>(null)
   const [selId, setSelId] = useState(bouteille.id)
-  const [tab, setTab] = useState<'millesimes' | 'historique'>('millesimes')
   const [tasting, setTasting] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [adding, setAdding] = useState(false)
 
   // Millésimes en stock de cette cuvée (données réelles de la cave), triés du
   // plus récent au plus ancien. On garde les Bouteille (avec id + apogée) pour
@@ -230,7 +253,7 @@ export function FicheVin({
   const maxStock = Math.max(1, ...millesimes.map((b) => b.quantite))
   const apogee = formatApogee(selected.apogee_debut_effectif, selected.apogee_fin_effectif)
 
-  // Mouvements de stock concernant cette cuvée (onglet Historique).
+  // Mouvements de stock concernant cette cuvée (section Historique).
   const idsCuvee = useMemo(() => new Set(millesimes.map((b) => b.id)), [millesimes])
   const historique = mouvements.filter((m) => idsCuvee.has(m.bouteille))
 
@@ -285,7 +308,25 @@ export function FicheVin({
     }
   }
 
-  const appellation = fiche?.cuvee.appellation || 'Appellation inconnue'
+  // Bouton « + » de la carte étiquette : une bouteille de plus sur la ligne.
+  const addOne = async () => {
+    if (adding) return
+    setAdding(true)
+    try {
+      await api('PATCH', `/api/bouteilles/${selected.id}/`, { quantite: selected.quantite + 1 })
+      toast('Une bouteille ajoutée au stock. 🍷', 'ok')
+      await refresh()
+    } catch (e) {
+      toast(errMsg(e, "Impossible d'ajuster le stock."), 'err')
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  const region = fiche?.cuvee.region || fiche?.cuvee.appellation || ''
+  const sousTitre = [region, fiche?.cuvee.cepages[0], selected.millesime]
+    .filter(Boolean)
+    .join(' · ')
 
   // Historique de prix accumulé côté serveur (une observation par jour de relevé).
   const histPrix = fiche?.historique_prix ?? []
@@ -293,415 +334,437 @@ export function FicheVin({
 
   return (
     <div className="fixed inset-0 z-40 overflow-y-auto bg-bg">
-      {/* ---------- Hero ---------- */}
       <div
-        className="relative"
-        style={{ background: HERO_BG[couleur], paddingTop: 'calc(12px + env(safe-area-inset-top))' }}
+        className="max-w-[640px] mx-auto px-4"
+        style={{
+          paddingTop: 'calc(12px + env(safe-area-inset-top))',
+          paddingBottom: 'calc(96px + env(safe-area-inset-bottom))',
+        }}
       >
-        <div className="flex items-center justify-between px-4">
-          <IconButton onClick={onClose} aria-label="Retour" className="text-ink text-xl">
-            ‹
-          </IconButton>
-          <div className="flex gap-2.5">
+        {/* ---------- En-tête ---------- */}
+        <div className="flex items-center gap-2.5">
+          <button onClick={onClose} aria-label="Retour" className="p-2 -ml-2 text-muted">
+            <svg width="9" height="15" viewBox="0 0 9 15" aria-hidden="true">
+              <path
+                d="M8 1L1 7.5l7 6.5"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+          <span className="font-serif text-[1.25rem] text-ink-bright">Fiche vin</span>
+          <div className="ml-auto flex gap-2">
             {fiche?.enrichissable && (
               <IconButton
                 onClick={syncFiche}
                 disabled={syncing}
                 aria-label="Synchroniser la fiche"
                 title="Synchroniser depuis WineAPI"
-                className="text-ink text-lg disabled:opacity-60"
+                className="text-ink text-lg disabled:opacity-60 w-9! h-9!"
               >
                 <span className={`inline-block ${syncing ? 'animate-spin' : ''}`}>🔄</span>
               </IconButton>
             )}
-            <IconButton onClick={share} aria-label="Partager" className="text-ink text-lg">
+            <IconButton onClick={share} aria-label="Partager" className="text-ink text-lg w-9! h-9!">
               ⤴
             </IconButton>
           </div>
         </div>
 
-        <div className="flex flex-col items-center pt-3 pb-8">
+        {/* ---------- Carte étiquette + ajustement de quantité ---------- */}
+        <div className="glass rounded-card p-3.5 mt-3 relative flex justify-center">
+          <button
+            onClick={() => onRetirer(selected)}
+            aria-label="Retirer une bouteille"
+            className="absolute top-2.5 left-2.5 w-8 h-8 rounded-full border border-line-strong text-muted-strong grid place-items-center text-lg leading-none active:scale-95 transition"
+            style={{ background: 'oklch(20% 0.018 40)' }}
+          >
+            −
+          </button>
+          <button
+            onClick={addOne}
+            disabled={adding}
+            aria-label="Ajouter une bouteille"
+            className={`absolute top-2.5 right-2.5 w-8 h-8 rounded-full ${wineFill} text-ink-bright grid place-items-center text-lg leading-none font-semibold active:scale-95 transition disabled:opacity-60`}
+          >
+            +
+          </button>
+
           {fiche?.cuvee.image_url ? (
             <img
               src={fiche.cuvee.image_url}
               alt={bouteille.cuvee_nom}
-              className="h-40 object-contain drop-shadow-[0_10px_24px_rgba(0,0,0,0.5)]"
+              className="h-44 object-contain drop-shadow-[0_8px_20px_rgba(0,0,0,0.35)]"
             />
           ) : (
-            <div className="text-[5.5rem] leading-none drop-shadow-[0_10px_24px_rgba(0,0,0,0.5)]">🍷</div>
-          )}
-          <div className="flex flex-wrap justify-center gap-2 mt-3">
-            <span className={`px-4 py-1.5 rounded-full text-white text-sm font-semibold ${wineGrad}`}>
-              {COULEUR_LABELS[couleur]}
-            </span>
-            {fiche?.cuvee.classification && (
-              <span className="px-4 py-1.5 rounded-full text-sm font-semibold border border-gold/40 text-gold">
-                {fiche.cuvee.classification}
+            /* Étiquette stylisée (à défaut de photo) : crème, liseré or. */
+            <div
+              className="w-32 rounded border-[1.5px] px-3.5 py-4 flex flex-col items-center gap-1.5 shadow-[0_8px_20px_rgba(0,0,0,0.35)]"
+              style={{ background: 'var(--color-cream)', borderColor: 'var(--color-gold)' }}
+            >
+              <Logo className="w-5 h-5" />
+              <div className="w-7 h-px" style={{ background: 'var(--color-gold)' }} />
+              <span
+                className="font-serif text-base text-center leading-tight"
+                style={{ color: 'oklch(25% 0.04 40)' }}
+              >
+                {bouteille.cuvee_nom}
               </span>
-            )}
-            <StatutBadge statut={selected.statut} className="px-4 py-1.5 text-sm font-semibold" />
-          </div>
-          <div className="text-muted text-sm mt-3">{appellation}</div>
-          {(fiche?.cuvee.region || fiche?.cuvee.pays) && (
-            <div className="text-muted text-xs mt-0.5">
-              {[fiche?.cuvee.region, fiche?.cuvee.pays].filter(Boolean).join(', ')}
+              <span className="font-serif text-[11px] tracking-wide" style={{ color: 'oklch(40% 0.03 40)' }}>
+                {selected.millesime ?? 'N.M.'}
+              </span>
+              <div className="w-7 h-px" style={{ background: 'var(--color-gold)' }} />
+              <span className="flex items-center gap-1.5">
+                <span
+                  className="w-2 h-2 rounded-full border"
+                  style={{ background: COULEUR_VARS[couleur], borderColor: 'var(--color-gold-soft)' }}
+                />
+                <span
+                  className="text-[8.5px] uppercase tracking-[0.06em]"
+                  style={{ color: 'oklch(45% 0.03 40)' }}
+                >
+                  {[COULEUR_LABELS[couleur], region].filter(Boolean).join(' · ')}
+                </span>
+              </span>
             </div>
           )}
-          <h1 className="font-serif text-[1.9rem] font-semibold text-ink mt-1 text-center px-6">
+        </div>
+
+        {/* ---------- Nom ---------- */}
+        <div className="mt-4">
+          <h1 className="font-serif text-[1.6rem] font-medium text-ink-bright m-0 leading-tight">
             {bouteille.cuvee_nom}
           </h1>
-          <div className="text-muted text-[0.95rem] mt-0.5">{bouteille.domaine_nom}</div>
+          <div className="text-[13px] text-muted mt-1">{sousTitre || bouteille.domaine_nom}</div>
         </div>
-      </div>
 
-      <div className="max-w-[640px] mx-auto px-4" style={{ paddingBottom: 'calc(96px + env(safe-area-inset-bottom))' }}>
-        {/* ---------- Onglets ---------- */}
-        <SegTabs
-          pill
-          className="mt-4"
-          value={tab}
-          onChange={setTab}
-          options={
-            [
-              ['millesimes', 'Millésimes'],
-              ['historique', 'Historique'],
-            ] as const
-          }
-        />
+        {/* ---------- Millésimes en stock ---------- */}
+        {millesimes.length > 1 && (
+          <div className="flex gap-2 overflow-x-auto no-scrollbar mt-3 pb-1">
+            {millesimes.map((b) => (
+              <button
+                key={b.id}
+                onClick={() => setSelId(b.id)}
+                className={`shrink-0 px-3.5 py-1.5 rounded-full text-xs transition ${
+                  b.id === selId
+                    ? `${wineFill} text-ink-bright font-semibold`
+                    : 'border border-line text-ink'
+                }`}
+              >
+                {b.millesime ?? 'N.M.'} <span className="opacity-75">×{b.quantite}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
-        {tab === 'historique' ? (
-          <Section title="Historique">
-            {historique.length === 0 ? (
-              <p className="text-muted text-sm glass rounded-2xl p-4">
-                Aucun mouvement enregistré pour ce vin.
-              </p>
-            ) : (
-              <div className="glass rounded-2xl divide-y divide-gold/10">
-                {historique.map((m) => (
-                  <div key={m.id} className="flex items-center justify-between px-4 py-3 text-sm">
-                    <div>
-                      <div className="text-ink capitalize">{m.type_mouvement.toLowerCase()}</div>
-                      {m.occasion && <div className="text-muted text-xs">{m.occasion}</div>}
-                    </div>
-                    <div className="text-right">
-                      <div className="text-ink">× {m.quantite}</div>
-                      <div className="text-muted text-xs">{formatDateTime(m.date)}</div>
-                    </div>
+        {/* ---------- Quantité / fenêtre de service ---------- */}
+        <div className="grid grid-cols-2 gap-2.5 mt-3.5">
+          <InfoTile
+            label="Quantité"
+            value={`${totalStock} bouteille${totalStock > 1 ? 's' : ''}`}
+          />
+          <InfoTile label="Fenêtre de service" value={apogee ?? '—'} gold />
+        </div>
+
+        {/* ---------- Maturité ---------- */}
+        <div className="mt-2.5">
+          <MaturiteGauge statut={selected.statut} />
+        </div>
+
+        {/* ---------- Prix d'achat / valeur marché ---------- */}
+        <div className="grid grid-cols-2 gap-2.5 mt-2.5">
+          <InfoTile
+            label="Prix d'achat"
+            value={formatPrix(selected.prix_achat ?? fiche?.prix_achat_moyen ?? null)}
+          />
+          <InfoTile
+            label="Valeur marché"
+            value={fiche?.prix_marche ? formatFourchette(fiche.prix_marche) : '—'}
+            gold
+          />
+        </div>
+
+        {/* ---------- Emplacement ---------- */}
+        <button
+          onClick={() => onOptions(selected)}
+          className={`${tileCls} w-full mt-2.5 text-left active:scale-[0.99] transition`}
+        >
+          <div className="text-[11px] text-muted">Emplacement</div>
+          <div className="text-[14px] text-ink mt-0.5">
+            {selected.emplacement_chemin || 'Non placée — toucher pour déplacer'}
+          </div>
+        </button>
+
+        {/* ---------- Conseil de dégustation ---------- */}
+        <Section title="Conseil de dégustation">
+          <div className="grid grid-cols-2 gap-2.5">
+            <InfoTile
+              label="Température"
+              value={
+                <>
+                  {fiche?.conseil_degustation.temperature ?? '…'}{' '}
+                  <span className="text-xs text-muted">°C</span>
+                </>
+              }
+            />
+            <InfoTile label="Carafage" value={fiche?.conseil_degustation.carafage ?? '…'} />
+          </div>
+        </Section>
+
+        {/* ---------- Caractéristiques gustatives ---------- */}
+        {fiche && fiche.profil_gustatif.length > 0 && (
+          <Section title="Caractéristiques gustatives">
+            <div className={`${tileCls} flex flex-col gap-2.5 py-3`}>
+              {fiche.profil_gustatif.map((row) => (
+                <div key={row.gauche} className="flex items-center gap-2.5 text-xs">
+                  <span className="w-16 text-muted-strong text-right shrink-0">{row.gauche}</span>
+                  <div className="flex-1 h-1.5 rounded-[3px]" style={{ background: 'oklch(38% 0.02 40)' }}>
+                    <div
+                      className={`h-full rounded-[3px] ${wineFill}`}
+                      style={{ width: `${row.valeur * 100}%` }}
+                    />
                   </div>
-                ))}
+                  <span className="w-16 text-ink shrink-0">{row.droite}</span>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {/* ---------- Description ---------- */}
+        {fiche && (fiche.cuvee.description || fiche.cuvee.elaborate || fiche.cuvee.degre_alcool != null) && (
+          <Section title="Description du vin">
+            {fiche.cuvee.description && (
+              <p className="m-0 text-[13px] leading-relaxed text-ink/90">{fiche.cuvee.description}</p>
+            )}
+            {fiche.cuvee.elaborate && (
+              <p className="m-0 text-[13px] leading-relaxed text-muted mt-2">{fiche.cuvee.elaborate}</p>
+            )}
+            {fiche.cuvee.degre_alcool != null && (
+              <div className="text-[13px] text-muted mt-2">
+                Degré d'alcool : <span className="text-ink font-medium">{fiche.cuvee.degre_alcool}°</span>
               </div>
             )}
           </Section>
-        ) : (
-          <>
-            {/* ---------- Vos millésimes ---------- */}
-            <Section title="Vos millésimes">
-              <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                {millesimes.map((b) => (
-                  <button
-                    key={b.id}
-                    onClick={() => setSelId(b.id)}
-                    className={`shrink-0 px-5 py-3 rounded-2xl text-left transition border ${
-                      b.id === selId
-                        ? `${wineGrad} border-wine text-white`
-                        : 'glass border-transparent text-muted'
-                    }`}
-                  >
-                    <div className="font-serif text-[1.25rem] leading-none">
-                      {b.millesime ?? 'N.M.'} <span className="text-[0.8rem] opacity-80">(x{b.quantite})</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-              <div className="text-wine-soft text-sm mt-2 font-medium">Standard 75cl</div>
-            </Section>
-
-            {/* ---------- Cartes valeur ---------- */}
-            <div className="grid grid-cols-2 gap-2.5 mt-4">
-              <InfoCard label="Maturité" locked />
-              <InfoCard label="Date d'apogée" value={apogee ?? undefined} />
-              <InfoCard label="Prix d'achat moyen" value={fiche ? formatPrix(fiche.prix_achat_moyen) : undefined} />
-              <InfoCard
-                label="Valeur actuelle"
-                value={fiche?.prix_marche ? formatFourchette(fiche.prix_marche) : undefined}
-              />
-            </div>
-
-            {/* ---------- Note et avis du millésime ---------- */}
-            {fiche && (
-              <Section title="Note et avis du millésime" emoji="⭐">
-                <div className="grid grid-cols-2 gap-2.5">
-                  <button
-                    onClick={() => setTasting(true)}
-                    className="glass rounded-2xl py-4 text-center active:scale-[0.98] transition"
-                  >
-                    <div className="font-serif text-[1.6rem] text-ink flex items-center justify-center gap-1">
-                      {fiche.ma_note ? `${fiche.ma_note.note}/5` : '--/5'}{' '}
-                      <span className="text-gold text-[1.1rem]">★</span>
-                    </div>
-                    <div className="text-[0.72rem] text-muted mt-1">
-                      {fiche.ma_note ? 'Ma note · modifier' : 'Noter ce vin'}
-                    </div>
-                  </button>
-                  <div className="glass rounded-2xl py-4 text-center">
-                    <div className="font-serif text-[1.6rem] text-gold flex items-center justify-center gap-1">
-                      {fiche.note_communaute ? `${fiche.note_communaute.note}/5` : '—'}{' '}
-                      <span className="text-[1.1rem]">★</span>
-                    </div>
-                    <div className="text-[0.72rem] text-muted mt-1">
-                      {fiche.note_communaute ? `${fiche.note_communaute.nb} notes` : 'Communauté'}
-                    </div>
-                  </div>
-                </div>
-                {fiche.ma_note?.commentaire && (
-                  <p className="text-sm text-ink/90 mt-2.5 glass rounded-2xl p-3">
-                    « {fiche.ma_note.commentaire} »
-                  </p>
-                )}
-              </Section>
-            )}
-
-            {/* ---------- Conseil de dégustation ---------- */}
-            <Section title="Conseil de dégustation" emoji="🍷">
-              <div className="grid grid-cols-2 gap-2.5">
-                <div className="glass rounded-2xl px-4 py-3.5 flex items-center gap-3">
-                  <span className="text-2xl">🌡️</span>
-                  <div>
-                    <div className="font-serif text-[1.3rem] text-ink leading-none">
-                      {fiche?.conseil_degustation.temperature ?? '…'} <span className="text-xs text-muted">°C</span>
-                    </div>
-                    <div className="text-[0.72rem] text-muted mt-1">Température</div>
-                  </div>
-                </div>
-                <div className="glass rounded-2xl px-4 py-3.5 flex items-center gap-3">
-                  <span className="text-2xl">⏳</span>
-                  <div>
-                    <div className="font-serif text-[1.3rem] text-ink leading-none">
-                      {fiche?.conseil_degustation.carafage ?? '…'}
-                    </div>
-                    <div className="text-[0.72rem] text-muted mt-1">Carafage</div>
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => setTasting(true)}
-                className={`${goldBtnCls} mt-3 flex items-center justify-center gap-2`}
-              >
-                🍷 Commencer une dégustation
-              </button>
-            </Section>
-
-            {/* ---------- Tags ---------- */}
-            <Section title="Tags" emoji="🏷️" action={<span className="text-gold text-sm">Ajouter</span>}>
-              <button className={addBtnCls}>🏷️ Ajouter un tag</button>
-            </Section>
-
-            {/* ---------- Cave ---------- */}
-            <Section title="Cave" emoji="🔎" action={<span className="text-gold text-sm">Modifier</span>}>
-              <span className="inline-block px-4 py-2.5 rounded-full glass text-muted text-sm">
-                {selected.emplacement_chemin || 'Ma cave'} ({totalStock})
-              </span>
-            </Section>
-
-            {/* ---------- Notes personnelles ---------- */}
-            <Section title="Vos notes personnelles" emoji="✍️">
-              <button onClick={() => setTasting(true)} className={addBtnCls}>
-                ✏️ Ajouter une note personnelle
-              </button>
-            </Section>
-
-            {/* ---------- À propos ---------- */}
-            {fiche && (fiche.cuvee.description || fiche.cuvee.elaborate || fiche.cuvee.degre_alcool != null) && (
-              <Section title="À propos" emoji="📝">
-                <div className="glass rounded-2xl p-4">
-                  {fiche.cuvee.description && (
-                    <p className="text-sm text-ink/90 leading-relaxed">{fiche.cuvee.description}</p>
-                  )}
-                  {fiche.cuvee.elaborate && (
-                    <p className="text-sm text-muted leading-relaxed mt-2">{fiche.cuvee.elaborate}</p>
-                  )}
-                  {fiche.cuvee.degre_alcool != null && (
-                    <div className="text-sm text-muted mt-3">
-                      Degré d'alcool : <span className="text-ink font-medium">{fiche.cuvee.degre_alcool}°</span>
-                    </div>
-                  )}
-                </div>
-              </Section>
-            )}
-
-            {/* ---------- Caractéristique gustative ---------- */}
-            {fiche && fiche.profil_gustatif.length > 0 && (
-              <Section title="Caractéristique gustative" emoji="🍷">
-                <div className="glass rounded-2xl p-4 flex flex-col gap-3.5">
-                  {fiche.profil_gustatif.map((row) => (
-                    <div key={row.gauche} className="flex items-center gap-3 text-sm">
-                      <span className="w-16 text-muted text-right shrink-0">{row.gauche}</span>
-                      <div className="flex-1 h-2.5 rounded-full bg-black/30 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-gradient-to-r from-gold-soft to-gold"
-                          style={{ width: `${row.valeur * 100}%` }}
-                        />
-                      </div>
-                      <span className="w-16 text-ink shrink-0">{row.droite}</span>
-                    </div>
-                  ))}
-                </div>
-              </Section>
-            )}
-
-            {/* ---------- Cépages ---------- */}
-            {fiche && fiche.cuvee.cepages.length > 0 && (
-              <Section title="Cépages" emoji="🍇">
-                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                  {fiche.cuvee.cepages.map((nom) => (
-                    <span key={nom} className="shrink-0 px-4 py-2.5 rounded-full glass text-sm text-ink">
-                      {nom}
-                    </span>
-                  ))}
-                </div>
-              </Section>
-            )}
-
-            {/* ---------- Mets adaptés ---------- */}
-            {fiche && fiche.accords_mets.length > 0 && (
-              <Section title="Mets adaptés">
-                <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
-                  {fiche.accords_mets.map((m) => (
-                    <div key={m.nom} className="shrink-0 w-32">
-                      <div className="relative h-32 rounded-2xl glass grid place-items-center text-6xl">
-                        {m.emoji}
-                        {m.confiance != null && (
-                          <span className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-black/55 text-ok text-sm font-bold">
-                            {Math.round(m.confiance * 100)}%
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-center text-sm mt-2 text-ink">{m.nom}</div>
-                    </div>
-                  ))}
-                </div>
-              </Section>
-            )}
-
-            {/* ---------- Prix par marchand (wineapi) ---------- */}
-            {fiche && fiche.prix_marchands.length > 0 && (
-              <Section title="Prix par marchand" emoji="🏷️">
-                <div className="glass rounded-2xl divide-y divide-gold/10">
-                  {fiche.prix_marchands.map((p, i) => {
-                    const label = p.marchand || 'Marchand'
-                    const inner = (
-                      <>
-                        <span className="text-ink text-sm">
-                          {label}
-                          {p.releve_le && (
-                            <span className="block text-muted text-[0.7rem]">relevé le {formatDate(p.releve_le)}</span>
-                          )}
-                        </span>
-                        <span className="font-serif text-gold shrink-0">{formatPrixMarchand(p)}</span>
-                      </>
-                    )
-                    return p.url ? (
-                      <a
-                        key={`${label}-${i}`}
-                        href={p.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center justify-between px-4 py-3 active:bg-white/5"
-                      >
-                        {inner}
-                      </a>
-                    ) : (
-                      <div key={`${label}-${i}`} className="flex items-center justify-between px-4 py-3">
-                        {inner}
-                      </div>
-                    )
-                  })}
-                </div>
-              </Section>
-            )}
-
-            {/* ---------- Sections premium ---------- */}
-            <Section title="Phase de vieillissement">
-              <button className={goldBtnCls}>Essayer Oeni+</button>
-            </Section>
-
-            {/* ---------- Historique de prix (wineapi, accumulé au fil des synchros) ---------- */}
-            <Section title="Historique de prix" emoji="📈">
-              {dernierPrix ? (
-                <div className="glass rounded-2xl p-4">
-                  <div className="flex items-baseline justify-between mb-2">
-                    <div>
-                      <div className="font-serif text-[1.5rem] text-gold leading-none">
-                        {formatMontant(dernierPrix.prix_min, dernierPrix.devise)}
-                      </div>
-                      <div className="text-[0.72rem] text-muted mt-1">Meilleur prix</div>
-                    </div>
-                    <div className="text-[0.72rem] text-muted">relevé le {formatDate(dernierPrix.date)}</div>
-                  </div>
-                  {histPrix.length >= 2 && <PriceHistoryChart points={histPrix} />}
-                </div>
-              ) : (
-                <p className="text-muted text-sm glass rounded-2xl p-4">
-                  Pas encore d'historique de prix. Synchronisez la fiche (🔄) pour le construire au fil des relevés.
-                </p>
-              )}
-            </Section>
-
-            {/* ---------- Stock par millésimes ---------- */}
-            <Section title="Stock par millésimes">
-              <div className="glass rounded-2xl p-4">
-                <div className="flex items-end justify-around gap-3 h-40">
-                  {millesimes.map((b) => (
-                    <div key={b.id} className="flex flex-col items-center justify-end h-full flex-1 max-w-16">
-                      <div className="text-sm text-ink mb-1">{b.quantite}</div>
-                      <div
-                        className={`w-8 rounded-t-md ${goldGrad}`}
-                        style={{ height: `${(b.quantite / maxStock) * 100}%` }}
-                      />
-                      <div className="text-xs text-muted mt-2">{b.millesime ?? 'N.M.'}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </Section>
-
-            {/* ---------- Avis (scores critiques wineapi) ---------- */}
-            {fiche && fiche.avis.length > 0 && (
-              <Section title="Avis" emoji="👥">
-                {fiche.avis.map((a) => (
-                  <div key={`${a.reviewer}-${a.date ?? ''}`} className="glass rounded-2xl p-4 mb-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-ink font-medium">{a.reviewer}</span>
-                      {a.score != null && (
-                        <span className="font-serif text-[1.25rem] text-gold">{a.score}</span>
-                      )}
-                    </div>
-                    {(a.score_text || a.date) && (
-                      <div className="text-muted text-sm mt-1">
-                        {a.score_text}
-                        {a.score_text && a.date ? ' · ' : ''}
-                        {a.date ? formatDate(a.date) : ''}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </Section>
-            )}
-          </>
         )}
+
+        {/* ---------- Mets et vins ---------- */}
+        {fiche && fiche.accords_mets.length > 0 && (
+          <Section title="Mets et vins">
+            <div className="flex gap-2 flex-wrap">
+              {fiche.accords_mets.map((m) => (
+                <span
+                  key={m.nom}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line text-xs"
+                >
+                  <span aria-hidden="true">{m.emoji}</span>
+                  {m.nom}
+                  {m.confiance != null && (
+                    <span className="text-gold-soft font-semibold">{Math.round(m.confiance * 100)}%</span>
+                  )}
+                </span>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {/* ---------- Cépages ---------- */}
+        {fiche && fiche.cuvee.cepages.length > 0 && (
+          <Section title="Cépages">
+            <div className="flex gap-2 flex-wrap">
+              {fiche.cuvee.cepages.map((nom) => (
+                <span key={nom} className="px-3.5 py-1.5 rounded-full border border-line text-xs text-ink">
+                  {nom}
+                </span>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {/* ---------- Stock par millésime ---------- */}
+        <Section title="Stock par millésime">
+          <div className={`${tileCls} pt-3.5`}>
+            <div className="flex items-end justify-around gap-4 h-28">
+              {millesimes.map((b) => (
+                <div key={b.id} className="flex flex-col items-center justify-end h-full flex-1 max-w-14">
+                  <div className="text-[11px] text-gold-soft mb-1.5">×{b.quantite}</div>
+                  <div
+                    className={`w-full max-w-9 rounded-[6px_6px_2px_2px] ${wineFill}`}
+                    style={{ height: `${(b.quantite / maxStock) * 100}%`, minHeight: 8 }}
+                  />
+                  <div className="text-[11px] text-muted-strong mt-1.5">{b.millesime ?? 'N.M.'}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Section>
+
+        {/* ---------- Note perso / communauté ---------- */}
+        {fiche && (
+          <Section title="Note perso / communauté">
+            <div className="grid grid-cols-2 gap-2.5">
+              <button onClick={() => setTasting(true)} className={`${tileCls} text-left active:scale-[0.99] transition`}>
+                <div className="text-[11px] text-muted">Ma note</div>
+                <div className="text-[18px] mt-0.5 font-semibold text-gold-soft">
+                  {fiche.ma_note ? `${fiche.ma_note.note}/5 ★` : 'Noter ce vin'}
+                </div>
+              </button>
+              <div className={tileCls}>
+                <div className="text-[11px] text-muted">Communauté</div>
+                <div className="text-[18px] mt-0.5 font-semibold text-ink">
+                  {fiche.note_communaute ? `${fiche.note_communaute.note}/5` : '—'}
+                  {fiche.note_communaute && (
+                    <span className="text-[11px] text-muted font-normal"> · {fiche.note_communaute.nb} notes</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </Section>
+        )}
+
+        {/* ---------- Historique de prix (wineapi, accumulé au fil des synchros) ---------- */}
+        <Section title="Historique de prix">
+          {dernierPrix ? (
+            <div className={`${tileCls} py-3.5`}>
+              <div className="flex items-baseline justify-between mb-2">
+                <div>
+                  <div className="font-serif text-[1.5rem] text-gold leading-none">
+                    {formatMontant(dernierPrix.prix_min, dernierPrix.devise)}
+                  </div>
+                  <div className="text-[11px] text-muted mt-1">Meilleur prix</div>
+                </div>
+                <div className="text-[11px] text-muted">relevé le {formatDate(dernierPrix.date)}</div>
+              </div>
+              {histPrix.length >= 2 && <PriceHistoryChart points={histPrix} />}
+            </div>
+          ) : (
+            <p className={`${tileCls} m-0 text-muted text-sm py-3.5`}>
+              Pas encore d'historique de prix. Synchronisez la fiche (🔄) pour le construire au fil des relevés.
+            </p>
+          )}
+        </Section>
+
+        {/* ---------- Prix par marchand (wineapi) ---------- */}
+        {fiche && fiche.prix_marchands.length > 0 && (
+          <Section title="Prix par marchand">
+            <div className="glass rounded-[10px] divide-y divide-line/40">
+              {fiche.prix_marchands.map((p, i) => {
+                const label = p.marchand || 'Marchand'
+                const inner = (
+                  <>
+                    <span className="text-ink text-sm">
+                      {label}
+                      {p.releve_le && (
+                        <span className="block text-muted text-[0.7rem]">relevé le {formatDate(p.releve_le)}</span>
+                      )}
+                    </span>
+                    <span className="font-serif text-gold shrink-0">{formatPrixMarchand(p)}</span>
+                  </>
+                )
+                return p.url ? (
+                  <a
+                    key={`${label}-${i}`}
+                    href={p.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between px-3.5 py-3 active:bg-white/5"
+                  >
+                    {inner}
+                  </a>
+                ) : (
+                  <div key={`${label}-${i}`} className="flex items-center justify-between px-3.5 py-3">
+                    {inner}
+                  </div>
+                )
+              })}
+            </div>
+          </Section>
+        )}
+
+        {/* ---------- Avis (scores critiques wineapi) ---------- */}
+        {fiche && fiche.avis.length > 0 && (
+          <Section title="Avis">
+            <div className="flex flex-col gap-2">
+              {fiche.avis.map((a) => (
+                <div key={`${a.reviewer}-${a.date ?? ''}`} className={tileCls}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-ink text-sm font-medium">{a.reviewer}</span>
+                    {a.score != null && <span className="font-serif text-[1.15rem] text-gold">{a.score}</span>}
+                  </div>
+                  {(a.score_text || a.date) && (
+                    <div className="text-muted text-xs mt-0.5">
+                      {a.score_text}
+                      {a.score_text && a.date ? ' · ' : ''}
+                      {a.date ? formatDate(a.date) : ''}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {/* ---------- Historique (ajout / retrait) ---------- */}
+        <Section title="Historique (ajout / retrait)">
+          {historique.length === 0 ? (
+            <p className={`${tileCls} m-0 text-muted text-sm py-3.5`}>
+              Aucun mouvement enregistré pour ce vin.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {historique.map((m) => {
+                const entree = m.type_mouvement === 'ENTREE'
+                return (
+                  <div key={m.id} className={`${tileCls} flex justify-between items-center`}>
+                    <span className="text-xs text-muted-strong">{formatDateTime(m.date)}</span>
+                    <span
+                      className={`text-[13px] font-semibold ${entree ? 'text-gold-soft' : 'text-ink'}`}
+                    >
+                      {entree ? '+' : '−'}
+                      {m.quantite} {m.type_mouvement.toLowerCase()}
+                      {m.occasion ? ` — ${m.occasion}` : ''}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </Section>
+
+        {/* ---------- Notes personnelles ---------- */}
+        <Section title="Notes personnelles">
+          {fiche?.ma_note?.commentaire ? (
+            <div className={`${tileCls} py-3 text-[13px] leading-relaxed text-muted-strong`}>
+              {fiche.ma_note.commentaire}
+            </div>
+          ) : (
+            <button
+              onClick={() => setTasting(true)}
+              className="w-full py-3.5 rounded-[10px] border border-dashed border-line text-muted text-sm"
+            >
+              ✏️ Ajouter une note personnelle
+            </button>
+          )}
+        </Section>
       </div>
 
       {/* ---------- Barre d'action fixe ---------- */}
       <div
-        className="bar-bottom fixed bottom-0 left-0 right-0 z-10 flex gap-3 px-4 pt-3"
+        className="bar-bottom border-t border-line/50 fixed bottom-0 left-0 right-0 z-10 flex gap-2.5 px-4 pt-3"
         style={{ paddingBottom: 'calc(14px + env(safe-area-inset-bottom))' }}
       >
-        <button onClick={() => onOptions(selected)} className={`${goldBtnCls} flex-1 rounded-full`}>
-          Autres options
+        <button
+          onClick={() => setTasting(true)}
+          className={`flex-[1.4] py-3 rounded-xl font-semibold text-ink-bright text-[13px] ${wineFill} active:scale-[0.985] transition`}
+        >
+          Enregistrer une dégustation
         </button>
         <button
           onClick={() => onRetirer(selected)}
-          className="flex-1 py-3.5 rounded-full font-semibold text-muted glass"
+          className="flex-1 py-3 rounded-xl border border-line text-muted-strong text-[13px] font-semibold active:scale-[0.985] transition"
         >
           Retirer
         </button>

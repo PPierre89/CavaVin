@@ -282,13 +282,13 @@ export function VinIdentification({
             </div>
 
             {focused && q.length >= 1 && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-gold/15 bg-[#241a16] shadow-[0_10px_30px_rgba(0,0,0,0.5)] overflow-hidden">
+              <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-line-strong bg-surface shadow-[0_10px_30px_rgba(0,0,0,0.5)] overflow-hidden">
                 {matches.map((c) => (
                   <button
                     key={c.id}
                     // onMouseDown (et non onClick) pour agir avant le blur de l'input.
                     onMouseDown={(e) => (e.preventDefault(), pickLocal(c))}
-                    className="w-full text-left px-3.5 py-2.5 border-b border-gold/10 last:border-b-0 hover:bg-white/5 transition"
+                    className="w-full text-left px-3.5 py-2.5 border-b border-line/40 last:border-b-0 hover:bg-white/5 transition"
                   >
                     <div className="text-muted text-[0.78rem] truncate">{c.domaine_nom}</div>
                     <div className="text-ink text-sm truncate">

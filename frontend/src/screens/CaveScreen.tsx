@@ -66,22 +66,18 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
   const [hover, setHover] = useState<{ empId: number; case: number } | null>(null)
 
   const active = bouteilles.filter((b) => b.quantite > 0)
-  const stats = useMemo(() => {
-    const parCouleur: Record<string, number> = {}
-    let total = 0
-    active.forEach((b) => {
-      total += b.quantite
-      const c = cuveeColor(b)
-      parCouleur[c] = (parCouleur[c] || 0) + b.quantite
-    })
-    return {
-      total,
-      rouge: parCouleur.ROUGE || 0,
-      blanc: parCouleur.BLANC || 0,
-      autres: (parCouleur.BULLES || 0) + (parCouleur.ROSE || 0) + (parCouleur.AUTRE || 0),
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bouteilles, cuveeColor])
+  // Jauge de remplissage de la cave courante : bouteilles rangées / capacité
+  // totale (occupation_actuelle ne compte que les bouteilles directes d'un
+  // emplacement, la somme ne double-compte donc rien).
+  const remplissage = useMemo(() => {
+    const occ = emplacements.reduce((n, e) => n + e.occupation_actuelle, 0)
+    const cap = emplacements.reduce(
+      (n, e) =>
+        n + (e.nb_colonnes && e.nb_rangees ? e.nb_colonnes * e.nb_rangees : (e.capacite ?? 0)),
+      0,
+    )
+    return { occ, cap }
+  }, [emplacements])
 
   const bottleById = useMemo(() => new Map(bouteilles.map((b) => [b.id, b])), [bouteilles])
   // Nombre d'unités déjà rangées dans une case précise, par ligne de stock.
@@ -235,15 +231,7 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
   const roots = emplacements.filter((e) => e.parent === null)
   const unplaced = active.filter((b) => aRanger(b) > 0)
   const bottlesFor = (id: number) => active.filter((b) => b.emplacement === id)
-
-  const StatBox = ({ n, l, color }: { n: number; l: string; color?: string }) => (
-    <div className="glass rounded-2xl py-3 px-1.5 text-center">
-      <div className="font-serif font-semibold text-[1.55rem]" style={color ? { color } : undefined}>
-        {n}
-      </div>
-      <div className="text-[0.62rem] text-muted uppercase tracking-wide mt-0.5">{l}</div>
-    </div>
-  )
+  const caveCourante = caves.find((c) => c.id === caveId)
 
   const Node = ({ emp }: { emp: Emplacement }) => {
     const children = emplacements.filter((e) => e.parent === emp.id)
@@ -277,7 +265,7 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
                       ? (e) => startDrag(e, b, { rangementId: r.id, empId: emp.id, case: i })
                       : undefined
                   }
-                  className={`rounded-full transition ${
+                  className={`rounded-[6px] transition ${
                     cible ? 'ring-2 ring-gold ring-offset-2 ring-offset-transparent' : ''
                   }`}
                 >
@@ -327,7 +315,7 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
       <div className="glass rounded-card px-3.5 py-3 mb-3">
         <div className="flex justify-between items-start gap-2">
           <div>
-            <span className="block text-gold text-[0.68rem] uppercase tracking-wider mb-0.5">
+            <span className="block text-muted text-[0.68rem] uppercase tracking-[0.1em] mb-0.5">
               {TYPE_LABELS[emp.type_emplacement]}
               {isGrid && ` · ${emp.nb_colonnes}×${emp.nb_rangees}`}
             </span>
@@ -359,34 +347,32 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
   }
 
   const Legend = () => (
-    <div className="flex flex-wrap gap-x-3.5 gap-y-2.5 text-[0.72rem] text-muted mx-0.5 my-2">
+    <div className="flex flex-wrap gap-x-3 gap-y-2 text-[0.68rem] text-muted mx-0.5 my-2">
       {[
         ['Rouge', 'var(--color-rouge)'],
         ['Blanc', 'var(--color-blanc)'],
         ['Rosé', 'var(--color-rose)'],
         ['Bulles', 'var(--color-bulles)'],
       ].map(([l, c]) => (
-        <span key={l} className="flex items-center gap-1">
-          <span className="w-2.5 h-2.5 rounded-full" style={{ background: c }} /> {l}
+        <span key={l} className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-[2px]" style={{ background: c }} /> {l}
         </span>
       ))}
-      <span className="flex items-center gap-1">
-        <span className="w-2.5 h-2.5 rounded-full border-2 border-ok" /> À boire
+      <span className="flex items-center gap-1.5">
+        <span className="w-2.5 h-2.5 rounded-[2px] border-[1.5px] border-dashed border-line" /> Vide
       </span>
-      <span className="flex items-center gap-1">
-        <span className="w-2.5 h-2.5 rounded-full border-2 border-alerte" /> Dépassé
+      <span className="flex items-center gap-1.5">
+        <span className="w-2.5 h-2.5 rounded-[2px] border-2 border-ok" /> À boire
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="w-2.5 h-2.5 rounded-[2px] border-2 border-alerte" /> Dépassé
       </span>
     </div>
   )
 
   return (
     <div>
-      <div className="grid grid-cols-4 gap-2 mb-3.5">
-        <StatBox n={stats.total} l="Bouteilles" />
-        <StatBox n={stats.rouge} l="Rouges" color="var(--color-rougevif)" />
-        <StatBox n={stats.blanc} l="Blancs" color="var(--color-blanc)" />
-        <StatBox n={stats.autres} l="Autres" color="var(--color-bulles)" />
-      </div>
+      <h1 className="font-serif text-[1.75rem] text-ink-bright m-0 mb-3 px-0.5 font-medium">Cave</h1>
 
       <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2.5">
         {caves.map((c) => (
@@ -410,12 +396,38 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
         )}
       </div>
 
+      {/* ---------- Jauge de remplissage de la cave courante ---------- */}
+      {caveCourante && (
+        <div className="glass rounded-[10px] px-3 py-2.5 mb-1 flex flex-col gap-1.5">
+          <div className="flex justify-between items-center">
+            <span className="text-[13px]">{caveCourante.nom}</span>
+            <span className="text-xs text-muted">
+              {remplissage.cap > 0
+                ? `${remplissage.occ} / ${remplissage.cap}`
+                : `${remplissage.occ} rangée${remplissage.occ > 1 ? 's' : ''}`}
+            </span>
+          </div>
+          {remplissage.cap > 0 && (
+            <div className="h-1.5 rounded-[3px]" style={{ background: 'oklch(38% 0.02 40)' }}>
+              <div
+                className="h-full rounded-[3px] bg-wine"
+                style={{ width: `${Math.min(100, (remplissage.occ / remplissage.cap) * 100)}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       <Legend />
 
       {caves.length === 0 ? (
         <Card>
           <p className="text-muted text-sm">
-            Aucune cave. Créez votre première cave depuis l'onglet Ajouter.
+            Aucune cave —{' '}
+            <button className="text-gold underline" onClick={() => onAdd('cave')}>
+              créez votre première cave
+            </button>
+            .
           </p>
         </Card>
       ) : roots.length === 0 ? (
@@ -434,14 +446,16 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
 
       {unplaced.length > 0 && (
         <Card>
-          <h2 className="font-serif text-[1.12rem] text-gold m-0 mb-1">En attente de placement</h2>
+          <h2 className="text-xs uppercase tracking-[0.1em] text-muted font-sans font-medium m-0 mb-1">
+            En attente de placement
+          </h2>
           <p className="text-muted text-xs mb-3">
             Glissez une bouteille sur une case, ou tapez une case vide d'une grille.
           </p>
           {unplaced.map((b) => (
             <div
               key={b.id}
-              className="flex items-center gap-2.5 py-2.5 border-b border-gold/10 last:border-0 text-sm"
+              className="flex items-center gap-2.5 py-2.5 border-b border-line/40 last:border-0 text-sm"
             >
               <span
                 style={{ touchAction: 'none' }}
@@ -461,7 +475,7 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
               </span>
               <button
                 onClick={() => setSelected(b)}
-                className="px-3.5 py-2 rounded-xl border border-gold/15 text-muted text-sm"
+                className="px-3.5 py-2 rounded-xl border border-line text-muted text-sm"
               >
                 Placer
               </button>

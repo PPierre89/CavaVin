@@ -1,9 +1,10 @@
-# Frontend — SPA « allée des vins »
+# Frontend — SPA « CavaVin »
 
 Application **React 19 + Vite 8 + TypeScript + Tailwind v4**, mobile-first (optimisée Pixel 9),
-direction artistique **« allée des vins »** (bordeaux, crème, or ; verre givré ; serif Cormorant
-Garamond). C'est l'interface de la [Cave à Vin API](../README.md) : gestion de cave, ajout de vins
-par photo d'étiquette / code-barres / nom, fiche vin enrichie et carnet de dégustation.
+direction artistique **« CavaVin »** (thème sombre lie-de-vin/or, cartes mates, serif Cormorant
+Garamond + Manrope — maquette « CavaVin Écrans »). C'est l'interface de la
+[Cave à Vin API](../README.md) : gestion de cave, ajout de vins par photo d'étiquette /
+code-barres / nom, fiche vin enrichie et carnet de dégustation.
 
 ## Développement
 
@@ -30,7 +31,7 @@ Le serveur de dev **proxifie** `/api`, `/admin` et `/static` vers Django sur `:8
 ```
 frontend/
 ├── src/
-│   ├── App.tsx            # Shell : navigation par onglets en bas d'écran
+│   ├── App.tsx            # Shell : navigation 4 onglets (Accueil / Vin / Cave / Carnet)
 │   ├── main.tsx           # Point d'entrée (AuthProvider + ToastProvider)
 │   ├── api.ts             # Client fetch JWT (Bearer) : refresh auto sur 401, pagination
 │   ├── auth.tsx           # AuthProvider — JWT (login/register) stocké en localStorage
@@ -41,8 +42,8 @@ frontend/
 │   ├── filtres.ts         # Logique de filtrage « Mes vins »
 │   ├── identification.ts  # Logique d'identification de vin (photo / code-barres / texte)
 │   ├── dates.ts           # Helpers de formatage de dates
-│   ├── screens/           # Écrans par onglet : Cave, MesVins, Ajouter, Carnet, Journal, Login
-│   └── components/        # FicheVin, FiltresSheet, TastingSheet, VinIdentification, bottle
+│   ├── screens/           # Écrans : Accueil, Cave, MesVins, Ajouter, Carnet, Login
+│   └── components/        # FicheVin, FiltresSheet, TastingSheet, ChoixVinSheet, VinIdentification, bottle
 ├── e2e/                   # Tests Playwright (app.spec.ts + helpers.ts)
 ├── vite.config.ts         # Build + proxy de dev vers Django
 └── playwright.config.ts   # Build + sert le SPA ; API mockée via page.route
@@ -54,10 +55,12 @@ frontend/
   rafraîchi automatiquement sur `401`, et les erreurs sont normalisées (`ApiError`, `errMsg`).
 - **État global dans `data.tsx`** (`DataProvider` / `useData`), authentification dans `auth.tsx`
   (`AuthProvider` / `useAuth`).
-- **Tailwind v4** avec des tokens de thème personnalisés (`text-wine-soft`, `text-gold`,
-  `border-line`, `glass`, `rounded-card`…) : réutiliser ces tokens plutôt que des valeurs brutes.
-- Ajout de vin par défaut = **photo d'étiquette** ; scan code-barres et recherche par nom sont des
-  méthodes de repli (`VinIdentification` / `identification.ts`).
+- **Tailwind v4** avec des tokens de thème personnalisés en oklch (`bg-wine`, `text-gold`,
+  `border-line`, `bg-surface`, `glass`, `rounded-card`…) : réutiliser ces tokens plutôt que des
+  valeurs brutes.
+- L'ajout n'est **pas un onglet** : il s'ouvre depuis l'accueil (« Ajouter une bouteille ») ou le
+  bouton « + » de « Mes vins ». Ajout de vin par défaut = **photo d'étiquette** ; scan code-barres
+  et recherche par nom sont des méthodes de repli (`VinIdentification` / `identification.ts`).
 - **Version de l'app** : injectée à la compilation dans `__APP_VERSION__` (exposée via
   `src/version.ts`), affichée discrètement dans l'UI (en-tête et écran de connexion). En release, la
   CI passe la version calculée (tag semver) via la variable `APP_VERSION` ; en local, on retombe sur

@@ -39,7 +39,7 @@ CavaVin/
 │   └── requirements.txt
 ├── frontend/                    # React 19 + Vite 8 + TypeScript + Tailwind v4 SPA
 │   ├── src/
-│   │   ├── screens/             # tab screens: Cave, MesVins, Ajouter, Carnet, Journal, Login
+│   │   ├── screens/             # screens: Accueil, Cave, MesVins, Ajouter, Carnet, Login
 │   │   ├── components/          # FicheVin, FiltresSheet, TastingSheet, VinIdentification, bottle
 │   │   ├── api.ts               # JWT fetch client with auto-refresh + pagination helper
 │   │   ├── data.tsx             # DataProvider context (caves/emplacements/bouteilles/cuvees)
@@ -138,10 +138,13 @@ hardcode keys — `WINEAPI_KEY`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, et
 See `.env.example` for the full list.
 
 ### Frontend conventions
-- Single-page app, **mobile-first** (Pixel 9), art direction "allée des vins" (bordeaux/cream/gold,
-  frosted glass, Cormorant Garamond serif). Tailwind v4 utility classes; custom theme tokens
-  (`text-wine-soft`, `text-gold`, `border-line`, etc.) — reuse them rather than raw hex.
-- Bottom tab navigation (`App.tsx`): Ma cave / Mes vins / Ajouter / Carnet / Journal.
+- Single-page app, **mobile-first** (Pixel 9), art direction "CavaVin" from the « CavaVin Écrans »
+  mockups (dark warm theme, lie-de-vin/gold accents, matte cards, Cormorant Garamond serif +
+  Manrope). Tailwind v4 utility classes; custom oklch theme tokens (`bg-wine`, `text-gold`,
+  `border-line`, `bg-surface`, etc.) — reuse them rather than raw hex.
+- Bottom tab navigation (`App.tsx`): Accueil / Vin / Cave / Carnet. Adding a bottle is not a tab:
+  it opens from the Accueil quick action or the "+" button in Mes vins; stock movements (journal)
+  live on the Accueil screen.
 - All API calls go through `api.ts` (`api()` / `apiAllPages()`), which injects the JWT, auto-refreshes
   on 401, and normalises errors (`ApiError`, `errMsg`). Global state is in `data.tsx`'s `DataProvider`.
 - Default add flow is **label photo** (`VinIdentification`); barcode scan & text search are fallbacks.

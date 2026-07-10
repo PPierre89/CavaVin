@@ -100,7 +100,7 @@ export function PlacementSheet({
   }
 
   const ghost =
-    'w-full mt-4 py-3 rounded-xl border border-gold/15 text-muted active:scale-[0.985] transition'
+    'w-full mt-4 py-3 rounded-xl border border-line text-muted active:scale-[0.985] transition'
   const danger =
     'w-full mt-2.5 py-3 rounded-xl border border-alerte/40 text-alerte active:scale-[0.985] transition'
 
@@ -139,7 +139,7 @@ export function PlacementSheet({
                   <button
                     key={b.id}
                     onClick={() => place(b)}
-                    className="w-full flex items-center gap-2.5 py-2.5 border-b border-gold/10 last:border-0 text-left text-sm"
+                    className="w-full flex items-center gap-2.5 py-2.5 border-b border-line/40 last:border-0 text-left text-sm"
                   >
                     <Slot couleur={cuveeColor(b)} statut={b.statut} size={30} />
                     <span className="flex-1 min-w-0 truncate">
