@@ -136,3 +136,39 @@ class EmplacementGrilleTests(APITestCase):
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("nb_colonnes", resp.data)
+
+
+class SuppressionTests(APITestCase):
+    """Suppression cloisonnée par propriétaire d'une cave / d'un emplacement."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="alice", password="x")
+        self.autre = get_user_model().objects.create_user(username="bob", password="x")
+        self.cave = Cave.objects.create(proprietaire=self.user, nom="Cave")
+        self.armoire = Emplacement.objects.create(
+            cave=self.cave, nom="Armoire", type_emplacement=Emplacement.TypeEmplacement.ARMOIRE,
+            nb_colonnes=3, nb_rangees=2,
+        )
+        self.clayette = Emplacement.objects.create(
+            cave=self.cave, parent=self.armoire, nom="Clayette",
+            type_emplacement=Emplacement.TypeEmplacement.CLAYETTE,
+        )
+
+    def test_supprimer_sa_cave_cascade_les_emplacements(self):
+        self.client.force_authenticate(self.user)
+        resp = self.client.delete(reverse("cave-detail", args=[self.cave.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Cave.objects.filter(pk=self.cave.pk).exists())
+        self.assertEqual(Emplacement.objects.filter(cave=self.cave).count(), 0)
+
+    def test_supprimer_un_emplacement_cascade_ses_enfants(self):
+        self.client.force_authenticate(self.user)
+        resp = self.client.delete(reverse("emplacement-detail", args=[self.armoire.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Emplacement.objects.filter(pk=self.clayette.pk).exists())
+
+    def test_impossible_de_supprimer_la_cave_d_autrui(self):
+        self.client.force_authenticate(self.autre)
+        resp = self.client.delete(reverse("cave-detail", args=[self.cave.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(Cave.objects.filter(pk=self.cave.pk).exists())

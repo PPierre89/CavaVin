@@ -209,3 +209,27 @@ test('glisser-déposer range une bouteille dans une case de la grille', async ({
   await expect(page.getByText(/rangée/)).toBeVisible()
   expect(posted).toEqual({ bouteille: 200, emplacement: 20, case: 0 })
 })
+
+test('suppression d’un emplacement après confirmation', async ({ page }) => {
+  await seedAuth(page)
+  await mockApi(page)
+  let deleted = false
+  await page.route('**/api/emplacements/**', async (route) => {
+    if (route.request().method() === 'DELETE') {
+      deleted = true
+      await route.fulfill({ status: 204, body: '' })
+    } else {
+      // Laisse le mock par défaut répondre aux GET (liste des emplacements).
+      await route.fallback()
+    }
+  })
+  await page.goto('/')
+
+  await page.getByRole('button', { name: /Supprimer l'emplacement/ }).click()
+  // La feuille de confirmation nomme l'emplacement, puis on valide.
+  await expect(page.getByText(/Supprimer « Armoire 1 » \?/)).toBeVisible()
+  await page.getByRole('button', { name: 'Supprimer', exact: true }).click()
+
+  await expect(page.getByText('Emplacement supprimé.')).toBeVisible()
+  expect(deleted).toBe(true)
+})

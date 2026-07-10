@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { api, errMsg } from '../api'
 import { useData } from '../data'
 import { useToast } from '../toast'
-import { Card, Chip } from '../ui'
+import { Card, Chip, ConfirmSheet } from '../ui'
 import { BottleSheet, RackGrid, Slot } from '../components/bottle'
 import { PlacementSheet, type CellRef } from '../components/PlacementSheet'
 import { FicheVin } from '../components/FicheVin'
@@ -11,6 +11,20 @@ import { TYPE_LABELS, type Bouteille, type Emplacement } from '../types'
 const MAX_SLOTS = 96
 // Seuil (px) au-delà duquel un appui devient un glisser — en deçà, c'est un tap.
 const DRAG_SEUIL = 7
+
+function TrashIcon({ className = 'w-4 h-4' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-.7 12a2 2 0 0 1-2 1.9H8.7a2 2 0 0 1-2-1.9L6 7"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
 
 /** Origine d'un glisser : une case déjà rangée (pour la déplacer). */
 interface DragOrigin {
@@ -26,13 +40,27 @@ interface Pending {
   active: boolean
 }
 
+type Suppression =
+  | { kind: 'cave'; id: number; nom: string }
+  | { kind: 'emplacement'; id: number; nom: string }
+
 export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplacement') => void }) {
-  const { caves, caveId, setCaveId, emplacements, bouteilles, rangements, cuveeColor, refresh } =
-    useData()
+  const {
+    caves,
+    caveId,
+    setCaveId,
+    emplacements,
+    bouteilles,
+    rangements,
+    cuveeColor,
+    refresh,
+    loadCaves,
+  } = useData()
   const toast = useToast()
   const [selected, setSelected] = useState<Bouteille | null>(null)
   const [fiche, setFiche] = useState<Bouteille | null>(null)
   const [cell, setCell] = useState<CellRef | null>(null)
+  const [aSupprimer, setASupprimer] = useState<Suppression | null>(null)
   // Glisser en cours : bouteille fantôme suivant le pointeur + case survolée.
   const [drag, setDrag] = useState<{ bouteille: Bouteille; x: number; y: number } | null>(null)
   const [hover, setHover] = useState<{ empId: number; case: number } | null>(null)
@@ -185,6 +213,25 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
     fn()
   }
 
+  async function confirmerSuppression() {
+    if (!aSupprimer) return
+    try {
+      if (aSupprimer.kind === 'cave') {
+        await api('DELETE', `/api/caves/${aSupprimer.id}/`)
+        await loadCaves()
+        toast('Cave supprimée.', 'ok')
+      } else {
+        await api('DELETE', `/api/emplacements/${aSupprimer.id}/`)
+        await refresh()
+        toast('Emplacement supprimé.', 'ok')
+      }
+    } catch (e) {
+      toast(errMsg(e, 'Suppression impossible.'), 'err')
+    } finally {
+      setASupprimer(null)
+    }
+  }
+
   const roots = emplacements.filter((e) => e.parent === null)
   const unplaced = active.filter((b) => aRanger(b) > 0)
   const bottlesFor = (id: number) => active.filter((b) => b.emplacement === id)
@@ -278,7 +325,7 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
 
     return (
       <div className="glass rounded-card px-3.5 py-3 mb-3">
-        <div className="flex justify-between items-baseline gap-2">
+        <div className="flex justify-between items-start gap-2">
           <div>
             <span className="block text-gold text-[0.68rem] uppercase tracking-wider mb-0.5">
               {TYPE_LABELS[emp.type_emplacement]}
@@ -286,10 +333,20 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
             </span>
             <span className="text-[0.92rem] font-semibold">{emp.nom}</span>
           </div>
-          <span className="text-muted text-xs whitespace-nowrap">
-            {emp.occupation_actuelle}
-            {cap ? ` / ${cap}` : ''} btl
-          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-muted text-xs whitespace-nowrap">
+              {emp.occupation_actuelle}
+              {cap ? ` / ${cap}` : ''} btl
+            </span>
+            <button
+              onClick={() => setASupprimer({ kind: 'emplacement', id: emp.id, nom: emp.nom })}
+              className="text-muted/60 hover:text-alerte transition p-1 -mr-1"
+              title="Supprimer l'emplacement"
+              aria-label={`Supprimer l'emplacement ${emp.nom}`}
+            >
+              <TrashIcon />
+            </button>
+          </div>
         </div>
         {body}
         {children.map((c) => (
@@ -338,6 +395,19 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
           </Chip>
         ))}
         <Chip onClick={() => onAdd('cave')}>＋ cave</Chip>
+        {caveId != null && (
+          <button
+            onClick={() => {
+              const c = caves.find((x) => x.id === caveId)
+              if (c) setASupprimer({ kind: 'cave', id: c.id, nom: c.nom })
+            }}
+            className="shrink-0 grid place-items-center w-10 h-10 rounded-full glass text-muted hover:text-alerte transition"
+            title="Supprimer la cave courante"
+            aria-label="Supprimer la cave courante"
+          >
+            <TrashIcon />
+          </button>
+        )}
       </div>
 
       <Legend />
@@ -419,6 +489,22 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
       />
 
       <BottleSheet b={selected} onClose={() => setSelected(null)} />
+
+      <ConfirmSheet
+        open={!!aSupprimer}
+        title={
+          aSupprimer?.kind === 'cave'
+            ? `Supprimer « ${aSupprimer.nom} » ?`
+            : `Supprimer « ${aSupprimer?.nom} » ?`
+        }
+        message={
+          aSupprimer?.kind === 'cave'
+            ? 'Tous ses emplacements et rangements seront supprimés. Les bouteilles concernées repasseront « non rangées » (le stock n’est pas supprimé).'
+            : 'Ses sous-emplacements et rangements seront supprimés. Les bouteilles repasseront « non rangées » (le stock n’est pas supprimé).'
+        }
+        onConfirm={confirmerSuppression}
+        onClose={() => setASupprimer(null)}
+      />
 
       {/* Bouteille fantôme qui suit le pointeur pendant le glisser. */}
       {drag && (

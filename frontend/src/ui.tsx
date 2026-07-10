@@ -172,6 +172,48 @@ export function SegTabs<T extends string>({
   )
 }
 
+/* ---------- Confirmation destructive (feuille) ---------- */
+export function ConfirmSheet({
+  open,
+  title,
+  message,
+  confirmLabel = 'Supprimer',
+  onConfirm,
+  onClose,
+}: {
+  open: boolean
+  title: string
+  message?: ReactNode
+  confirmLabel?: string
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  return (
+    <Sheet open={open} onClose={onClose}>
+      {/* Contenu monté seulement à l'ouverture : évite que le texte (fermé mais
+          présent dans le DOM) ne pollue les recherches par texte. */}
+      {open && (
+        <>
+          <h3 className="font-serif text-[1.35rem] m-0">{title}</h3>
+          {message && <div className="text-muted text-sm mt-2">{message}</div>}
+          <button
+            onClick={onConfirm}
+            className="w-full mt-5 py-3.5 rounded-xl font-bold text-white bg-gradient-to-b from-rougevif to-wine-deep active:scale-[0.985] transition"
+          >
+            {confirmLabel}
+          </button>
+          <button
+            onClick={onClose}
+            className="w-full mt-2.5 py-3 rounded-xl border border-gold/15 text-muted active:scale-[0.985] transition"
+          >
+            Annuler
+          </button>
+        </>
+      )}
+    </Sheet>
+  )
+}
+
 /* ---------- Bottom sheet ---------- */
 export function Sheet({
   open,
