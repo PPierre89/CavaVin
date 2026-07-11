@@ -40,7 +40,7 @@ def _local_response(cuvee):
 
 
 def _enriched_response(wine, cuvee, created):
-    """Réponse commune aux endpoints d'identification texte/image (wineapi.io)."""
+    """Réponse commune aux endpoints d'identification texte/image (Claude, wineapi.io)."""
     return Response(
         {
             "source": wine.source,
@@ -310,11 +310,11 @@ class ScanCodeBarresView(APIView):
 class IdentifierVinView(APIView):
     """
     US 04 — Identification d'un vin à partir de texte (nom, domaine, ou sortie OCR
-    de l'US 03), via la base wineapi.io.
+    de l'US 03), via la cascade Claude puis wineapi.io.
 
     1. Base locale (nom) -> cache hit, aucun appel externe.
-    2. Cascade des fournisseurs texte activés (wineapi.io) -> normalisation,
-       persistance locale (domaine/cuvée/cépages), réponse enrichie.
+    2. Cascade des fournisseurs texte activés (Claude, puis wineapi.io) ->
+       normalisation, persistance locale (domaine/cuvée/cépages), réponse enrichie.
     3. Échec -> 404 'Vin non identifié'.
     """
 
@@ -358,8 +358,8 @@ class IdentifierVinView(APIView):
 
 class ScanEtiquetteView(APIView):
     """
-    US 02/03 — Identification d'un vin à partir d'une photo d'étiquette,
-    via `POST /identify/image` de wineapi.io (JPEG/PNG ≤ 10 Mo).
+    US 02/03 — Identification d'un vin à partir d'une photo d'étiquette
+    (JPEG/PNG ≤ 10 Mo), via la cascade Claude (vision) puis wineapi.io.
 
     Cascade des fournisseurs image activés -> normalisation, persistance locale
     (même pipeline que le scan code-barres et l'identification texte), réponse

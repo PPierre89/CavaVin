@@ -42,8 +42,11 @@ vrai téléphone via IP LAN.
 ### Scan d'étiquette (US 02/03)
 
 `POST /api/scan-etiquette/` avec un upload multipart (champ `image`, JPEG/PNG ≤ 10 Mo) — identifie
-le vin à partir d'une **photo de l'étiquette** via `POST /identify/image` de wineapi.io (pas d'OCR à
-héberger). Le hit est normalisé et **mis en cache local** comme pour le texte, et la réponse a la même
+le vin à partir d'une **photo de l'étiquette** via la cascade **Claude (vision, Anthropic)** puis
+**wineapi.io** en repli (pas d'OCR à héberger). Claude lit l'étiquette avec un modèle multimodal et
+renvoie directement une fiche complète (domaine, cuvée, appellation, millésime, cépages, corps,
+acidité, description, accords) — bien plus fiable que l'identification wineapi, souvent incorrecte ou
+lacunaire. Le hit est normalisé et **mis en cache local** comme pour le texte, et la réponse a la même
 forme que `/api/identifier-vin/` (`confidence`, `infos`, `suggestions`). Échec →
 `404 "Vin non identifié sur l'étiquette"`.
 
@@ -55,29 +58,37 @@ input, sans `capture`). Le scan de code-barres et la recherche par nom deviennen
 repli**, regroupées sous un dépliant discret « Autre méthode : nom ou code-barres » afin de garder
 l'écran centré sur la photo.
 
-### Identification par texte / wineapi.io (US 04)
+### Identification par texte (US 04)
 
 `POST /api/identifier-vin/` avec `{"query": "Chateau Petrus 2015"}` — pensé pour la sortie OCR
-(US 03) comme pour une saisie manuelle. Cascade : **base locale** (nom, millésime retiré) → **wineapi.io**
-(`POST /identify/text` puis `GET /wines/{id}` pour enrichir) → `404 "Vin non identifié"`. Le hit est
-normalisé et **mis en cache local** (domaine + cuvée + **cépages**), et la réponse renvoie
-`confidence`, `infos` (région, note critique, description…) et `suggestions`.
+(US 03) comme pour une saisie manuelle. Cascade : **base locale** (nom, millésime retiré) → **Claude
+(Anthropic)** → **wineapi.io** en repli (`POST /identify/text` puis `GET /wines/{id}` pour enrichir) →
+`404 "Vin non identifié"`. Le hit est normalisé et **mis en cache local** (domaine + cuvée +
+**cépages**), et la réponse renvoie `confidence`, `infos` (région, description…) et `suggestions`.
 
-wineapi.io fournit couleur, appellation, **cépages** et notes — ce qui **couvre le besoin de l'US 05**
-(remplissage des trous de données) **sans recourir au scraping Vivino**.
+**Claude en tête de cascade** : le provider `claude.py` interroge un modèle multimodal (défaut
+`claude-opus-4-8`) dont la sortie est **contrainte par un schéma JSON** (structured outputs) au format
+du détail wineapi — le pipeline de persistance (`wine_profile.normalize_detail`, `ingest.upsert_cuvee`)
+est donc réutilisé tel quel. Le modèle complète la fiche à partir de ses connaissances œnologiques
+(couleur, appellation, **cépages**, corps, acidité, degré, description, accords) — ce qui **couvre le
+besoin de l'US 05** (remplissage des trous de données) **sans recourir au scraping Vivino**. Les
+données volatiles qu'il ne peut pas connaître (prix marchands, notes communautaires, avis critiques)
+ne lui sont volontairement **pas demandées** — pas de données inventées ; wineapi, resté dans la
+cascade, peut les apporter.
 
-Les erreurs documentées de l'API sont gérées proprement : `429` (quota) et `401` (clé invalide) sont
+Les erreurs documentées des API sont gérées proprement : `429` (quota) et `401` (clé invalide) sont
 remontés via `EnrichmentError` avec un message clair (pas déguisés en « vin non trouvé ») ; réseau
-indisponible ou 4xx/5xx divers = simple *miss*.
+indisponible ou 4xx/5xx divers = simple *miss* (la cascade passe au provider suivant).
 
 **Interface d'enrichissement enfichable** (`backend/apps/catalog/enrichment/`) : chaque source implémente
-`lookup_by_barcode(ean)` et/ou `lookup_by_text(query)` renvoyant un `NormalizedWine`. Actifs :
-**Open Food Facts** (code-barres) et **wineapi.io** (texte). `Vivino` reste un slot désactivé (pas
-d'API publique, scraping = violation des CGU). La persistance est mutualisée (`ingest.upsert_cuvee`).
-Aucune dépendance Python nouvelle (appels via `urllib` stdlib).
+`lookup_by_barcode(ean)`, `lookup_by_text(query)` et/ou `lookup_by_image(data, content_type)` renvoyant
+un `NormalizedWine`. Actifs : **Open Food Facts** (code-barres), **Claude** (texte + étiquette) et
+**wineapi.io** (texte + étiquette, en repli). `Vivino` reste un slot désactivé (pas d'API publique,
+scraping = violation des CGU). La persistance est mutualisée (`ingest.upsert_cuvee`).
 
-**Config** : la clé wineapi se met dans `.env` (`WINEAPI_KEY=...`, voir `.env.example`) — jamais dans le
-code. Sans clé, le provider wineapi se désactive tout seul. Le fichier `.env` est ignoré par git.
+**Config** : les clés se mettent dans `.env` (`ANTHROPIC_API_KEY=...`, `WINEAPI_KEY=...`, voir
+`.env.example`) — jamais dans le code. Sans clé, chaque provider se désactive tout seul. Le fichier
+`.env` est ignoré par git.
 
 ### Fiche vin consolidée
 
@@ -229,7 +240,7 @@ cave-a-vin/
 │   ├── config/          # settings, urls, auth (register), wsgi/asgi
 │   ├── apps/
 │   │   ├── catalog/     # Domaine, Cepage, Cuvee — référentiel vin partagé
-│   │   │   ├── enrichment/    # providers enfichables (Open Food Facts, wineapi.io, stub Vivino)
+│   │   │   ├── enrichment/    # providers enfichables (Open Food Facts, Claude, wineapi.io, stub Vivino)
 │   │   │   ├── ingest.py      # persistance mutualisée (upsert_cuvee, enrich_cuvee_from_wineapi)
 │   │   │   ├── wine_profile.py# mapping pur détail wineapi → Cuvee (source de vérité unique)
 │   │   │   ├── apogee.py      # logique pure fenêtre/statut de dégustation
@@ -362,7 +373,9 @@ ni de construire quoi que ce soit : deux fichiers suffisent.
    - `DJANGO_ALLOWED_HOSTS` : ajoute l'IP ou le nom d'hôte du NAS (ex. `192.168.1.50,mon-nas.local`),
      sinon Django refusera les requêtes venant d'un autre appareil que `localhost`.
    - `DJANGO_DEBUG` : laisser vide/absent pour garder le défaut sûr (`False`) en Docker.
-   - `WINEAPI_KEY` : optionnel, pour l'identification de vin par texte (US 04).
+   - `ANTHROPIC_API_KEY` : recommandé — reconnaissance d'étiquette et identification de vin via
+     Claude (US 02/03/04), provider principal de la cascade.
+   - `WINEAPI_KEY` : optionnel, repli de la cascade + données marchandes (prix, notes).
    > Si le package ghcr est privé, authentifie Docker sur le NAS :
    > `echo <TON_PAT> | docker login ghcr.io -u PPierre89 --password-stdin`.
 3. **Démarrer** (via l'interface Docker/Container Manager de ton NAS, ou en SSH) :
@@ -381,7 +394,7 @@ ni de construire quoi que ce soit : deux fichiers suffisent.
 migrations et fichiers statiques se réappliquent automatiquement au redémarrage.
 
 **Dépannage — « l'ajout de vin plante » / `WORKER TIMEOUT` / worker `SIGKILL`** : les appels
-d'enrichissement wineapi (identification texte/image) sont lents ; si gunicorn tourne avec un
+d'enrichissement Claude / wineapi (identification texte/image) sont lents ; si gunicorn tourne avec un
 `--timeout` court (30 s par défaut), il tue le worker en plein appel. Les réglages sûrs (timeout 120,
 threads) sont dans `backend/gunicorn.conf.py`, **chargé automatiquement** — donc un simple
 `docker compose pull && docker compose up -d` suffit à corriger, **même si un ancien

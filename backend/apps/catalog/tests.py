@@ -543,6 +543,198 @@ class WineApiProviderTests(SimpleTestCase):
         self.assertIsNone(wine.raw["wineapi_detail"])
 
 
+def _reponse_claude(payload, stop_reason="end_turn"):
+    """Fabrique une réponse Messages API minimale (un bloc texte JSON)."""
+    bloc = MagicMock()
+    bloc.type = "text"
+    bloc.text = json.dumps(payload)
+    reponse = MagicMock()
+    reponse.stop_reason = stop_reason
+    reponse.content = [bloc]
+    return reponse
+
+
+_VIN_CLAUDE = {
+    "identifie": True,
+    "confiance": 0.92,
+    "vin": {
+        "name": "Château Margaux 2015",
+        "vintage": 2015,
+        "type": "red",
+        "winery": "Château Margaux",
+        "region": {"name": "Bordeaux", "country": "France"},
+        "appellation": "Margaux",
+        "classification": "Premier Grand Cru Classé",
+        "grapes": ["Cabernet Sauvignon", "Merlot"],
+        "body": "Full-bodied",
+        "acidity": "Medium",
+        "alcoholContent": 13.5,
+        "description": "Un grand vin de Margaux.",
+        "pairings": [{"food": "Agneau rôti", "confidence": 0.9}],
+    },
+}
+
+
+@override_settings(ANTHROPIC_API_KEY="cle-de-test")
+class ClaudeProviderTests(SimpleTestCase):
+    """Provider Claude : activation, mapping structuré, erreurs (SDK mocké)."""
+
+    def setUp(self):
+        from .enrichment.claude import ClaudeProvider
+
+        self.provider = ClaudeProvider()
+
+    def _mock_create(self, mock_anthropic):
+        return mock_anthropic.return_value.messages.create
+
+    def test_enabled_suit_la_presence_de_cle(self):
+        self.assertTrue(self.provider.enabled)
+        with override_settings(ANTHROPIC_API_KEY=""):
+            self.assertFalse(self.provider.enabled)
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_lookup_by_text_mappe_le_resultat(self, mock_anthropic):
+        self._mock_create(mock_anthropic).return_value = _reponse_claude(_VIN_CLAUDE)
+
+        wine = self.provider.lookup_by_text("Margaux 2015")
+
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Margaux")
+        self.assertEqual(wine.cuvee_nom, "Château Margaux")  # millésime retiré
+        self.assertEqual(wine.couleur, "ROUGE")
+        self.assertEqual(wine.appellation, "Margaux")
+        self.assertEqual(wine.millesime, 2015)
+        self.assertEqual(wine.cepages, ["Cabernet Sauvignon", "Merlot"])
+        self.assertEqual(wine.source, "claude")
+        # Pas de source distante : la fiche ne proposera pas de re-synchro.
+        self.assertEqual(wine.reference_externe_id, "")
+        self.assertEqual(wine.raw["confidence"], 0.92)
+        self.assertEqual(wine.raw["pays"], "France")
+        # Le détail (format wineapi) est transmis pour persistance par upsert_cuvee.
+        self.assertEqual(wine.raw["wineapi_detail"]["body"], "Full-bodied")
+        # Les données volatiles ne sont jamais inventées par le modèle.
+        self.assertIsNone(wine.raw["prix"])
+        self.assertIsNone(wine.raw["note"])
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_detail_persiste_alimente_la_cuvee(self, mock_anthropic):
+        """Le détail Claude traverse normalize_detail comme un détail wineapi."""
+        self._mock_create(mock_anthropic).return_value = _reponse_claude(_VIN_CLAUDE)
+        wine = self.provider.lookup_by_text("Margaux")
+        flat = wine_profile.normalize_detail(wine.raw["wineapi_detail"])
+        self.assertEqual(flat["region"], "Bordeaux")
+        self.assertEqual(flat["classification"], "Premier Grand Cru Classé")
+        self.assertEqual(flat["corps"], "Full-bodied")
+        self.assertEqual(flat["degre_alcool"], 13.5)
+        self.assertEqual(flat["accords"][0]["nom"], "Agneau rôti")
+        self.assertEqual(flat["cepages"], ["Cabernet Sauvignon", "Merlot"])
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_lookup_by_image_envoie_l_image_en_base64(self, mock_anthropic):
+        create = self._mock_create(mock_anthropic)
+        create.return_value = _reponse_claude(_VIN_CLAUDE)
+
+        wine = self.provider.lookup_by_image(b"fausse-image-jpeg", "image/jpeg")
+
+        self.assertIsNotNone(wine)
+        blocs = create.call_args.kwargs["messages"][0]["content"]
+        self.assertEqual(blocs[0]["type"], "image")
+        self.assertEqual(blocs[0]["source"]["media_type"], "image/jpeg")
+        import base64 as b64
+
+        self.assertEqual(b64.b64decode(blocs[0]["source"]["data"]), b"fausse-image-jpeg")
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_content_type_inconnu_retombe_sur_jpeg(self, mock_anthropic):
+        create = self._mock_create(mock_anthropic)
+        create.return_value = _reponse_claude(_VIN_CLAUDE)
+        self.provider.lookup_by_image(b"img", "application/octet-stream")
+        blocs = create.call_args.kwargs["messages"][0]["content"]
+        self.assertEqual(blocs[0]["source"]["media_type"], "image/jpeg")
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_non_identifie_renvoie_none(self, mock_anthropic):
+        self._mock_create(mock_anthropic).return_value = _reponse_claude(
+            {"identifie": False, "confiance": None, "vin": None}
+        )
+        self.assertIsNone(self.provider.lookup_by_text("blabla sans rapport"))
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_refus_du_modele_est_un_miss(self, mock_anthropic):
+        reponse = MagicMock()
+        reponse.stop_reason = "refusal"
+        reponse.content = []
+        self._mock_create(mock_anthropic).return_value = reponse
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_json_invalide_est_un_miss(self, mock_anthropic):
+        reponse = MagicMock()
+        reponse.stop_reason = "end_turn"
+        bloc = MagicMock()
+        bloc.type = "text"
+        bloc.text = "pas du json"
+        reponse.content = [bloc]
+        self._mock_create(mock_anthropic).return_value = reponse
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_429_leve_une_erreur_remontable(self, mock_anthropic):
+        import anthropic
+        import httpx
+
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        self._mock_create(mock_anthropic).side_effect = anthropic.RateLimitError(
+            "quota", response=httpx.Response(429, request=req), body=None
+        )
+        with self.assertRaises(EnrichmentError) as ctx:
+            self.provider.lookup_by_text("x")
+        self.assertEqual(ctx.exception.status, 429)
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_401_leve_une_erreur_502(self, mock_anthropic):
+        import anthropic
+        import httpx
+
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        self._mock_create(mock_anthropic).side_effect = anthropic.AuthenticationError(
+            "clé invalide", response=httpx.Response(401, request=req), body=None
+        )
+        with self.assertRaises(EnrichmentError) as ctx:
+            self.provider.lookup_by_text("x")
+        self.assertEqual(ctx.exception.status, 502)  # clé invalide = erreur serveur
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_5xx_est_un_miss_silencieux(self, mock_anthropic):
+        import anthropic
+        import httpx
+
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        self._mock_create(mock_anthropic).side_effect = anthropic.InternalServerError(
+            "boom", response=httpx.Response(500, request=req), body=None
+        )
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_reseau_indisponible_est_un_miss(self, mock_anthropic):
+        import anthropic
+        import httpx
+
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        self._mock_create(mock_anthropic).side_effect = anthropic.APIConnectionError(request=req)
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_vin_sans_nom_ni_domaine_est_un_miss(self, mock_anthropic):
+        payload = {
+            "identifie": True,
+            "confiance": 0.1,
+            "vin": {**_VIN_CLAUDE["vin"], "name": "", "winery": ""},
+        }
+        self._mock_create(mock_anthropic).return_value = _reponse_claude(payload)
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+
 class EnsureSuperuserCommandTests(TestCase):
     """Commande ensure_superuser : création depuis l'environnement, idempotente."""
 

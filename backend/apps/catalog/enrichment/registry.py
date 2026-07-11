@@ -3,15 +3,19 @@ from __future__ import annotations
 from django.core.cache import cache
 
 from .base import EnrichmentError, EnrichmentProvider
+from .claude import ClaudeProvider
 from .openfoodfacts import OpenFoodFactsProvider
 from .stubs import VivinoProvider
 from .wineapi import WineApiProvider
 
 # Ordre de la cascade d'enrichissement externe.
 #  - code-barres (US 01) : Open Food Facts (les autres n'exposent pas le barcode).
-#  - texte / OCR (US 03/04) : wineapi.io.
+#  - texte / étiquette (US 02/03/04) : Claude (vision + connaissances œnologiques)
+#    en premier — identification bien plus fiable et fiche plus complète —, puis
+#    wineapi.io en repli (et pour ses données marchandes : prix, notes).
 _PROVIDERS: list[EnrichmentProvider] = [
     OpenFoodFactsProvider(),
+    ClaudeProvider(),
     WineApiProvider(),
     VivinoProvider(),
 ]

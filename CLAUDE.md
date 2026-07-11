@@ -25,7 +25,7 @@ CavaVin/
 │   ├── config/                  # settings, urls, auth (RegisterView), wsgi/asgi, index view
 │   ├── apps/
 │   │   ├── catalog/             # SHARED reference data: Domaine, Cepage, Cuvee
-│   │   │   ├── enrichment/      # pluggable external providers (OFF, wineapi.io, Vivino stub)
+│   │   │   ├── enrichment/      # pluggable external providers (OFF, Claude, wineapi.io, Vivino stub)
 │   │   │   ├── ingest.py        # shared persistence: upsert_cuvee, enrich_cuvee_from_wineapi
 │   │   │   ├── wine_profile.py  # pure mapping of wineapi detail → Cuvee fields (source of truth)
 │   │   │   ├── apogee.py        # pure drink-window / status logic (no DB)
@@ -124,7 +124,13 @@ Three modules hold the domain rules as pure functions — no DB access, unit-tes
 `NormalizedWine`. Providers implement `lookup_by_barcode` / `lookup_by_text` / `lookup_by_image`.
 The cascade in `registry.py` tries enabled providers in order:
 - **Open Food Facts** — barcodes (US 01).
-- **wineapi.io** — text & label image (US 03/04/05); auto-disabled when `WINEAPI_KEY` is unset.
+- **Claude (Anthropic)** — primary for text & label image (US 02/03/04/05): multimodal vision reads
+  the label; structured outputs constrain the answer to a JSON schema mirroring the wineapi detail
+  format, so persistence (`wine_profile.normalize_detail` + `ingest`) is reused as-is. Volatile data
+  it cannot know (prices, community ratings) is deliberately never requested. Auto-disabled when
+  `ANTHROPIC_API_KEY` is unset.
+- **wineapi.io** — text & label image fallback + merchant data (prices, ratings); auto-disabled when
+  `WINEAPI_KEY` is unset.
 - **Vivino** — permanently disabled stub (no public API; scraping violates ToS — do not implement).
 Every hit is normalised and **cached into the local DB** via `ingest.upsert_cuvee`. `EnrichmentError`
 (quota 429 / bad key 401) is surfaced to the user; network/other errors are treated as a plain miss.
@@ -134,7 +140,8 @@ ever lost. Quota is protected by caching (registry TTLs) and a per-wine refresh 
 
 ### Secrets & config
 Secrets come from `.env` (loaded via python-dotenv in `settings.py`); `.env` is gitignored. Never
-hardcode keys — `WINEAPI_KEY`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, etc. are all env-driven.
+hardcode keys — `ANTHROPIC_API_KEY`, `WINEAPI_KEY`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`,
+etc. are all env-driven.
 See `.env.example` for the full list.
 
 ### Frontend conventions
@@ -185,7 +192,8 @@ Versioning is **fully automated** via `release.yml` (semantic-release) — never
 - Keep changes consistent with the existing French naming and comment style.
 - Write **Conventional Commit** messages (`type(scope): …`) — they drive automated versioning (above).
 - Any model change requires a migration (`makemigrations`) committed alongside it.
-- Never lower `gunicorn.conf.py`'s timeout or the wineapi timeouts below the worker timeout — slow
-  vision calls will otherwise get `WORKER TIMEOUT`-killed instead of returning a clean 404.
+- Never lower `gunicorn.conf.py`'s timeout, and keep the outbound-call timeouts (`ANTHROPIC_TIMEOUT`,
+  `WINEAPI_TIMEOUT`…) strictly below the worker timeout — slow vision calls will otherwise get
+  `WORKER TIMEOUT`-killed instead of returning a clean 404.
 - Preserve the privacy split, per-owner queryset filtering, throttles, and quota guards when
   touching API or enrichment code.
