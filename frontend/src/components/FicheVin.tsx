@@ -2,16 +2,22 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { api, errMsg } from '../api'
 import { useData } from '../data'
 import { useToast } from '../toast'
-import { IconButton, Logo, wineFill } from '../ui'
+import { IconButton, Logo, pillCls, tileCls, wineFill } from '../ui'
+import {
+  devise,
+  formatApogee,
+  formatFourchette,
+  formatMontant,
+  formatPrix,
+  moisCourt,
+} from '../format'
 import {
   COULEUR_LABELS,
   COULEUR_VARS,
-  STATUT_COLORS,
   STATUT_LABELS,
   type Bouteille,
   type FicheCuvee,
   type PointPrix,
-  type PrixMarche,
   type PrixMarchand,
   type Statut,
 } from '../types'
@@ -28,51 +34,9 @@ import { formatDate, formatDateTime } from '../dates'
  *   - millésimes en stock, apogée et emplacement via la cave de l'utilisateur.
  * ------------------------------------------------------------------ */
 
-/* Carte mate compacte (rayon 10px de la maquette). */
-const tileCls = 'glass rounded-[10px] px-3 py-2.5'
-
-/** Formate une fenêtre d'apogée (« 2024-2035 », « dès 2024 », « avant 2035 »). */
-function formatApogee(debut: number | null, fin: number | null): string | null {
-  if (debut && fin) return `${debut}-${fin}`
-  if (debut) return `dès ${debut}`
-  if (fin) return `avant ${fin}`
-  return null
-}
-
-/** Formate un prix « 25.00 » -> « 25,00 € ». */
-function formatPrix(prix: string | null): string {
-  if (prix == null) return '-- €'
-  return `${Number(prix).toFixed(2).replace('.', ',')} €`
-}
-
-/** Symbole monétaire à partir d'un code ISO. */
-function devise(code: string): string {
-  return { EUR: '€', USD: '$', GBP: '£' }[code] ?? code
-}
-
-/** Formate une fourchette de prix marché « 38–65 € ». */
-function formatFourchette(p: PrixMarche): string {
-  return `${Math.round(p.min)}–${Math.round(p.max)} ${devise(p.devise)}`
-}
-
 /** Formate un prix marchand « 42,50 € ». */
 function formatPrixMarchand(p: PrixMarchand): string {
-  return `${p.prix.toFixed(2).replace('.', ',')} ${devise(p.devise)}`
-}
-
-/** Formate un montant « 42,50 € ». */
-function formatMontant(n: number, code: string): string {
-  return `${n.toFixed(2).replace('.', ',')} ${devise(code)}`
-}
-
-/** Mois + année compacts pour un axe, ex. « mai 26 ». Sûr pour les dates seules. */
-function moisCourt(iso: string): string {
-  const anchor = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T12:00:00Z` : iso
-  return new Date(anchor).toLocaleDateString('fr-FR', {
-    month: 'short',
-    year: '2-digit',
-    timeZone: 'Europe/Paris',
-  })
+  return formatMontant(p.prix, p.devise)
 }
 
 /* Graphe d'historique de prix : série « meilleur prix » (prix_min) dans le temps,
@@ -183,13 +147,18 @@ function Section({ title, action, children }: {
 /* Jauge de maturité : trois segments (à garder / à boire / dépassé) avec un
    curseur pointant le statut calculé de la bouteille sélectionnée. */
 const ORDRE_STATUTS: Statut[] = ['A_GARDER', 'A_BOIRE', 'DEPASSE']
+const STATUT_TEXTE_CLS: Record<Statut, string> = {
+  A_GARDER: 'text-muted-strong',
+  A_BOIRE: 'text-gold',
+  DEPASSE: 'text-alerte',
+}
 function MaturiteGauge({ statut }: { statut: Statut }) {
   const idx = ORDRE_STATUTS.indexOf(statut)
   return (
     <div className={`${tileCls} flex flex-col gap-2 py-3`}>
       <div className="flex justify-between items-center">
         <span className="text-[11px] text-muted">Maturité</span>
-        <span className="text-[13px] font-semibold" style={{ color: STATUT_COLORS[statut] }}>
+        <span className={`text-[13px] font-semibold ${STATUT_TEXTE_CLS[statut]}`}>
           {STATUT_LABELS[statut]}
         </span>
       </div>
@@ -197,13 +166,12 @@ function MaturiteGauge({ statut }: { statut: Statut }) {
         {ORDRE_STATUTS.map((s, i) => (
           <div
             key={s}
-            className="flex-1 h-1.5 rounded-[3px]"
-            style={{ background: i === idx ? 'var(--color-wine-bright)' : 'oklch(38% 0.02 40)' }}
+            className={`flex-1 h-1.5 rounded-[3px] ${i === idx ? 'bg-wine-bright' : 'bg-track'}`}
           />
         ))}
         <div
-          className="absolute -top-[7px] w-0 h-0 border-l-4 border-r-4 border-t-[5px] border-l-transparent border-r-transparent transition-all"
-          style={{ left: `calc(${((idx * 2 + 1) / 6) * 100}% - 4px)`, borderTopColor: 'var(--color-gold)' }}
+          className="absolute -top-[7px] w-0 h-0 border-l-4 border-r-4 border-t-[5px] border-l-transparent border-r-transparent border-t-gold transition-all"
+          style={{ left: `calc(${((idx * 2 + 1) / 6) * 100}% - 4px)` }}
         />
       </div>
       <div className="flex justify-between">
@@ -379,8 +347,7 @@ export function FicheVin({
           <button
             onClick={() => onRetirer(selected)}
             aria-label="Retirer une bouteille"
-            className="absolute top-2.5 left-2.5 w-8 h-8 rounded-full border border-line-strong text-muted-strong grid place-items-center text-lg leading-none active:scale-95 transition"
-            style={{ background: 'oklch(20% 0.018 40)' }}
+            className="absolute top-2.5 left-2.5 w-8 h-8 rounded-full border border-line-strong bg-sheet text-muted-strong grid place-items-center text-lg leading-none active:scale-95 transition"
           >
             −
           </button>
@@ -401,31 +368,22 @@ export function FicheVin({
             />
           ) : (
             /* Étiquette stylisée (à défaut de photo) : crème, liseré or. */
-            <div
-              className="w-32 rounded border-[1.5px] px-3.5 py-4 flex flex-col items-center gap-1.5 shadow-[0_8px_20px_rgba(0,0,0,0.35)]"
-              style={{ background: 'var(--color-cream)', borderColor: 'var(--color-gold)' }}
-            >
+            <div className="w-32 rounded border-[1.5px] border-gold bg-cream px-3.5 py-4 flex flex-col items-center gap-1.5 shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
               <Logo className="w-5 h-5" />
-              <div className="w-7 h-px" style={{ background: 'var(--color-gold)' }} />
-              <span
-                className="font-serif text-base text-center leading-tight"
-                style={{ color: 'oklch(25% 0.04 40)' }}
-              >
+              <div className="w-7 h-px bg-gold" />
+              <span className="font-serif text-base text-center leading-tight text-etiquette-ink">
                 {bouteille.cuvee_nom}
               </span>
-              <span className="font-serif text-[11px] tracking-wide" style={{ color: 'oklch(40% 0.03 40)' }}>
+              <span className="font-serif text-[11px] tracking-wide text-etiquette-sub">
                 {selected.millesime ?? 'N.M.'}
               </span>
-              <div className="w-7 h-px" style={{ background: 'var(--color-gold)' }} />
+              <div className="w-7 h-px bg-gold" />
               <span className="flex items-center gap-1.5">
                 <span
-                  className="w-2 h-2 rounded-full border"
-                  style={{ background: COULEUR_VARS[couleur], borderColor: 'var(--color-gold-soft)' }}
+                  className="w-2 h-2 rounded-full border border-gold-soft"
+                  style={{ background: COULEUR_VARS[couleur] }}
                 />
-                <span
-                  className="text-[8.5px] uppercase tracking-[0.06em]"
-                  style={{ color: 'oklch(45% 0.03 40)' }}
-                >
+                <span className="text-[8.5px] uppercase tracking-[0.06em] text-etiquette-sub">
                   {[COULEUR_LABELS[couleur], region].filter(Boolean).join(' · ')}
                 </span>
               </span>
@@ -445,15 +403,7 @@ export function FicheVin({
         {millesimes.length > 1 && (
           <div className="flex gap-2 overflow-x-auto no-scrollbar mt-3 pb-1">
             {millesimes.map((b) => (
-              <button
-                key={b.id}
-                onClick={() => setSelId(b.id)}
-                className={`shrink-0 px-3.5 py-1.5 rounded-full text-xs transition ${
-                  b.id === selId
-                    ? `${wineFill} text-ink-bright font-semibold`
-                    : 'border border-line text-ink'
-                }`}
-              >
+              <button key={b.id} onClick={() => setSelId(b.id)} className={pillCls(b.id === selId)}>
                 {b.millesime ?? 'N.M.'} <span className="opacity-75">×{b.quantite}</span>
               </button>
             ))}
@@ -482,7 +432,11 @@ export function FicheVin({
           />
           <InfoTile
             label="Valeur marché"
-            value={fiche?.prix_marche ? formatFourchette(fiche.prix_marche) : '—'}
+            value={
+              fiche?.prix_marche
+                ? formatFourchette(fiche.prix_marche.min, fiche.prix_marche.max, fiche.prix_marche.devise)
+                : '—'
+            }
             gold
           />
         </div>
@@ -521,7 +475,7 @@ export function FicheVin({
               {fiche.profil_gustatif.map((row) => (
                 <div key={row.gauche} className="flex items-center gap-2.5 text-xs">
                   <span className="w-16 text-muted-strong text-right shrink-0">{row.gauche}</span>
-                  <div className="flex-1 h-1.5 rounded-[3px]" style={{ background: 'oklch(38% 0.02 40)' }}>
+                  <div className="flex-1 h-1.5 rounded-[3px] bg-track">
                     <div
                       className={`h-full rounded-[3px] ${wineFill}`}
                       style={{ width: `${row.valeur * 100}%` }}

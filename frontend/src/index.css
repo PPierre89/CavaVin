@@ -22,6 +22,8 @@
   /* Or (accents, statut « à boire », valeurs) */
   --color-gold: oklch(70% 0.13 85);
   --color-gold-soft: oklch(65% 0.13 85);
+  --color-gold-dim: oklch(45% 0.13 85); /* contour or discret (bouton secondaire) */
+  --color-gold-pale: oklch(75% 0.1 85); /* texte or adouci */
 
   /* Textes */
   --color-ink: oklch(94% 0.015 70);
@@ -30,9 +32,16 @@
   --color-muted-strong: oklch(75% 0.02 70);
   --color-placeholder: oklch(55% 0.02 70);
 
+  /* Fonds profonds & pistes de jauges */
+  --color-sheet: oklch(20% 0.018 40); /* bottom sheets, boutons enfoncés */
+  --color-track: oklch(38% 0.02 40); /* piste des jauges et barres */
+  --color-ink-dark: oklch(15% 0.012 40); /* texte sombre sur aplat or */
+
   /* Étiquette (fiche vin) & vigne (logo) */
   --color-cream: oklch(95% 0.012 70);
   --color-vigne: oklch(55% 0.05 130);
+  --color-etiquette-ink: oklch(25% 0.04 40); /* texte principal sur étiquette crème */
+  --color-etiquette-sub: oklch(45% 0.03 40); /* texte secondaire sur étiquette crème */
 
   /* Couleurs de vin (alvéoles, silhouettes, légende) */
   --color-rouge: oklch(40% 0.14 20);
@@ -45,6 +54,12 @@
   /* Feedback : « à boire » se signale en or, « dépassé » en rouge alerte */
   --color-ok: oklch(65% 0.13 85);
   --color-alerte: oklch(58% 0.17 25);
+
+  /* Badges de statut d'apogée (pilules pleines de la maquette) */
+  --color-boire-bg: oklch(33% 0.11 85);
+  --color-boire-ink: oklch(90% 0.02 85);
+  --color-depasse-bg: oklch(30% 0.1 25);
+  --color-depasse-ink: oklch(82% 0.08 25);
 
   /* Rayon standard des cartes */
   --radius-card: 16px;
@@ -86,7 +101,7 @@ body {
   backdrop-filter: saturate(1.1) blur(12px);
 }
 @utility sheet-surface {
-  background: oklch(20% 0.018 40);
+  background: var(--color-sheet);
 }
 
 input,
@@ -95,7 +110,7 @@ textarea {
   font-family: var(--font-sans);
 }
 select option {
-  color: oklch(20% 0.018 40);
+  color: var(--color-sheet);
 }
 /* Masque la scrollbar des chips horizontales */
 .no-scrollbar::-webkit-scrollbar {

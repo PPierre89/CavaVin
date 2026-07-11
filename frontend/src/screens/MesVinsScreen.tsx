@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useData } from '../data'
-import { BottleBar, BottleSheet } from '../components/bottle'
+import { BottleSheet, LigneVin, QtyBadge } from '../components/bottle'
 import { FicheVin } from '../components/FicheVin'
 import { FiltresSheet } from '../components/FiltresSheet'
 import {
@@ -11,7 +11,8 @@ import {
   type Filtres,
   type Ligne,
 } from '../filtres'
-import { StatutBadge, wineFill } from '../ui'
+import { devise, formatPrixCourt } from '../format'
+import { StatutBadge, pillCls, wineFill } from '../ui'
 import { COULEUR_LABELS, type Bouteille, type Couleur, type Cuvee } from '../types'
 
 /* ------------------------------------------------------------------ *
@@ -28,17 +29,6 @@ const CHIPS: [Couleur, string][] = [
   ['ROSE', 'Rosé'],
   ['BULLES', 'Pétillant'],
 ]
-
-/** Formate un prix « 25.00 » -> « 25 € » (compact, comme la maquette). */
-function formatPrixCourt(prix: string | null): string | null {
-  if (prix == null || prix === '') return null
-  return `${Math.round(Number(prix))} €`
-}
-
-/** Symbole monétaire à partir d'un code ISO. */
-function devise(code: string): string {
-  return { EUR: '€', USD: '$', GBP: '£' }[code] ?? code
-}
 
 export default function MesVinsScreen({ onAjouter }: { onAjouter: () => void }) {
   const { cuvees, bouteilles, cuveeColor } = useData()
@@ -114,11 +104,6 @@ export default function MesVinsScreen({ onAjouter }: { onAjouter: () => void }) 
   const chipActive = (c: Couleur | null) =>
     c === null ? filtres.couleurs.size === 0 : filtres.couleurs.size === 1 && filtres.couleurs.has(c)
 
-  const chipCls = (active: boolean) =>
-    `shrink-0 px-3.5 py-1.5 rounded-full text-xs transition ${
-      active ? `${wineFill} text-ink-bright font-semibold` : 'border border-line text-ink'
-    }`
-
   return (
     <div>
       <div className="flex items-baseline justify-between mb-3 px-0.5">
@@ -153,7 +138,7 @@ export default function MesVinsScreen({ onAjouter }: { onAjouter: () => void }) 
               />
             </svg>
             {nbFiltres > 0 && (
-              <span className="absolute -top-2 -right-2.5 min-w-4 h-4 px-1 rounded-full bg-gold text-[0.6rem] font-bold grid place-items-center" style={{ color: 'oklch(15% 0.012 40)' }}>
+              <span className="absolute -top-2 -right-2.5 min-w-4 h-4 px-1 rounded-full bg-gold text-ink-dark text-[0.6rem] font-bold grid place-items-center">
                 {nbFiltres}
               </span>
             )}
@@ -172,11 +157,11 @@ export default function MesVinsScreen({ onAjouter }: { onAjouter: () => void }) 
 
       {/* ---------- Chips couleur ---------- */}
       <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 mb-3">
-        <button className={chipCls(chipActive(null))} onClick={() => chipCouleur(null)}>
+        <button className={pillCls(chipActive(null))} onClick={() => chipCouleur(null)}>
           Tous
         </button>
         {CHIPS.map(([c, lbl]) => (
-          <button key={c} className={chipCls(chipActive(c))} onClick={() => chipCouleur(c)}>
+          <button key={c} className={pillCls(chipActive(c))} onClick={() => chipCouleur(c)}>
             {lbl}
           </button>
         ))}
@@ -207,34 +192,25 @@ export default function MesVinsScreen({ onAjouter }: { onAjouter: () => void }) 
               .filter(Boolean)
               .join(' · ')
             return (
-              <button
+              <LigneVin
                 key={l.key}
+                couleur={l.couleur}
+                titre={c?.classification || l.ref.cuvee_nom}
+                sousTitre={lieu || l.ref.domaine_nom}
+                droite={<QtyBadge n={l.quantite} />}
                 onClick={() => setFiche(l.ref)}
-                className="glass rounded-[10px] p-3 flex items-center gap-3 text-left active:scale-[0.99] transition"
               >
-                <BottleBar couleur={l.couleur} />
-                <span className="flex-1 min-w-0 flex flex-col gap-[3px]">
-                  <span className="text-[13px] truncate">
-                    {c?.classification || l.ref.cuvee_nom}
+                <span className="flex items-center gap-1.5">
+                  <StatutBadge
+                    statut={l.ref.statut}
+                    className="text-[10px] px-1.5 py-0.5 font-medium"
+                  />
+                  <span className="text-[10px] text-placeholder">
+                    75cl{prix ? ` · ${prix}` : valeur ? ` · ${valeur}` : ''}
                   </span>
-                  <span className="text-[11px] text-muted truncate">
-                    {lieu || l.ref.domaine_nom}
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <StatutBadge
-                      statut={l.ref.statut}
-                      className="text-[10px] px-1.5 py-0.5 font-medium"
-                    />
-                    <span className="text-[10px] text-placeholder">
-                      75cl{prix ? ` · ${prix}` : valeur ? ` · ${valeur}` : ''}
-                    </span>
-                  </span>
-                  <span className="sr-only">{COULEUR_LABELS[l.couleur]}</span>
                 </span>
-                <span className="text-[11px] px-2 py-0.5 rounded-[10px] bg-surface-2 text-muted-strong">
-                  ×{l.quantite}
-                </span>
-              </button>
+                <span className="sr-only">{COULEUR_LABELS[l.couleur]}</span>
+              </LigneVin>
             )
           })}
         </div>

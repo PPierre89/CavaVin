@@ -348,14 +348,16 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
 
   const Legend = () => (
     <div className="flex flex-wrap gap-x-3 gap-y-2 text-[0.68rem] text-muted mx-0.5 my-2">
-      {[
-        ['Rouge', 'var(--color-rouge)'],
-        ['Blanc', 'var(--color-blanc)'],
-        ['Rosé', 'var(--color-rose)'],
-        ['Bulles', 'var(--color-bulles)'],
-      ].map(([l, c]) => (
+      {(
+        [
+          ['Rouge', 'bg-rouge'],
+          ['Blanc', 'bg-blanc'],
+          ['Rosé', 'bg-rose'],
+          ['Bulles', 'bg-bulles'],
+        ] as const
+      ).map(([l, cls]) => (
         <span key={l} className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-[2px]" style={{ background: c }} /> {l}
+          <span className={`w-2.5 h-2.5 rounded-[2px] ${cls}`} /> {l}
         </span>
       ))}
       <span className="flex items-center gap-1.5">
@@ -408,7 +410,7 @@ export default function CaveScreen({ onAdd }: { onAdd: (seg: 'cave' | 'emplaceme
             </span>
           </div>
           {remplissage.cap > 0 && (
-            <div className="h-1.5 rounded-[3px]" style={{ background: 'oklch(38% 0.02 40)' }}>
+            <div className="h-1.5 rounded-[3px] bg-track">
               <div
                 className="h-full rounded-[3px] bg-wine"
                 style={{ width: `${Math.min(100, (remplissage.occ / remplissage.cap) * 100)}%` }}
