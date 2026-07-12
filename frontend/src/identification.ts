@@ -22,8 +22,36 @@ export function identifyByBarcode(ean: string) {
   return api<IdentifiedWine>('POST', '/api/scan-code-barres/', { code_barres: ean })
 }
 
-export function identifyByText(query: string) {
-  return api<IdentifiedWine>('POST', '/api/identifier-vin/', { query })
+export function identifyByText(query: string, lwin?: string) {
+  // `lwin` (sélection d'une suggestion du référentiel) court-circuite la
+  // cascade externe côté serveur : résolution locale, aucun quota consommé.
+  return api<IdentifiedWine>('POST', '/api/identifier-vin/', lwin ? { query, lwin } : { query })
+}
+
+/** Suggestion du référentiel LWIN local (recherche dynamique). */
+export interface SuggestionReferentiel {
+  lwin: string
+  libelle: string
+  producteur: string
+  vin: string
+  appellation: string
+  region: string
+  pays: string
+  couleur: string
+  millesime: number | null
+}
+
+/**
+ * Recherche dynamique (autocomplétion) dans le référentiel LWIN local — appel
+ * léger et 100 % local côté serveur (aucun quota externe), pensé pour être
+ * déclenché au fil de la frappe avec un debounce.
+ */
+export async function searchReferentiel(query: string): Promise<SuggestionReferentiel[]> {
+  const data = await api<{ resultats?: SuggestionReferentiel[] }>(
+    'GET',
+    `/api/recherche-vins/?q=${encodeURIComponent(query)}`,
+  )
+  return data?.resultats ?? []
 }
 
 export function identifyByLabel(file: File) {

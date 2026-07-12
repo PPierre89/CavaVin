@@ -40,6 +40,7 @@ export interface Cuvee {
   pays?: string
   classification?: string
   image_url?: string
+  lwin_code?: string
   prix_min?: string | null
   prix_max?: string | null
   devise?: string

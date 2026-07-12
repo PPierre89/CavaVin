@@ -85,6 +85,7 @@ carnet) strictement filtrées par propriétaire côté serveur.
 | --- | --- |
 | `POST /api/auth/register/` · `token/` | Inscription / JWT (`Bearer`) |
 | `POST /api/scan-etiquette/` · `scan-code-barres/` · `identifier-vin/` | Identification (photo / EAN / texte) |
+| `GET /api/recherche-vins/?q=` | Recherche dynamique (autocomplétion) dans le référentiel LWIN |
 | `GET /api/cuvees/{id}/fiche/` | Fiche vin consolidée (référentiel + conseil + enrichissement) |
 | `POST /api/cuvees/{id}/rafraichir/` | Re-synchro wineapi (cooldown anti-quota) |
 | `POST /api/bouteilles/{id}/consommer/` | Sortie de stock atomique + journal |
@@ -106,6 +107,11 @@ orientée précision, pondération par rareté) sur le référentiel **LWIN** de
 ```bash
 docker compose exec app python manage.py import_lwin /chemin/LWINdatabase.xlsx  # idempotent, ~1 min
 ```
+
+Le référentiel importé alimente aussi la **recherche dynamique** (`GET /api/recherche-vins/?q=`) :
+suggestions au fil de la frappe (préfixes, tolérance aux fautes, millésime et couleur compris dans
+la requête — « palmer rouge 199 »), branchées sur le champ de recherche de l'écran d'ajout ;
+choisir une suggestion identifie le vin directement par son code LWIN, sans repasser par la cascade.
 
 Tout hit est **mis en cache en base** ; les endpoints d'identification sont protégés par un
 throttle et la re-synchro par un cooldown par vin. Détail complet dans Swagger.

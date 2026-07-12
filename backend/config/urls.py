@@ -12,6 +12,7 @@ from apps.catalog.views import (
     CuveeViewSet,
     DomaineViewSet,
     IdentifierVinView,
+    RechercheVinsView,
     ScanCodeBarresView,
     ScanEtiquetteView,
 )
@@ -45,6 +46,7 @@ urlpatterns = [
     path("api/", include(router.urls)),
     path("api/scan-code-barres/", ScanCodeBarresView.as_view(), name="scan-code-barres"),
     path("api/identifier-vin/", IdentifierVinView.as_view(), name="identifier-vin"),
+    path("api/recherche-vins/", RechercheVinsView.as_view(), name="recherche-vins"),
     path("api/scan-etiquette/", ScanEtiquetteView.as_view(), name="scan-etiquette"),
     path("api/admin-panel/apercu/", AdminApercuView.as_view(), name="admin-apercu"),
     path("api/auth/me/", MeView.as_view(), name="me"),

@@ -31,9 +31,20 @@ class ScanCodeBarresSerializer(serializers.Serializer):
 
 
 class IdentifierVinSerializer(serializers.Serializer):
-    """Valide une requête d'identification texte (US 04)."""
+    """Valide une requête d'identification texte (US 04).
+
+    ``lwin`` (optionnel) désigne directement une référence du référentiel
+    local — posé par la sélection d'une suggestion de la recherche dynamique,
+    il court-circuite la cascade externe (aucun quota consommé)."""
 
     query = serializers.CharField(min_length=2, trim_whitespace=True)
+    lwin = serializers.CharField(required=False, allow_blank=True, max_length=16)
+
+
+class RechercheVinsSerializer(serializers.Serializer):
+    """Valide les paramètres de la recherche dynamique (autocomplétion)."""
+
+    q = serializers.CharField(min_length=2, trim_whitespace=True)
 
 
 class ScanEtiquetteSerializer(serializers.Serializer):

@@ -185,6 +185,9 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "enrichment": "30/min",
         "auth": "10/min",
+        # Recherche dynamique (autocomplétion) : 100 % locale (aucun quota
+        # externe), appelée au fil de la frappe — cadence large mais bornée.
+        "recherche": "120/min",
     },
 }
 

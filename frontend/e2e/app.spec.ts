@@ -154,6 +154,41 @@ test('recherche dynamique : une cuvée déjà en base est suggérée sans appel 
   await expect(page.getByText(/Déjà en base/)).toBeVisible()
 })
 
+test('recherche dynamique : une suggestion du référentiel identifie le vin', async ({ page }) => {
+  await seedAuth(page)
+  await mockApi(page, {
+    // Le référentiel LWIN local propose un candidat au fil de la frappe.
+    'GET /api/recherche-vins/': {
+      resultats: [
+        {
+          lwin: '1011248',
+          libelle: 'Château Palmer (Margaux)',
+          producteur: 'Château Palmer',
+          vin: '',
+          appellation: 'Margaux',
+          region: 'Bordeaux',
+          pays: 'France',
+          couleur: 'ROUGE',
+          millesime: null,
+        },
+      ],
+    },
+  })
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Ajouter une bouteille' }).click()
+  await page.getByRole('button', { name: /Autre méthode/ }).click()
+  await page.getByPlaceholder(/rechercher par nom/).fill('palmer')
+
+  // La section « Référentiel » apparaît (après le debounce) avec la suggestion.
+  await expect(page.getByText('Référentiel', { exact: true })).toBeVisible()
+  await page.getByText('Château Palmer · Margaux').click()
+
+  // La sélection identifie via le code LWIN (résolution locale côté serveur,
+  // sans cascade externe) puis pré-remplit le formulaire.
+  await expect(page.getByText(/Identifié \(référentiel\)/)).toBeVisible()
+})
+
 test('ajout par recherche texte en ligne pré-remplit le vin identifié', async ({ page }) => {
   await seedAuth(page)
   await mockApi(page)
