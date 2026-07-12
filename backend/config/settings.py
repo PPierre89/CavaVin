@@ -228,3 +228,25 @@ WINEAPI_ENRICH_DETAIL = os.getenv("WINEAPI_ENRICH_DETAIL", "True") == "True"
 # Garde-fou du bouton de synchro de la fiche : délai minimal (secondes) entre deux
 # rafraîchissements forcés d'un même vin, pour préserver le quota d'appels wineapi.
 WINEAPI_REFRESH_COOLDOWN = int(os.getenv("WINEAPI_REFRESH_COOLDOWN", "3600"))
+
+# --- Enrichissement Claude (Anthropic) ---
+# Identification par photo d'étiquette (vision) et par texte, en tête de cascade
+# devant wineapi. La clé est chargée depuis l'environnement (.env), jamais codée
+# en dur ; le provider est automatiquement désactivé si elle est absente.
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8")
+# Timeout de l'appel Claude (secondes). IMPORTANT : doit rester STRICTEMENT
+# INFÉRIEUR au timeout worker gunicorn (le repo lance --timeout 120), sinon un
+# appel vision lent fait tuer le worker (WORKER TIMEOUT) au lieu de rendre la
+# main à la cascade. Le SDK réessaie une fois (max_retries=1) : le budget total
+# peut donc atteindre 2 × cette valeur en cas d'erreur réseau.
+ANTHROPIC_TIMEOUT = int(os.getenv("ANTHROPIC_TIMEOUT", "50"))
+
+# --- Repli local : OCR Tesseract + référentiel LWIN (aucune clé, aucun réseau) ---
+# Dernier maillon de la cascade d'identification. Nécessite l'import du dump
+# LWIN (`manage.py import_lwin`) pour le texte, et le binaire tesseract (présent
+# dans l'image Docker) pour la photo d'étiquette. LWIN_ENABLED=False le coupe.
+LWIN_ENABLED = os.getenv("LWIN_ENABLED", "True") == "True"
+TESSERACT_CMD = os.getenv("TESSERACT_CMD", "tesseract")
+# Timeout de l'OCR (secondes) — même contrainte que ci-dessus : < timeout worker.
+TESSERACT_TIMEOUT = int(os.getenv("TESSERACT_TIMEOUT", "20"))

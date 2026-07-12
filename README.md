@@ -14,7 +14,8 @@ un **conteneur Docker unique** (Django REST + SPA React, SQLite).
 ## Fonctionnalités
 
 - **Ajout par photo d'étiquette** (méthode par défaut), code-barres ou recherche par nom —
-  identification en cascade : base locale → Open Food Facts / wineapi.io, avec mise en cache.
+  identification en cascade : base locale → Open Food Facts (EAN) → **Claude (vision)** →
+  wineapi.io → **OCR local + référentiel LWIN** (repli 100 % gratuit), avec mise en cache.
 - **Fiche vin enrichie** : appellation, cépages, conseil de service (température, carafage),
   profil gustatif, accords mets-vins, prix marché et **historique de prix**.
 - **Fenêtre de dégustation** calculée (à garder / à boire / dépassé) qui pilote un code couleur.
@@ -31,7 +32,7 @@ SPA via WhiteNoise). Docs API : **Swagger** sur `/api/docs/`.
 ## Démarrage rapide (Docker)
 
 ```bash
-cp .env.example .env      # renseignez au moins DJANGO_SECRET_KEY (et WINEAPI_KEY si dispo)
+cp .env.example .env      # renseignez au moins DJANGO_SECRET_KEY (et ANTHROPIC_API_KEY si dispo)
 docker compose up         # tire ghcr.io/ppierre89/cavavin:latest — aucun build local
 ```
 
@@ -61,7 +62,7 @@ CavaVin/
 │   ├── config/            # settings, urls, auth JWT
 │   └── apps/
 │       ├── catalog/       # Domaine, Cepage, Cuvee — référentiel partagé
-│       │   ├── enrichment/  # providers enfichables (Open Food Facts, wineapi.io)
+│       │   ├── enrichment/  # providers enfichables (OFF, Claude, wineapi.io, LWIN/OCR local)
 │       │   ├── apogee.py     # fenêtre/statut de dégustation (logique pure)
 │       │   └── sommellerie.py # conseil de service (logique pure)
 │       ├── cellars/       # Cave, Emplacement — structure physique (privé)
@@ -86,8 +87,23 @@ carnet) strictement filtrées par propriétaire côté serveur.
 | `POST /api/bouteilles/{id}/consommer/` | Sortie de stock atomique + journal |
 | `/api/notes-degustation/` | Carnet de dégustation (privé) |
 
-L'enrichissement externe (wineapi.io) est **mis en cache en base** et protégé par un throttle et un
-cooldown par vin ; la clé se met dans `.env` (`WINEAPI_KEY`). Détail complet dans Swagger.
+L'identification est assurée en premier par **Claude (Anthropic)** : la vision multimodale lit
+l'étiquette et la sortie, **contrainte par un schéma JSON**, remplit la fiche (couleur, appellation,
+cépages, corps, acidité, description, accords) — sans jamais inventer prix ou notes. wineapi.io
+reste en repli et apporte les données marchandes. Les clés se mettent dans `.env`
+(`ANTHROPIC_API_KEY`, `WINEAPI_KEY`) ; chaque provider se désactive seul sans sa clé.
+
+**Repli 100 % gratuit et hors-ligne** : sans aucune clé, le provider `lwin` prend le relais —
+OCR **Tesseract** (binaire inclus dans l'image Docker) + correspondance floue (rapidfuzz,
+orientée précision, pondération par rareté) sur le référentiel **LWIN** de Liv-ex
+(~200 000 vins, dump gratuit sur <https://www.liv-ex.com/lwin/>) :
+
+```bash
+docker compose exec app python manage.py import_lwin /chemin/LWINdatabase.xlsx  # idempotent, ~1 min
+```
+
+Tout hit est **mis en cache en base** ; les endpoints d'identification sont protégés par un
+throttle et la re-synchro par un cooldown par vin. Détail complet dans Swagger.
 
 ## CI/CD
 
@@ -105,7 +121,9 @@ Trois workflows GitHub Actions sur chaque PR vers `main` et sur `main` :
 L'image est publiée automatiquement ; le NAS n'a besoin que de `docker-compose.yml` + `.env`.
 
 1. Dans `.env` : `DJANGO_SECRET_KEY` (valeur forte), `DJANGO_ALLOWED_HOSTS` (IP/nom du NAS),
-   `WINEAPI_KEY` (optionnel).
+   `ANTHROPIC_API_KEY` (recommandé — identification par photo via Claude), `WINEAPI_KEY`
+   (optionnel). Sans clé, importez le dump LWIN (voir « API — points clés ») pour garder une
+   identification gratuite.
 2. `docker compose up -d` puis `docker compose exec app python manage.py createsuperuser`.
 3. Accès : `http://<ip-du-nas>:8000/`. La base SQLite persiste dans le volume Docker `data`.
 

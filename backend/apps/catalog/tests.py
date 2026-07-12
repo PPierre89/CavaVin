@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import tempfile
 import urllib.error
 from datetime import date
 from io import StringIO
@@ -20,7 +22,7 @@ from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.wineapi import WineApiProvider
 from . import apogee, sommellerie, wine_profile
 from .ingest import enrich_cuvee_from_wineapi, upsert_cuvee
-from .models import Cepage, Cuvee, Domaine
+from .models import Cepage, Cuvee, Domaine, ReferenceLwin
 from .serializers import ScanEtiquetteSerializer
 
 User = get_user_model()
@@ -541,6 +543,427 @@ class WineApiProviderTests(SimpleTestCase):
         wine = self.provider.lookup_by_text("Cuvée")
         self.assertTrue(wine.raw["pending"])
         self.assertIsNone(wine.raw["wineapi_detail"])
+
+
+def _reponse_claude(payload, stop_reason="end_turn"):
+    """Fabrique une réponse Messages API minimale (un bloc texte JSON)."""
+    bloc = MagicMock()
+    bloc.type = "text"
+    bloc.text = json.dumps(payload)
+    reponse = MagicMock()
+    reponse.stop_reason = stop_reason
+    reponse.content = [bloc]
+    return reponse
+
+
+_VIN_CLAUDE = {
+    "identifie": True,
+    "confiance": 0.92,
+    "vin": {
+        "name": "Château Margaux 2015",
+        "vintage": 2015,
+        "type": "red",
+        "winery": "Château Margaux",
+        "region": {"name": "Bordeaux", "country": "France"},
+        "appellation": "Margaux",
+        "classification": "Premier Grand Cru Classé",
+        "grapes": ["Cabernet Sauvignon", "Merlot"],
+        "body": "Full-bodied",
+        "acidity": "Medium",
+        "alcoholContent": 13.5,
+        "description": "Un grand vin de Margaux.",
+        "pairings": [{"food": "Agneau rôti", "confidence": 0.9}],
+    },
+}
+
+
+@override_settings(ANTHROPIC_API_KEY="cle-de-test")
+class ClaudeProviderTests(SimpleTestCase):
+    """Provider Claude : activation, mapping structuré, erreurs (SDK mocké)."""
+
+    def setUp(self):
+        from .enrichment.claude import ClaudeProvider
+
+        self.provider = ClaudeProvider()
+
+    def _mock_create(self, mock_anthropic):
+        return mock_anthropic.return_value.messages.create
+
+    def test_enabled_suit_la_presence_de_cle(self):
+        self.assertTrue(self.provider.enabled)
+        with override_settings(ANTHROPIC_API_KEY=""):
+            self.assertFalse(self.provider.enabled)
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_lookup_by_text_mappe_le_resultat(self, mock_anthropic):
+        self._mock_create(mock_anthropic).return_value = _reponse_claude(_VIN_CLAUDE)
+
+        wine = self.provider.lookup_by_text("Margaux 2015")
+
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Margaux")
+        self.assertEqual(wine.cuvee_nom, "Château Margaux")  # millésime retiré
+        self.assertEqual(wine.couleur, "ROUGE")
+        self.assertEqual(wine.appellation, "Margaux")
+        self.assertEqual(wine.millesime, 2015)
+        self.assertEqual(wine.cepages, ["Cabernet Sauvignon", "Merlot"])
+        self.assertEqual(wine.source, "claude")
+        # Pas de source distante : la fiche ne proposera pas de re-synchro.
+        self.assertEqual(wine.reference_externe_id, "")
+        self.assertEqual(wine.raw["confidence"], 0.92)
+        self.assertEqual(wine.raw["pays"], "France")
+        # Le détail (format wineapi) est transmis pour persistance par upsert_cuvee.
+        self.assertEqual(wine.raw["wineapi_detail"]["body"], "Full-bodied")
+        # Les données volatiles ne sont jamais inventées par le modèle.
+        self.assertIsNone(wine.raw["prix"])
+        self.assertIsNone(wine.raw["note"])
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_detail_persiste_alimente_la_cuvee(self, mock_anthropic):
+        """Le détail Claude traverse normalize_detail comme un détail wineapi."""
+        self._mock_create(mock_anthropic).return_value = _reponse_claude(_VIN_CLAUDE)
+        wine = self.provider.lookup_by_text("Margaux")
+        flat = wine_profile.normalize_detail(wine.raw["wineapi_detail"])
+        self.assertEqual(flat["region"], "Bordeaux")
+        self.assertEqual(flat["classification"], "Premier Grand Cru Classé")
+        self.assertEqual(flat["corps"], "Full-bodied")
+        self.assertEqual(flat["degre_alcool"], 13.5)
+        self.assertEqual(flat["accords"][0]["nom"], "Agneau rôti")
+        self.assertEqual(flat["cepages"], ["Cabernet Sauvignon", "Merlot"])
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_lookup_by_image_envoie_l_image_en_base64(self, mock_anthropic):
+        create = self._mock_create(mock_anthropic)
+        create.return_value = _reponse_claude(_VIN_CLAUDE)
+
+        wine = self.provider.lookup_by_image(b"fausse-image-jpeg", "image/jpeg")
+
+        self.assertIsNotNone(wine)
+        blocs = create.call_args.kwargs["messages"][0]["content"]
+        self.assertEqual(blocs[0]["type"], "image")
+        self.assertEqual(blocs[0]["source"]["media_type"], "image/jpeg")
+        import base64 as b64
+
+        self.assertEqual(b64.b64decode(blocs[0]["source"]["data"]), b"fausse-image-jpeg")
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_content_type_inconnu_retombe_sur_jpeg(self, mock_anthropic):
+        create = self._mock_create(mock_anthropic)
+        create.return_value = _reponse_claude(_VIN_CLAUDE)
+        self.provider.lookup_by_image(b"img", "application/octet-stream")
+        blocs = create.call_args.kwargs["messages"][0]["content"]
+        self.assertEqual(blocs[0]["source"]["media_type"], "image/jpeg")
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_non_identifie_renvoie_none(self, mock_anthropic):
+        self._mock_create(mock_anthropic).return_value = _reponse_claude(
+            {"identifie": False, "confiance": None, "vin": None}
+        )
+        self.assertIsNone(self.provider.lookup_by_text("blabla sans rapport"))
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_refus_du_modele_est_un_miss(self, mock_anthropic):
+        reponse = MagicMock()
+        reponse.stop_reason = "refusal"
+        reponse.content = []
+        self._mock_create(mock_anthropic).return_value = reponse
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_json_invalide_est_un_miss(self, mock_anthropic):
+        reponse = MagicMock()
+        reponse.stop_reason = "end_turn"
+        bloc = MagicMock()
+        bloc.type = "text"
+        bloc.text = "pas du json"
+        reponse.content = [bloc]
+        self._mock_create(mock_anthropic).return_value = reponse
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_429_leve_une_erreur_remontable(self, mock_anthropic):
+        import anthropic
+        import httpx
+
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        self._mock_create(mock_anthropic).side_effect = anthropic.RateLimitError(
+            "quota", response=httpx.Response(429, request=req), body=None
+        )
+        with self.assertRaises(EnrichmentError) as ctx:
+            self.provider.lookup_by_text("x")
+        self.assertEqual(ctx.exception.status, 429)
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_401_leve_une_erreur_502(self, mock_anthropic):
+        import anthropic
+        import httpx
+
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        self._mock_create(mock_anthropic).side_effect = anthropic.AuthenticationError(
+            "clé invalide", response=httpx.Response(401, request=req), body=None
+        )
+        with self.assertRaises(EnrichmentError) as ctx:
+            self.provider.lookup_by_text("x")
+        self.assertEqual(ctx.exception.status, 502)  # clé invalide = erreur serveur
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_5xx_est_un_miss_silencieux(self, mock_anthropic):
+        import anthropic
+        import httpx
+
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        self._mock_create(mock_anthropic).side_effect = anthropic.InternalServerError(
+            "boom", response=httpx.Response(500, request=req), body=None
+        )
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_reseau_indisponible_est_un_miss(self, mock_anthropic):
+        import anthropic
+        import httpx
+
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        self._mock_create(mock_anthropic).side_effect = anthropic.APIConnectionError(request=req)
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+    @patch("apps.catalog.enrichment.claude.anthropic.Anthropic")
+    def test_vin_sans_nom_ni_domaine_est_un_miss(self, mock_anthropic):
+        payload = {
+            "identifie": True,
+            "confiance": 0.1,
+            "vin": {**_VIN_CLAUDE["vin"], "name": "", "winery": ""},
+        }
+        self._mock_create(mock_anthropic).return_value = _reponse_claude(payload)
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+
+class LwinProviderTests(TestCase):
+    """Repli local (OCR Tesseract + référentiel LWIN) : correspondance floue,
+    tolérance aux coquilles d'OCR, pondération par rareté, OCR mocké."""
+
+    def setUp(self):
+        from .enrichment import lwin as module_lwin
+        from .enrichment.lwin import LwinProvider
+
+        # Le référentiel est mis en cache au niveau module : on repart à neuf.
+        module_lwin._cache = {"version": None, "refs": [], "idf": {}}
+        self.provider = LwinProvider()
+        ReferenceLwin.objects.create(
+            lwin="1011247", producteur="Château Margaux", pays="France",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+            classification="Premier Cru Classé",
+        )
+        ReferenceLwin.objects.create(
+            lwin="1011248", producteur="Château Palmer", pays="France",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+        )
+        # Second vin du même château : rend « margaux » plus fréquent que
+        # « palmer » dans le corpus (pondération IDF).
+        ReferenceLwin.objects.create(
+            lwin="1011249", producteur="Château Margaux",
+            vin="Pavillon Rouge du Château Margaux", pays="France",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+        )
+        ReferenceLwin.objects.create(
+            lwin="1017842", producteur="Domaine de la Romanée-Conti", vin="La Tâche",
+            pays="France", region="Bourgogne", couleur="ROUGE",
+        )
+        # Pièges observés sur le dump réel : proches en correspondance floue
+        # (« Taches » vs « Tâche », « Palmier » vs « Palmer »), un match exact
+        # doit toujours l'emporter.
+        ReferenceLwin.objects.create(
+            lwin="1357059", producteur="Robert Denogent", vin="Taches",
+            pays="France", region="Bourgogne", sous_region="Mâcon", couleur="BLANC",
+        )
+        ReferenceLwin.objects.create(
+            lwin="2212733", producteur="Laurent Ponsot", vin="Cuvée du Palmier",
+            pays="France", region="Bourgogne", couleur="ROUGE",
+        )
+
+    def test_enabled_suit_le_reglage(self):
+        self.assertTrue(self.provider.enabled)
+        with override_settings(LWIN_ENABLED=False):
+            self.assertFalse(self.provider.enabled)
+
+    def test_lookup_by_text_correspond(self):
+        wine = self.provider.lookup_by_text("chateau margaux 2015")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Margaux")
+        self.assertEqual(wine.couleur, "ROUGE")
+        self.assertEqual(wine.appellation, "Margaux")  # sous-région LWIN
+        self.assertEqual(wine.millesime, 2015)
+        self.assertEqual(wine.source, "lwin")
+        self.assertEqual(wine.reference_externe_id, "")
+        self.assertEqual(wine.raw["wineapi_detail"]["lwinCode"], "1011247")
+        self.assertEqual(wine.raw["pays"], "France")
+
+    def test_le_nom_du_vin_suffit_sans_le_producteur(self):
+        wine = self.provider.lookup_by_text("la tâche 1990")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Domaine de la Romanée-Conti")
+        self.assertEqual(wine.cuvee_nom, "La Tâche")
+        self.assertEqual(wine.millesime, 1990)
+
+    def test_coquille_ocr_toleree(self):
+        # « Margeaux » : faute fréquente / erreur d'OCR, plus bruit d'étiquette.
+        wine = self.provider.lookup_by_text(
+            "GRAND VIN DE CHATEAU MARGEAUX PREMIER GRAND CRU CLASSE 1998 MIS EN BOUTEILLE"
+        )
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Margaux")
+        self.assertEqual(wine.millesime, 1998)
+
+    def test_etiquette_ambigue_prefere_le_token_rare(self):
+        """Une étiquette Palmer mentionne aussi sa commune (Margaux) : la
+        pondération IDF doit préférer « palmer » (rare) à « margaux » (fréquent)."""
+        wine = self.provider.lookup_by_text("Chateau Palmer Margaux 1998")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Palmer")
+
+    def test_climat_bourgogne_en_sous_region_departage(self):
+        """Sur le dump réel, les vins de Bourgogne d'un même domaine partagent
+        le nom du producteur (vin vide) et se distinguent par la sous-région
+        (climat) : elle doit départager sans jamais être exigée."""
+        ReferenceLwin.objects.create(
+            lwin="2000001", producteur="Domaine Fictif de Vosne", vin="",
+            sous_region="Echezeaux", region="Bourgogne", couleur="ROUGE",
+        )
+        ReferenceLwin.objects.create(
+            lwin="2000002", producteur="Domaine Fictif de Vosne", vin="",
+            sous_region="Malconsorts", region="Bourgogne", couleur="ROUGE",
+        )
+        wine = self.provider.lookup_by_text("domaine fictif de vosne malconsorts 2019")
+        self.assertEqual(wine.raw["wineapi_detail"]["lwinCode"], "2000002")
+        self.assertEqual(wine.appellation, "Malconsorts")
+        # Sans mention du climat, le domaine correspond quand même (au 1er climat).
+        self.assertIsNotNone(self.provider.lookup_by_text("domaine fictif de vosne"))
+
+    def test_texte_sans_token_significatif_est_un_miss(self):
+        self.assertIsNone(self.provider.lookup_by_text("grand vin de france"))
+
+    def test_aucune_correspondance_est_un_miss(self):
+        self.assertIsNone(self.provider.lookup_by_text("Screaming Eagle Napa"))
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_lookup_by_image_ocr_puis_correspondance(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="Chateau Palmer\nMargaux\n1998\n".encode()
+        )
+        wine = self.provider.lookup_by_image(b"fausse-image", "image/jpeg")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Palmer")
+        self.assertEqual(wine.millesime, 1998)
+        # L'image est passée telle quelle sur stdin du binaire tesseract.
+        self.assertEqual(mock_run.call_args.kwargs["input"], b"fausse-image")
+        self.assertIn("tesseract", mock_run.call_args.args[0][0])
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_tesseract_absent_est_un_miss(self, mock_run):
+        mock_run.side_effect = FileNotFoundError("tesseract")
+        self.assertIsNone(self.provider.lookup_by_image(b"img", "image/jpeg"))
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_ocr_timeout_est_un_miss(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="tesseract", timeout=20)
+        self.assertIsNone(self.provider.lookup_by_image(b"img", "image/jpeg"))
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_ocr_replie_sur_la_langue_par_defaut(self, mock_run):
+        # Pack fra absent : 1er essai en échec, 2e essai sans -l réussit.
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stderr=b"Error opening data file fra"),
+            MagicMock(returncode=0, stdout=b"Chateau Palmer 1998"),
+        ]
+        wine = self.provider.lookup_by_image(b"img", "image/jpeg")
+        self.assertIsNotNone(wine)
+        self.assertEqual(mock_run.call_count, 2)
+        self.assertNotIn("-l", mock_run.call_args.args[0])
+
+
+class ImportLwinCommandTests(TestCase):
+    """Commande import_lwin : import du dump XLSX/CSV, filtrage, idempotence."""
+
+    # Colonnes du dump Liv-ex réel (sous-ensemble utile) : l'effervescence est
+    # portée par SUB_TYPE, TYPE valant toujours « Wine ».
+    _COLONNES = [
+        "LWIN", "STATUS", "DISPLAY_NAME", "PRODUCER_TITLE", "PRODUCER_NAME",
+        "WINE", "COUNTRY", "REGION", "SUB_REGION", "COLOUR", "TYPE",
+        "SUB_TYPE", "CLASSIFICATION",
+    ]
+
+    def _importer_csv(self, lignes: list[str]) -> str:
+        contenu = ",".join(self._COLONNES) + "\n" + "".join(lignes)
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
+            f.write(contenu)
+            chemin = f.name
+        try:
+            sortie = StringIO()
+            call_command("import_lwin", chemin, stdout=sortie)
+            return sortie.getvalue()
+        finally:
+            os.unlink(chemin)
+
+    def test_import_filtre_et_mappe(self):
+        self._importer_csv([
+            "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux,Red,Wine,Still,1er Cru\n",
+            "1099999,Deleted,Vin Supprimé,Chateau,Disparu,,France,,,Red,Wine,Still,\n",
+            ",Live,Sans Code,X,Y,,,,,,,,\n",
+            "1055555,Live,Bollinger,,Bollinger,Grande Année,France,Champagne,,White,Wine,Sparkling,\n",
+        ])
+        self.assertEqual(ReferenceLwin.objects.count(), 2)  # Deleted et sans LWIN écartés
+        margaux = ReferenceLwin.objects.get(lwin="1011247")
+        self.assertEqual(margaux.producteur, "Chateau Margaux")
+        self.assertEqual(margaux.sous_region, "Margaux")
+        self.assertEqual(margaux.couleur, "ROUGE")
+        self.assertEqual(margaux.classification, "1er Cru")
+        bollinger = ReferenceLwin.objects.get(lwin="1055555")
+        self.assertEqual(bollinger.vin, "Grande Année")
+        self.assertEqual(bollinger.couleur, "BULLES")  # sparkling (SUB_TYPE) prime sur white
+
+    def test_reimport_met_a_jour_sans_doublonner(self):
+        self._importer_csv([
+            "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux,Red,Wine,Still,\n"
+        ])
+        self._importer_csv([
+            "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux AOC,Red,Wine,Still,\n"
+        ])
+        self.assertEqual(ReferenceLwin.objects.count(), 1)
+        self.assertEqual(ReferenceLwin.objects.get(lwin="1011247").sous_region, "Margaux AOC")
+
+    def test_import_xlsx_normalise_na_et_codes_numeriques(self):
+        """Le dump Liv-ex d'origine (XLSX) est accepté tel quel : codes LWIN en
+        nombres flottants et absences encodées « NA » sont normalisés."""
+        import openpyxl
+
+        classeur = openpyxl.Workbook()
+        feuille = classeur.active
+        feuille.append(self._COLONNES)
+        feuille.append([
+            1011247.0, "Live", "Chateau Margaux", "NA", "Chateau Margaux", "NA",
+            "France", "Bordeaux", "Margaux", "Red", "Wine", "Still", "NA",
+        ])
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            chemin = f.name
+        classeur.save(chemin)
+        try:
+            call_command("import_lwin", chemin, stdout=StringIO())
+        finally:
+            os.unlink(chemin)
+
+        ref = ReferenceLwin.objects.get()
+        self.assertEqual(ref.lwin, "1011247")  # 1011247.0 -> "1011247"
+        self.assertEqual(ref.producteur, "Chateau Margaux")  # « NA » ignoré, pas préfixé
+        self.assertEqual(ref.vin, "")
+        self.assertEqual(ref.classification, "")
+        self.assertEqual(ref.couleur, "ROUGE")
+
+    def test_fichier_absent_leve_une_erreur(self):
+        from django.core.management.base import CommandError
+
+        with self.assertRaises(CommandError):
+            call_command("import_lwin", "/chemin/inexistant.csv")
+        with self.assertRaises(CommandError):
+            call_command("import_lwin", "/chemin/inexistant.xlsx")
 
 
 class EnsureSuperuserCommandTests(TestCase):

@@ -97,3 +97,33 @@ class Cuvee(models.Model):
 
     def __str__(self):
         return f"{self.domaine.nom} - {self.nom}"
+
+
+class ReferenceLwin(models.Model):
+    """Entrée du référentiel LWIN (Liv-ex Wine Identifiers).
+
+    Base d'identités de vins (~200 000 entrées : producteur, vin, région, pays,
+    couleur), importée localement via ``manage.py import_lwin`` depuis le dump
+    XLSX/CSV gratuit de Liv-ex. Sert de repli 100 % local à l'identification
+    (provider ``lwin``) : correspondance floue entre la sortie OCR / la saisie
+    texte et un nom canonique, sans aucun appel réseau.
+    """
+
+    lwin = models.CharField(max_length=16, unique=True, help_text="Code LWIN7 Liv-ex.")
+    producteur = models.CharField(max_length=255)
+    vin = models.CharField(max_length=255, blank=True, default="")
+    pays = models.CharField(max_length=100, blank=True, default="")
+    region = models.CharField(max_length=255, blank=True, default="")
+    sous_region = models.CharField(max_length=255, blank=True, default="")
+    couleur = models.CharField(
+        max_length=10, choices=Cuvee.Couleur.choices, default=Cuvee.Couleur.AUTRE
+    )
+    classification = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        ordering = ["producteur", "vin"]
+        verbose_name = "référence LWIN"
+        verbose_name_plural = "références LWIN"
+
+    def __str__(self):
+        return f"{self.producteur} - {self.vin}" if self.vin else self.producteur
