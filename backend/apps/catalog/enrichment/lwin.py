@@ -30,7 +30,7 @@ import unicodedata
 from io import BytesIO
 
 from django.conf import settings
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
 from .base import EnrichmentProvider, NormalizedWine
 from .normalize import parse_vintage
@@ -47,6 +47,26 @@ _STOPWORDS = {
     "bouteille", "bouteilles", "propriete", "proprietaire", "recolte",
     "product", "produce", "produit", "france", "les", "des", "the", "and",
     "vieilles", "vignes", "reserve", "cuvee", "selection", "millesime",
+}
+
+# Noms de cépages et de styles : présents sur d'innombrables étiquettes, ils
+# ne suffisent pas à identifier un vin. Une référence dont le nom n'est fait
+# que de ces mots (ex. vin « Riesling », « Brut Rosé ») exige en plus qu'au
+# moins un token du producteur soit retrouvé dans l'entrée — sinon
+# « chardonnay » seul renverrait le chardonnay d'un producteur au hasard.
+_GENERIQUES = {
+    # cépages
+    "riesling", "chardonnay", "sauvignon", "merlot", "cabernet", "franc",
+    "pinot", "noir", "gris", "meunier", "syrah", "shiraz", "grenache",
+    "gamay", "malbec", "viognier", "chenin", "semillon", "muscat",
+    "gewurztraminer", "zinfandel", "sangiovese", "nebbiolo", "barbera",
+    "tempranillo", "carmenere", "mourvedre", "cinsault", "carignan",
+    "vermentino", "marsanne", "roussanne", "aligote", "sylvaner", "savagnin",
+    "trousseau", "poulsard", "melon", "colombard", "petit", "verdot",
+    # styles / mentions
+    "blanc", "blancs", "rouge", "rose", "brut", "extra", "demi", "sec",
+    "doux", "moelleux", "nature", "tradition", "prestige", "classique",
+    "annee", "vendanges", "tardives",
 }
 
 # Score rapidfuzz minimal (0-100) pour considérer deux tokens équivalents —
@@ -147,7 +167,10 @@ def _texte_tsv(tsv: str) -> str:
 def _tokens(texte: str) -> set[str]:
     """Tokens significatifs d'un texte : minuscules, sans accents, sans
     ponctuation, sans millésimes/nombres, sans mots d'étiquette génériques."""
-    sans_accents = unicodedata.normalize("NFKD", texte or "").encode("ascii", "ignore").decode()
+    # Les ligatures n'ont pas de décomposition NFKD : sans ce remplacement,
+    # « Cœur » deviendrait « cur » et ne correspondrait plus à « coeur ».
+    texte = (texte or "").replace("œ", "oe").replace("Œ", "OE").replace("æ", "ae").replace("Æ", "AE")
+    sans_accents = unicodedata.normalize("NFKD", texte).encode("ascii", "ignore").decode()
     mots = re.split(r"[^a-z0-9]+", sans_accents.lower())
     return {
         m for m in mots
@@ -155,36 +178,43 @@ def _tokens(texte: str) -> set[str]:
     }
 
 
-def _token_trouve(token_ref: str, tokens_entree: set[str]) -> float:
-    """Meilleur score de correspondance (0-100) d'un token du référentiel dans
-    l'entrée. Exact d'abord (rapide), floue ensuite (coquilles d'OCR)."""
-    if token_ref in tokens_entree:
-        return 100.0
-    return max((fuzz.ratio(token_ref, t) for t in tokens_entree), default=0.0)
+def _libelle(ref) -> str:
+    """Libellé présentable d'une référence LWIN (pour les suggestions)."""
+    if ref.vin:
+        return f"{ref.producteur} - {ref.vin}"
+    if ref.sous_region:
+        return f"{ref.producteur} ({ref.sous_region})"
+    return ref.producteur
 
 
 # Cache en mémoire du référentiel (rechargé quand le nombre d'entrées change,
-# c.-à-d. après un import) : évite de relire ~100 000 lignes à chaque scan.
-_cache: dict = {"version": None, "refs": [], "idf": {}}
+# c.-à-d. après un import) : évite de relire ~200 000 lignes à chaque scan.
+_cache: dict = {"version": None, "refs": [], "idf": {}, "postings": {}, "vocab": []}
 
 
-def _referentiel() -> tuple[list[tuple[int, tuple, tuple, str]], dict[str, float]]:
-    """Référentiel LWIN prêt pour la correspondance.
+def _referentiel() -> dict:
+    """Référentiel LWIN indexé, prêt pour la correspondance.
 
-    Renvoie ``(refs, idf)`` où ``refs`` liste (id, tokens requis, tokens bonus,
-    chaîne complète) et ``idf`` pondère chaque token par sa rareté dans le
-    corpus — « palmer » (rare) pèse plus que « margaux » (nom de commune
-    omniprésent), ce qui départage les étiquettes qui mentionnent plusieurs noms.
+    Renvoie le cache ``{refs, idf, postings, vocab}`` :
 
-    - Tokens **requis** : ceux du nom du vin s'il existe, sinon ceux du
-      producteur — « La Tâche » doit correspondre sans exiger « Domaine de la
-      Romanée-Conti » dans l'entrée.
-    - Tokens **bonus** : ceux de la sous-région. Sur le dump réel, l'identité
-      des vins de Bourgogne est portée par la sous-région (climat) avec un nom
-      de vin vide — « Romanée-Conti / La Tâche » désigne le bon climat parmi
-      toutes les entrées du même domaine. Jamais requis (la commune d'un
-      Bordeaux ne doit pas suffire à le faire correspondre), seulement comptés
-      quand ils sont retrouvés.
+    - ``refs`` : liste (id, tokens requis, tokens bonus, tokens ancres, chaîne).
+      * **requis** : tokens du nom du vin s'il existe, sinon du producteur —
+        « La Tâche » doit correspondre sans exiger « Domaine de la
+        Romanée-Conti » dans l'entrée. Tous doivent être retrouvés.
+      * **bonus** : tokens de la sous-région. Sur le dump réel, l'identité des
+        vins de Bourgogne est portée par la sous-région (climat) avec un nom
+        de vin vide — jamais requis (la commune d'un Bordeaux ne doit pas
+        suffire), seulement comptés quand ils sont retrouvés.
+      * **ancres** : tokens du producteur, exigés (au moins un) quand le nom
+        du vin n'est fait que de mots génériques — « Riesling » seul
+        n'identifie personne, « Trimbach Riesling » si.
+    - ``idf`` pondère chaque token par sa rareté dans le corpus — « palmer »
+      (rare) pèse plus que « margaux » (nom de commune omniprésent), ce qui
+      départage les étiquettes qui mentionnent plusieurs noms.
+    - ``postings`` (index inversé token -> indices de refs) et ``vocab``
+      (tokens uniques) : la correspondance ne balaye plus les ~200 000
+      références, elle ne considère que les candidates partageant un token
+      avec l'entrée.
     """
     import math
     import sys
@@ -192,30 +222,45 @@ def _referentiel() -> tuple[list[tuple[int, tuple, tuple, str]], dict[str, float
     from ..models import ReferenceLwin
 
     version = ReferenceLwin.objects.count()
-    if _cache["version"] != version:
-        refs = []
+    if _cache.get("version") != version:
+        refs: list = []
         df: dict[str, int] = {}
+        postings: dict[str, list[int]] = {}
         lignes = ReferenceLwin.objects.values_list("pk", "producteur", "vin", "sous_region")
         for pk, producteur, vin, sous_region in lignes:
             requis = _tokens(vin) or _tokens(producteur)
             if not requis:
                 continue
             bonus = _tokens(sous_region) - requis
+            ancres: set[str] = set()
+            if requis <= _GENERIQUES:
+                ancres = _tokens(producteur) - requis
+                if not ancres:
+                    # Nom entièrement générique (« Riesling ») ET producteur sans
+                    # token significatif (« te Pa ») : référence inidentifiable,
+                    # elle ne doit jamais correspondre.
+                    continue
+            index = len(refs)
             # Tokens internés + tuples : le dump réel fait ~200 000 lignes, on
             # partage les chaînes récurrentes (« margaux », « pinot »…) en mémoire.
             refs.append((
                 pk,
                 tuple(sys.intern(t) for t in requis),
                 tuple(sys.intern(t) for t in bonus),
+                tuple(sys.intern(t) for t in ancres),
                 f"{producteur} {vin} {sous_region}".strip(),
             ))
-            for t in requis | bonus:
+            tous = requis | bonus | ancres
+            for t in tous:
                 df[t] = df.get(t, 0) + 1
+                postings.setdefault(sys.intern(t), []).append(index)
         n = max(len(refs), 1)
         _cache["version"] = version
         _cache["refs"] = refs
         _cache["idf"] = {t: math.log(n / d) + 1 for t, d in df.items()}
-    return _cache["refs"], _cache["idf"]
+        _cache["postings"] = postings
+        _cache["vocab"] = list(postings)
+    return _cache
 
 
 class LwinProvider(EnrichmentProvider):
@@ -324,58 +369,97 @@ class LwinProvider(EnrichmentProvider):
         unique token long (≥ 5 caractères) retrouvé à l'identique — un junk
         de trois lettres ne suffit plus à « identifier » un vin."""
         tokens_entree = _tokens(texte)
-        if not tokens_entree:
+        # Une entrée sans aucun token distinctif (que des cépages/styles :
+        # « riesling 2019 », « brut rosé ») ne peut identifier aucun vin —
+        # et laisserait le flou accrocher des coquilles du dump (« Rieling R »).
+        if not tokens_entree or tokens_entree <= _GENERIQUES:
             return None
-        refs, idf = _referentiel()
+        index = _referentiel()
+        refs, idf, postings = index["refs"], index["idf"], index["postings"]
 
-        # Mémoïsation par token unique du référentiel : ~100 000 références
-        # partagent un vocabulaire bien plus petit, on ne score chaque token
-        # qu'une fois par requête.
+        # Score de chaque token du vocabulaire retrouvé dans l'entrée : les
+        # correspondances exactes d'abord (dictionnaire), puis un passage flou
+        # rapidfuzz sur le vocabulaire entier (C++, une passe par token
+        # d'entrée) pour les coquilles d'OCR (« margeaux » ~ « margaux »).
         scores_vocab: dict[str, float] = {}
+        for t in tokens_entree:
+            if t in postings:
+                scores_vocab[t] = 100.0
+        for t in tokens_entree:
+            for trouve, score, _ in process.extract(
+                t, index["vocab"], scorer=fuzz.ratio, score_cutoff=_TOKEN_RATIO, limit=None
+            ):
+                if score > scores_vocab.get(trouve, 0.0):
+                    scores_vocab[trouve] = score
 
-        def score_token(token_ref: str) -> float:
-            if token_ref not in scores_vocab:
-                scores_vocab[token_ref] = _token_trouve(token_ref, tokens_entree)
-            return scores_vocab[token_ref]
+        # Candidates : seules les références partageant au moins un token
+        # retrouvé sont examinées (index inversé) — quelques centaines au lieu
+        # des ~200 000 du référentiel.
+        candidates: set[int] = set()
+        for t in scores_vocab:
+            candidates.update(postings[t])
 
         # Classement : une référence dont TOUS les tokens requis sont retrouvés
         # à l'identique prime toujours sur une correspondance floue (« La Tâche »
         # exact bat « Taches » flou) ; puis l'IDF pondéré par la qualité du match
         # départage (token rare ET bien retrouvé), les tokens bonus (sous-région)
-        # retrouvés s'y ajoutant — ils désignent le bon climat parmi les entrées
-        # d'un même domaine ; enfin la proximité globale à l'entrée.
-        meilleur: tuple | None = None  # (exact, idf pondéré, ratio global, score moyen, -pk)
-        for pk, requis, bonus, chaine in refs:
-            scores = [score_token(t) for t in requis]
+        # et ancres (producteur) retrouvés s'y ajoutant ; enfin la proximité
+        # globale à l'entrée. Les meilleurs candidats suivants sont renvoyés en
+        # suggestions.
+        classement: list[tuple] = []  # (exact, idf pondéré, ratio, score moyen, -pk, chaine)
+        for i in candidates:
+            pk, requis, bonus, ancres, chaine = refs[i]
+            scores = [scores_vocab.get(t, 0.0) for t in requis]
             if min(scores) < _TOKEN_RATIO:
                 continue  # au moins un token requis est absent : trop risqué
-            bonus_trouves = [t for t in bonus if score_token(t) >= _TOKEN_RATIO]
-            if ocr and len(requis) + len(bonus_trouves) < 2 and not (
+            ancres_trouvees = [t for t in ancres if scores_vocab.get(t, 0.0) >= _TOKEN_RATIO]
+            if ancres and not ancres_trouvees:
+                continue  # nom générique (« Riesling ») sans son producteur
+            bonus_trouves = [t for t in bonus if scores_vocab.get(t, 0.0) >= _TOKEN_RATIO]
+            if ocr and len(requis) + len(bonus_trouves) + len(ancres_trouvees) < 2 and not (
                 len(requis[0]) >= 5 and scores[0] == 100.0
             ):
                 continue  # sortie OCR : préférer un miss à un vin douteux
             poids = sum(idf.get(t, 1.0) * (s / 100) ** 2 for t, s in zip(requis, scores))
             poids += sum(
-                idf.get(t, 1.0) * (score_token(t) / 100) ** 2 for t in bonus_trouves
+                idf.get(t, 1.0) * (scores_vocab[t] / 100) ** 2
+                for t in bonus_trouves + ancres_trouvees
             )
-            candidat = (
+            classement.append((
                 min(scores) == 100.0,
                 poids,
                 fuzz.token_set_ratio(chaine.lower(), texte.lower()),
                 sum(scores) / len(scores),
                 -pk,  # départage stable
-            )
-            if meilleur is None or candidat > meilleur:
-                meilleur = candidat
-        if meilleur is None:
+                chaine,
+            ))
+        if not classement:
             return None
+        classement.sort(reverse=True)
+        meilleur = classement[0]
 
         from ..models import ReferenceLwin
 
         ref = ReferenceLwin.objects.get(pk=-meilleur[4])
-        return self._to_normalized(ref, confiance=meilleur[3] / 100, millesime=parse_vintage(texte))
+        # Candidats plausibles suivants, proposés en suggestions à l'utilisateur
+        # (même rôle que les suggestions wineapi dans la réponse d'identification).
+        autres_pks = [-c[4] for c in classement[1:4]]
+        autres = ReferenceLwin.objects.in_bulk(autres_pks)
+        suggestions: list[str] = []
+        for pk in autres_pks:
+            libelle = _libelle(autres[pk]) if pk in autres else ""
+            if libelle and libelle != _libelle(ref) and libelle not in suggestions:
+                suggestions.append(libelle)
+        return self._to_normalized(
+            ref,
+            confiance=meilleur[3] / 100,
+            millesime=parse_vintage(texte),
+            suggestions=suggestions,
+        )
 
-    def _to_normalized(self, ref, confiance: float, millesime: int | None) -> NormalizedWine:
+    def _to_normalized(
+        self, ref, confiance: float, millesime: int | None, suggestions: list[str] | None = None
+    ) -> NormalizedWine:
         # Détail minimal au format wineapi : persisté par ingest.upsert_cuvee
         # via wine_profile.normalize_detail (région, pays, classification, LWIN).
         detail = {
@@ -398,7 +482,7 @@ class LwinProvider(EnrichmentProvider):
                 "confidence": round(confiance, 2),
                 "auto_added": False,
                 "pending": False,
-                "suggestions": [],
+                "suggestions": suggestions or [],
                 "region": ref.region,
                 "pays": ref.pays,
                 "description": "",
