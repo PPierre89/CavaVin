@@ -22,6 +22,9 @@ un **conteneur Docker unique** (Django REST + SPA React, SQLite).
 - **Cave visuelle** : emplacements en arborescence (armoire → casier → clayette), placement des
   bouteilles case par case en glisser-déposer, jauge de remplissage.
 - **Carnet de dégustation** privé (note /5, commentaire, profil).
+- **Panneau d'administration** (staff) : tableau de bord du déploiement (comptes, catalogue
+  mutualisé, stock, activité), état des sources d'enrichissement et gestion des comptes
+  (activation, rôle staff, suppression).
 - **SPA mobile-first** (thème sombre lie-de-vin/or), authentification JWT.
 
 ## Stack
@@ -86,6 +89,8 @@ carnet) strictement filtrées par propriétaire côté serveur.
 | `POST /api/cuvees/{id}/rafraichir/` | Re-synchro wineapi (cooldown anti-quota) |
 | `POST /api/bouteilles/{id}/consommer/` | Sortie de stock atomique + journal |
 | `/api/notes-degustation/` | Carnet de dégustation (privé) |
+| `GET /api/auth/me/` | Profil du compte connecté (rôle `is_staff`) |
+| `GET /api/admin-panel/apercu/` · `/api/admin-panel/utilisateurs/` | Panneau d'administration (staff) : aperçu + gestion des comptes |
 
 L'identification est assurée en premier par **Claude (Anthropic)** : la vision multimodale lit
 l'étiquette et la sortie, **contrainte par un schéma JSON**, remplit la fiche (couleur, appellation,

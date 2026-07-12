@@ -9,6 +9,26 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 User = get_user_model()
 
 
+class MeView(generics.RetrieveAPIView):
+    """Profil du compte connecté (identité + rôle).
+
+    Permet au frontend de savoir s'il doit exposer le panneau d'administration
+    (``is_staff``) sans avoir à décoder le JWT côté client."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        return Response(
+            {
+                "username": user.username,
+                "email": user.email,
+                "is_staff": user.is_staff,
+                "is_superuser": user.is_superuser,
+            }
+        )
+
+
 class ThrottledTokenObtainPairView(TokenObtainPairView):
     """Login JWT (`/api/auth/token/`) soumis au throttle ``auth`` (anti-brute-force).
 

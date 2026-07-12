@@ -7,13 +7,14 @@ import CaveScreen from './screens/CaveScreen'
 import AjouterScreen from './screens/AjouterScreen'
 import CarnetScreen from './screens/CarnetScreen'
 import MesVinsScreen from './screens/MesVinsScreen'
+import AdminScreen from './screens/AdminScreen'
 import { Logo, Sheet } from './ui'
 import { APP_VERSION } from './version'
 
 /* Navigation à quatre onglets (maquette « CavaVin Écrans ») ; l'ajout n'est
    plus un onglet mais une vue poussée depuis l'accueil ou « Mes vins ». */
 type Tab = 'accueil' | 'vin' | 'cave' | 'carnet'
-type View = Tab | 'ajouter'
+type View = Tab | 'ajouter' | 'admin'
 type Seg = 'bouteille' | 'emplacement' | 'cave'
 
 /* ---------- Icônes géométriques de la barre d'onglets ---------- */
@@ -52,7 +53,7 @@ function TabIcon({ tab, active }: { tab: Tab; active: boolean }) {
 }
 
 function Shell() {
-  const { username, logout } = useAuth()
+  const { username, isStaff, logout } = useAuth()
   const { loading } = useData()
   const [view, setView] = useState<View>('accueil')
   const [seg, setSeg] = useState<Seg>('bouteille')
@@ -121,6 +122,27 @@ function Shell() {
               </>
             )}
             {view === 'carnet' && <CarnetScreen />}
+            {view === 'admin' && (
+              <>
+                <button
+                  onClick={() => go('accueil')}
+                  className="flex items-center gap-2 text-muted text-sm mb-3"
+                >
+                  <svg width="9" height="15" viewBox="0 0 9 15" aria-hidden="true">
+                    <path
+                      d="M8 1L1 7.5l7 6.5"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      fill="none"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  Retour
+                </button>
+                <AdminScreen />
+              </>
+            )}
           </>
         )}
       </main>
@@ -166,6 +188,17 @@ function Shell() {
               Connecté en tant que <span className="text-ink">{username}</span>
             </div>
             <div className="text-muted/60 text-xs mt-1 tabular-nums">CavaVin · v{APP_VERSION}</div>
+            {isStaff && (
+              <button
+                onClick={() => {
+                  setCompte(false)
+                  go('admin')
+                }}
+                className="w-full mt-5 py-3.5 rounded-xl font-semibold text-ink-bright bg-wine active:scale-[0.985] transition"
+              >
+                Panneau d'administration
+              </button>
+            )}
             <button
               onClick={() => {
                 setCompte(false)

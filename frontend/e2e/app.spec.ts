@@ -266,3 +266,65 @@ test('suppression d’un emplacement après confirmation', async ({ page }) => {
   await expect(page.getByText('Emplacement supprimé.')).toBeVisible()
   expect(deleted).toBe(true)
 })
+
+test("le panneau d'administration est réservé au staff et liste les comptes", async ({ page }) => {
+  await seedAuth(page)
+  await mockApi(page, {
+    // Compte staff : débloque l'accès au panneau depuis la feuille « compte ».
+    'GET /api/auth/me/': { username: 'tester', is_staff: true, is_superuser: true },
+    'GET /api/admin-panel/apercu/': {
+      utilisateurs: { total: 3, actifs: 2, staff: 1 },
+      catalogue: { domaines: 4, cepages: 6, cuvees: 5, references_lwin: 0 },
+      stock: { lignes: 2, unites: 12, caves: 1, emplacements: 3 },
+      activite: { notes_degustation: 1, mouvements: 7 },
+      systeme: {
+        version: '1.2.3',
+        debug: false,
+        providers: [
+          { nom: 'openfoodfacts', actif: true },
+          { nom: 'claude', actif: false },
+        ],
+      },
+    },
+    'GET /api/admin-panel/utilisateurs/': [
+      {
+        id: 1,
+        username: 'tester',
+        email: 'tester@example.com',
+        is_active: true,
+        is_staff: true,
+        is_superuser: true,
+        date_joined: '2026-01-01T10:00:00Z',
+        last_login: null,
+        nb_bouteilles: 12,
+        nb_caves: 1,
+        nb_degustations: 1,
+      },
+      {
+        id: 2,
+        username: 'bob',
+        email: '',
+        is_active: true,
+        is_staff: false,
+        is_superuser: false,
+        date_joined: '2026-02-01T10:00:00Z',
+        last_login: null,
+        nb_bouteilles: 0,
+        nb_caves: 0,
+        nb_degustations: 0,
+      },
+    ],
+  })
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Mon compte' }).click()
+  await page.getByRole('button', { name: "Panneau d'administration" }).click()
+
+  await expect(page.getByRole('heading', { name: 'Administration' })).toBeVisible()
+  // Aperçu chiffré + état des sources d'enrichissement.
+  await expect(page.getByText('Catalogue mutualisé')).toBeVisible()
+  await expect(page.getByText('v1.2.3')).toBeVisible()
+  // Liste des comptes : l'autre utilisateur y figure et est actionnable.
+  await expect(page.getByText('bob', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Promouvoir staff' })).toBeVisible()
+})

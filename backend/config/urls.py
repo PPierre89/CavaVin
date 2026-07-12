@@ -22,7 +22,9 @@ from apps.inventory.views import (
     NoteDegustationViewSet,
     RangementViewSet,
 )
-from .auth import RegisterView, ThrottledTokenObtainPairView
+from .admin_panel import ApercuView as AdminApercuView
+from .admin_panel import UtilisateurViewSet as AdminUtilisateurViewSet
+from .auth import MeView, RegisterView, ThrottledTokenObtainPairView
 from .views import index
 
 router = DefaultRouter()
@@ -35,6 +37,7 @@ router.register("bouteilles", BouteilleViewSet, basename="bouteille")
 router.register("rangements", RangementViewSet, basename="rangement")
 router.register("mouvements", MouvementStockViewSet, basename="mouvement")
 router.register("notes-degustation", NoteDegustationViewSet, basename="note-degustation")
+router.register("admin-panel/utilisateurs", AdminUtilisateurViewSet, basename="admin-utilisateur")
 
 urlpatterns = [
     path("", index, name="home"),
@@ -43,6 +46,8 @@ urlpatterns = [
     path("api/scan-code-barres/", ScanCodeBarresView.as_view(), name="scan-code-barres"),
     path("api/identifier-vin/", IdentifierVinView.as_view(), name="identifier-vin"),
     path("api/scan-etiquette/", ScanEtiquetteView.as_view(), name="scan-etiquette"),
+    path("api/admin-panel/apercu/", AdminApercuView.as_view(), name="admin-apercu"),
+    path("api/auth/me/", MeView.as_view(), name="me"),
     path("api/auth/", include("rest_framework.urls")),
     path("api/auth/register/", RegisterView.as_view(), name="register"),
     path("api/auth/token/", ThrottledTokenObtainPairView.as_view(), name="token_obtain_pair"),
