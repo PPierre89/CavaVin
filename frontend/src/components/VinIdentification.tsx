@@ -3,6 +3,7 @@ import { errMsg } from '../api'
 import { useToast } from '../toast'
 import { ghostCls, inputCls, primaryCls } from '../ui'
 import {
+  decodeBarcodeFromImage,
   identifyByBarcode,
   identifyByLabel,
   identifyByText,
@@ -26,7 +27,9 @@ import type { Cuvee } from '../types'
  *      sans réseau). L'appel à wineapi.io (consommateur de quota) n'est
  *      déclenché qu'explicitement, via 🔎 / « Rechercher en ligne », ou
  *      par Entrée quand aucune cuvée locale ne correspond.
- *    • scan du code-barres (caméra) — avec saisie manuelle en secours.
+ *    • code-barres : scan « live » (caméra, si contexte sécurisé), sinon PHOTO
+ *      du code-barres décodée localement (fonctionne en HTTP / sur iPhone),
+ *      avec saisie manuelle en dernier secours.
  *
  *  Découplé du formulaire d'ajout : il remonte le vin identifié via
  *  `onIdentified`, à charge de l'appelant de pré-remplir son formulaire.
@@ -95,6 +98,8 @@ export function VinIdentification({
   // l'autre pioche dans la galerie (sans capture).
   const cameraRef = useRef<HTMLInputElement>(null)
   const galleryRef = useRef<HTMLInputElement>(null)
+  // Capture d'une photo du code-barres (repli iPhone / HTTP où le scan live échoue).
+  const barcodeCamRef = useRef<HTMLInputElement>(null)
   const [search, setSearch] = useState('')
   // Champ de recherche actif : conditionne l'affichage des suggestions.
   const [focused, setFocused] = useState(false)
@@ -125,20 +130,48 @@ export function VinIdentification({
     [onIdentified, toast],
   )
 
-  const scanner = useBarcodeScanner((ean) =>
-    run(
-      'barcode',
-      () => identifyByBarcode(ean),
-      (w) => (w.source === 'local' ? 'Reconnu (déjà en base)' : 'Reconnu'),
-      "Vin non reconnu. Essaie 🏷️ Photographier l'étiquette.",
-    ),
+  /** Identifie un vin à partir d'un code-barres (scan live, photo ou saisie). */
+  const runBarcode = useCallback(
+    (ean: string) =>
+      run(
+        'barcode',
+        () => identifyByBarcode(ean),
+        (w) => (w.source === 'local' ? 'Reconnu (déjà en base)' : 'Reconnu'),
+        "Vin non reconnu. Essaie 🏷️ Photographier l'étiquette.",
+      ),
+    [run],
   )
 
+  const scanner = useBarcodeScanner(runBarcode)
+
   async function startScan() {
+    // Le scan « live » (getUserMedia) exige un contexte sécurisé (HTTPS) : sur
+    // iPhone servi en HTTP, il échoue. On invite alors à utiliser la capture
+    // d'une PHOTO du code-barres (bouton dédié), qui fonctionne partout, plutôt
+    // que d'imposer directement la saisie manuelle.
     if (!(await scanner.start())) {
-      toast('Caméra indisponible — saisie manuelle.', 'err')
-      manualEntry()
+      toast('Scan live indisponible — utilise « 🏷️ Photographier le code-barres ».', 'err')
     }
+  }
+
+  /** Décode localement une photo du code-barres puis lance l'identification. */
+  async function onBarcodePhoto(e: React.ChangeEvent<HTMLInputElement>) {
+    const input = e.currentTarget
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    if (file.size > MAX_LABEL_SIZE) return toast('Photo trop lourde (10 Mo max).', 'err')
+    setPending('barcode')
+    let ean: string
+    try {
+      ean = (await decodeBarcodeFromImage(file)).trim()
+    } catch {
+      setPending(null)
+      return toast('Code-barres illisible — réessaie ou saisis-le à la main.', 'err')
+    }
+    setPending(null)
+    if (!isValidEan(ean)) return toast('Code-barres invalide.', 'err')
+    runBarcode(ean)
   }
 
   function manualEntry() {
@@ -146,12 +179,7 @@ export function VinIdentification({
     if (raw === null) return
     const ean = raw.trim()
     if (!isValidEan(ean)) return toast('Code-barres invalide.', 'err')
-    run(
-      'barcode',
-      () => identifyByBarcode(ean),
-      (w) => (w.source === 'local' ? 'Reconnu (déjà en base)' : 'Reconnu'),
-      "Vin non reconnu. Essaie 🏷️ Photographier l'étiquette.",
-    )
+    runBarcode(ean)
   }
 
   /** Traite une photo d'étiquette (appareil photo ou galerie). */
@@ -230,13 +258,15 @@ export function VinIdentification({
       >
         🖼️ Importer une photo
       </button>
-      {/* Appareil photo (capture arrière) — méthode principale. */}
+      {/* Appareil photo (capture arrière) — méthode principale.
+          NB : on utilise `sr-only` (et non `hidden`/display:none) car iOS Safari
+          refuse d'ouvrir un input fichier en display:none déclenché par `.click()`. */}
       <input
         ref={cameraRef}
         type="file"
         accept="image/jpeg,image/png"
         capture="environment"
-        className="hidden"
+        className="sr-only"
         onChange={onLabelFile}
       />
       {/* Galerie (sans capture) — importer une photo existante. */}
@@ -244,7 +274,7 @@ export function VinIdentification({
         ref={galleryRef}
         type="file"
         accept="image/jpeg,image/png"
-        className="hidden"
+        className="sr-only"
         onChange={onLabelFile}
       />
 
@@ -321,6 +351,22 @@ export function VinIdentification({
           >
             📷 Scanner le code-barres
           </button>
+          {/* Repli universel (iPhone / HTTP) : photo du code-barres décodée en local. */}
+          <button
+            onClick={() => barcodeCamRef.current?.click()}
+            disabled={busy}
+            className={`${ghostCls} w-full mt-2 disabled:opacity-60`}
+          >
+            {pending === 'barcode' ? '🏷️ Lecture du code-barres…' : '🏷️ Photographier le code-barres'}
+          </button>
+          <input
+            ref={barcodeCamRef}
+            type="file"
+            accept="image/jpeg,image/png"
+            capture="environment"
+            className="sr-only"
+            onChange={onBarcodePhoto}
+          />
           <button
             onClick={manualEntry}
             disabled={busy}
