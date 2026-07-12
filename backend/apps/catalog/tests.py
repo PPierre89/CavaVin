@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import tempfile
 import urllib.error
 from datetime import date
 from io import StringIO
@@ -20,7 +22,7 @@ from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.wineapi import WineApiProvider
 from . import apogee, sommellerie, wine_profile
 from .ingest import enrich_cuvee_from_wineapi, upsert_cuvee
-from .models import Cepage, Cuvee, Domaine
+from .models import Cepage, Cuvee, Domaine, ReferenceLwin
 from .serializers import ScanEtiquetteSerializer
 
 User = get_user_model()
@@ -733,6 +735,174 @@ class ClaudeProviderTests(SimpleTestCase):
         }
         self._mock_create(mock_anthropic).return_value = _reponse_claude(payload)
         self.assertIsNone(self.provider.lookup_by_text("x"))
+
+
+class LwinProviderTests(TestCase):
+    """Repli local (OCR Tesseract + référentiel LWIN) : correspondance floue,
+    tolérance aux coquilles d'OCR, pondération par rareté, OCR mocké."""
+
+    def setUp(self):
+        from .enrichment import lwin as module_lwin
+        from .enrichment.lwin import LwinProvider
+
+        # Le référentiel est mis en cache au niveau module : on repart à neuf.
+        module_lwin._cache = {"version": None, "refs": [], "idf": {}}
+        self.provider = LwinProvider()
+        ReferenceLwin.objects.create(
+            lwin="1011247", producteur="Château Margaux", pays="France",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+            classification="Premier Cru Classé",
+        )
+        ReferenceLwin.objects.create(
+            lwin="1011248", producteur="Château Palmer", pays="France",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+        )
+        # Second vin du même château : rend « margaux » plus fréquent que
+        # « palmer » dans le corpus (pondération IDF).
+        ReferenceLwin.objects.create(
+            lwin="1011249", producteur="Château Margaux",
+            vin="Pavillon Rouge du Château Margaux", pays="France",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+        )
+        ReferenceLwin.objects.create(
+            lwin="1017842", producteur="Domaine de la Romanée-Conti", vin="La Tâche",
+            pays="France", region="Bourgogne", couleur="ROUGE",
+        )
+
+    def test_enabled_suit_le_reglage(self):
+        self.assertTrue(self.provider.enabled)
+        with override_settings(LWIN_ENABLED=False):
+            self.assertFalse(self.provider.enabled)
+
+    def test_lookup_by_text_correspond(self):
+        wine = self.provider.lookup_by_text("chateau margaux 2015")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Margaux")
+        self.assertEqual(wine.couleur, "ROUGE")
+        self.assertEqual(wine.appellation, "Margaux")  # sous-région LWIN
+        self.assertEqual(wine.millesime, 2015)
+        self.assertEqual(wine.source, "lwin")
+        self.assertEqual(wine.reference_externe_id, "")
+        self.assertEqual(wine.raw["wineapi_detail"]["lwinCode"], "1011247")
+        self.assertEqual(wine.raw["pays"], "France")
+
+    def test_le_nom_du_vin_suffit_sans_le_producteur(self):
+        wine = self.provider.lookup_by_text("la tâche 1990")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Domaine de la Romanée-Conti")
+        self.assertEqual(wine.cuvee_nom, "La Tâche")
+        self.assertEqual(wine.millesime, 1990)
+
+    def test_coquille_ocr_toleree(self):
+        # « Margeaux » : faute fréquente / erreur d'OCR, plus bruit d'étiquette.
+        wine = self.provider.lookup_by_text(
+            "GRAND VIN DE CHATEAU MARGEAUX PREMIER GRAND CRU CLASSE 1998 MIS EN BOUTEILLE"
+        )
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Margaux")
+        self.assertEqual(wine.millesime, 1998)
+
+    def test_etiquette_ambigue_prefere_le_token_rare(self):
+        """Une étiquette Palmer mentionne aussi sa commune (Margaux) : la
+        pondération IDF doit préférer « palmer » (rare) à « margaux » (fréquent)."""
+        wine = self.provider.lookup_by_text("Chateau Palmer Margaux 1998")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Palmer")
+
+    def test_texte_sans_token_significatif_est_un_miss(self):
+        self.assertIsNone(self.provider.lookup_by_text("grand vin de france"))
+
+    def test_aucune_correspondance_est_un_miss(self):
+        self.assertIsNone(self.provider.lookup_by_text("Screaming Eagle Napa"))
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_lookup_by_image_ocr_puis_correspondance(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="Chateau Palmer\nMargaux\n1998\n".encode()
+        )
+        wine = self.provider.lookup_by_image(b"fausse-image", "image/jpeg")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Palmer")
+        self.assertEqual(wine.millesime, 1998)
+        # L'image est passée telle quelle sur stdin du binaire tesseract.
+        self.assertEqual(mock_run.call_args.kwargs["input"], b"fausse-image")
+        self.assertIn("tesseract", mock_run.call_args.args[0][0])
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_tesseract_absent_est_un_miss(self, mock_run):
+        mock_run.side_effect = FileNotFoundError("tesseract")
+        self.assertIsNone(self.provider.lookup_by_image(b"img", "image/jpeg"))
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_ocr_timeout_est_un_miss(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="tesseract", timeout=20)
+        self.assertIsNone(self.provider.lookup_by_image(b"img", "image/jpeg"))
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_ocr_replie_sur_la_langue_par_defaut(self, mock_run):
+        # Pack fra absent : 1er essai en échec, 2e essai sans -l réussit.
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stderr=b"Error opening data file fra"),
+            MagicMock(returncode=0, stdout=b"Chateau Palmer 1998"),
+        ]
+        wine = self.provider.lookup_by_image(b"img", "image/jpeg")
+        self.assertIsNotNone(wine)
+        self.assertEqual(mock_run.call_count, 2)
+        self.assertNotIn("-l", mock_run.call_args.args[0])
+
+
+class ImportLwinCommandTests(TestCase):
+    """Commande import_lwin : import du dump CSV, filtrage, idempotence."""
+
+    _ENTETES = (
+        "LWIN,STATUS,DISPLAY_NAME,PRODUCER_TITLE,PRODUCER_NAME,WINE,"
+        "COUNTRY,REGION,SUB_REGION,COLOUR,TYPE,CLASSIFICATION\n"
+    )
+
+    def _importer(self, contenu_csv: str) -> str:
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
+            f.write(contenu_csv)
+            chemin = f.name
+        try:
+            sortie = StringIO()
+            call_command("import_lwin", chemin, stdout=sortie)
+            return sortie.getvalue()
+        finally:
+            os.unlink(chemin)
+
+    def test_import_filtre_et_mappe(self):
+        self._importer(
+            self._ENTETES
+            + "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux,Red,Still,1er Cru\n"
+            + "1099999,Deleted,Vin Supprimé,Chateau,Disparu,,France,,,Red,Still,\n"
+            + ",Live,Sans Code,X,Y,,,,,,,\n"
+            + "1055555,Live,Bollinger,,Bollinger,Grande Année,France,Champagne,,White,Sparkling,\n"
+        )
+        self.assertEqual(ReferenceLwin.objects.count(), 2)  # Deleted et sans LWIN écartés
+        margaux = ReferenceLwin.objects.get(lwin="1011247")
+        self.assertEqual(margaux.producteur, "Chateau Margaux")
+        self.assertEqual(margaux.sous_region, "Margaux")
+        self.assertEqual(margaux.couleur, "ROUGE")
+        self.assertEqual(margaux.classification, "1er Cru")
+        bollinger = ReferenceLwin.objects.get(lwin="1055555")
+        self.assertEqual(bollinger.vin, "Grande Année")
+        self.assertEqual(bollinger.couleur, "BULLES")  # sparkling prime sur white
+
+    def test_reimport_met_a_jour_sans_doublonner(self):
+        ligne = "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux,Red,Still,\n"
+        self._importer(self._ENTETES + ligne)
+        self._importer(
+            self._ENTETES
+            + "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux AOC,Red,Still,\n"
+        )
+        self.assertEqual(ReferenceLwin.objects.count(), 1)
+        self.assertEqual(ReferenceLwin.objects.get(lwin="1011247").sous_region, "Margaux AOC")
+
+    def test_fichier_absent_leve_une_erreur(self):
+        from django.core.management.base import CommandError
+
+        with self.assertRaises(CommandError):
+            call_command("import_lwin", "/chemin/inexistant.csv")
 
 
 class EnsureSuperuserCommandTests(TestCase):

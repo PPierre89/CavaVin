@@ -241,3 +241,12 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8")
 # main à la cascade. Le SDK réessaie une fois (max_retries=1) : le budget total
 # peut donc atteindre 2 × cette valeur en cas d'erreur réseau.
 ANTHROPIC_TIMEOUT = int(os.getenv("ANTHROPIC_TIMEOUT", "50"))
+
+# --- Repli local : OCR Tesseract + référentiel LWIN (aucune clé, aucun réseau) ---
+# Dernier maillon de la cascade d'identification. Nécessite l'import du dump
+# LWIN (`manage.py import_lwin`) pour le texte, et le binaire tesseract (présent
+# dans l'image Docker) pour la photo d'étiquette. LWIN_ENABLED=False le coupe.
+LWIN_ENABLED = os.getenv("LWIN_ENABLED", "True") == "True"
+TESSERACT_CMD = os.getenv("TESSERACT_CMD", "tesseract")
+# Timeout de l'OCR (secondes) — même contrainte que ci-dessus : < timeout worker.
+TESSERACT_TIMEOUT = int(os.getenv("TESSERACT_TIMEOUT", "20"))

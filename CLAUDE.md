@@ -25,7 +25,7 @@ CavaVin/
 │   ├── config/                  # settings, urls, auth (RegisterView), wsgi/asgi, index view
 │   ├── apps/
 │   │   ├── catalog/             # SHARED reference data: Domaine, Cepage, Cuvee
-│   │   │   ├── enrichment/      # pluggable external providers (OFF, Claude, wineapi.io, Vivino stub)
+│   │   │   ├── enrichment/      # pluggable providers (OFF, Claude, wineapi.io, LWIN/OCR local, Vivino stub)
 │   │   │   ├── ingest.py        # shared persistence: upsert_cuvee, enrich_cuvee_from_wineapi
 │   │   │   ├── wine_profile.py  # pure mapping of wineapi detail → Cuvee fields (source of truth)
 │   │   │   ├── apogee.py        # pure drink-window / status logic (no DB)
@@ -131,6 +131,11 @@ The cascade in `registry.py` tries enabled providers in order:
   `ANTHROPIC_API_KEY` is unset.
 - **wineapi.io** — text & label image fallback + merchant data (prices, ratings); auto-disabled when
   `WINEAPI_KEY` is unset.
+- **LWIN + local OCR** — last-resort, 100% free & offline fallback: the `tesseract` binary (installed
+  in the Docker image, subprocess call) reads the label, then fuzzy matching (rapidfuzz, precision-first:
+  every significant token of a reference must be found, IDF-weighted tie-break) against the LWIN
+  (Liv-ex) reference table imported via `manage.py import_lwin`. Never raises `EnrichmentError`;
+  inert without the imported dump or the binary. Keeps identification working with zero API keys.
 - **Vivino** — permanently disabled stub (no public API; scraping violates ToS — do not implement).
 Every hit is normalised and **cached into the local DB** via `ingest.upsert_cuvee`. `EnrichmentError`
 (quota 429 / bad key 401) is surfaced to the user; network/other errors are treated as a plain miss.

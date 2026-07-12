@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Cepage, Cuvee, Domaine
+from .models import Cepage, Cuvee, Domaine, ReferenceLwin
 
 
 @admin.register(Domaine)
@@ -23,6 +23,14 @@ class CuveeAdmin(admin.ModelAdmin):
     autocomplete_fields = ["domaine", "cepages"]
     # Snapshot brut wineapi : consultable mais non éditable (alimenté par la synchro).
     readonly_fields = ["wineapi_detail", "enrichi_le"]
+
+
+@admin.register(ReferenceLwin)
+class ReferenceLwinAdmin(admin.ModelAdmin):
+    # Référentiel importé en masse (manage.py import_lwin) : consultation seulement.
+    list_display = ["lwin", "producteur", "vin", "region", "pays", "couleur"]
+    list_filter = ["couleur", "pays"]
+    search_fields = ["lwin", "producteur", "vin", "region"]
 
 
 admin.site.site_header = "Cave à Vin - Administration"

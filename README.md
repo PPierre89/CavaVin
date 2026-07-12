@@ -42,8 +42,8 @@ vrai téléphone via IP LAN.
 ### Scan d'étiquette (US 02/03)
 
 `POST /api/scan-etiquette/` avec un upload multipart (champ `image`, JPEG/PNG ≤ 10 Mo) — identifie
-le vin à partir d'une **photo de l'étiquette** via la cascade **Claude (vision, Anthropic)** puis
-**wineapi.io** en repli (pas d'OCR à héberger). Claude lit l'étiquette avec un modèle multimodal et
+le vin à partir d'une **photo de l'étiquette** via la cascade **Claude (vision, Anthropic)** →
+**wineapi.io** → **OCR local + LWIN** (repli gratuit, voir plus bas). Claude lit l'étiquette avec un modèle multimodal et
 renvoie directement une fiche complète (domaine, cuvée, appellation, millésime, cépages, corps,
 acidité, description, accords) — bien plus fiable que l'identification wineapi, souvent incorrecte ou
 lacunaire. Le hit est normalisé et **mis en cache local** comme pour le texte, et la réponse a la même
@@ -62,9 +62,10 @@ l'écran centré sur la photo.
 
 `POST /api/identifier-vin/` avec `{"query": "Chateau Petrus 2015"}` — pensé pour la sortie OCR
 (US 03) comme pour une saisie manuelle. Cascade : **base locale** (nom, millésime retiré) → **Claude
-(Anthropic)** → **wineapi.io** en repli (`POST /identify/text` puis `GET /wines/{id}` pour enrichir) →
-`404 "Vin non identifié"`. Le hit est normalisé et **mis en cache local** (domaine + cuvée +
-**cépages**), et la réponse renvoie `confidence`, `infos` (région, description…) et `suggestions`.
+(Anthropic)** → **wineapi.io** (`POST /identify/text` puis `GET /wines/{id}` pour enrichir) →
+**référentiel LWIN local** (repli gratuit) → `404 "Vin non identifié"`. Le hit est normalisé et
+**mis en cache local** (domaine + cuvée + **cépages**), et la réponse renvoie `confidence`, `infos`
+(région, description…) et `suggestions`.
 
 **Claude en tête de cascade** : le provider `claude.py` interroge un modèle multimodal (défaut
 `claude-opus-4-8`) dont la sortie est **contrainte par un schéma JSON** (structured outputs) au format
@@ -82,13 +83,41 @@ indisponible ou 4xx/5xx divers = simple *miss* (la cascade passe au provider sui
 
 **Interface d'enrichissement enfichable** (`backend/apps/catalog/enrichment/`) : chaque source implémente
 `lookup_by_barcode(ean)`, `lookup_by_text(query)` et/ou `lookup_by_image(data, content_type)` renvoyant
-un `NormalizedWine`. Actifs : **Open Food Facts** (code-barres), **Claude** (texte + étiquette) et
-**wineapi.io** (texte + étiquette, en repli). `Vivino` reste un slot désactivé (pas d'API publique,
-scraping = violation des CGU). La persistance est mutualisée (`ingest.upsert_cuvee`).
+un `NormalizedWine`. Actifs : **Open Food Facts** (code-barres), **Claude** (texte + étiquette),
+**wineapi.io** (texte + étiquette, en repli) et **LWIN + OCR local** (dernier repli, gratuit).
+`Vivino` reste un slot désactivé (pas d'API publique, scraping = violation des CGU). La persistance
+est mutualisée (`ingest.upsert_cuvee`).
 
 **Config** : les clés se mettent dans `.env` (`ANTHROPIC_API_KEY=...`, `WINEAPI_KEY=...`, voir
 `.env.example`) — jamais dans le code. Sans clé, chaque provider se désactive tout seul. Le fichier
 `.env` est ignoré par git.
+
+### Repli 100 % gratuit et hors-ligne : OCR local + référentiel LWIN
+
+Sans aucune clé d'API, l'identification reste fonctionnelle grâce au dernier maillon de la cascade,
+le provider `lwin` :
+
+- **OCR local** : la photo d'étiquette est lue par le binaire **Tesseract** (installé dans l'image
+  Docker avec le pack français, appelé en sous-processus — aucune dépendance Python). Sans binaire,
+  le provider est simplement inerte.
+- **Référentiel LWIN** (Liv-ex Wine Identifiers, ~100 000 identités de vins : producteur, vin,
+  région, pays, couleur, classification) : dump **gratuit** téléchargeable après inscription sur
+  <https://www.liv-ex.com/lwin/>, importé en base via :
+  ```bash
+  docker compose exec app python manage.py import_lwin /chemin/LWINdatabase.csv
+  ```
+  L'import est idempotent (ré-exécutable après chaque mise à jour du dump). Le code LWIN est
+  persisté sur la cuvée (`lwin_code`).
+- **Correspondance floue** (rapidfuzz), orientée *précision* : tous les tokens significatifs d'une
+  référence doivent être retrouvés dans la sortie OCR / la saisie (tolérance aux coquilles d'OCR),
+  avec pondération par rareté (IDF) pour départager les étiquettes qui mentionnent plusieurs noms
+  (ex. un Château Palmer mentionne aussi sa commune, Margaux). Un doute = un *miss*, plutôt qu'un
+  mauvais vin injecté dans le catalogue partagé.
+
+La qualité d'identification est inférieure à Claude (polices stylisées, reflets, étiquettes
+courbes…), et la fiche est plus sobre (pas de cépages/description ; corps, accords et conseils
+retombent sur `sommellerie.py`, dérivés de la couleur) — mais c'est **0 € et 100 % local**.
+Réglages : `LWIN_ENABLED`, `TESSERACT_CMD`, `TESSERACT_TIMEOUT` (voir `.env.example`).
 
 ### Fiche vin consolidée
 
@@ -240,7 +269,7 @@ cave-a-vin/
 │   ├── config/          # settings, urls, auth (register), wsgi/asgi
 │   ├── apps/
 │   │   ├── catalog/     # Domaine, Cepage, Cuvee — référentiel vin partagé
-│   │   │   ├── enrichment/    # providers enfichables (Open Food Facts, Claude, wineapi.io, stub Vivino)
+│   │   │   ├── enrichment/    # providers enfichables (Open Food Facts, Claude, wineapi.io, LWIN/OCR, stub Vivino)
 │   │   │   ├── ingest.py      # persistance mutualisée (upsert_cuvee, enrich_cuvee_from_wineapi)
 │   │   │   ├── wine_profile.py# mapping pur détail wineapi → Cuvee (source de vérité unique)
 │   │   │   ├── apogee.py      # logique pure fenêtre/statut de dégustation
@@ -376,6 +405,8 @@ ni de construire quoi que ce soit : deux fichiers suffisent.
    - `ANTHROPIC_API_KEY` : recommandé — reconnaissance d'étiquette et identification de vin via
      Claude (US 02/03/04), provider principal de la cascade.
    - `WINEAPI_KEY` : optionnel, repli de la cascade + données marchandes (prix, notes).
+   - Sans aucune clé, le **repli gratuit OCR + LWIN** garde l'identification fonctionnelle : voir
+     « Repli 100 % gratuit et hors-ligne » (import du dump via `manage.py import_lwin`).
    > Si le package ghcr est privé, authentifie Docker sur le NAS :
    > `echo <TON_PAT> | docker login ghcr.io -u PPierre89 --password-stdin`.
 3. **Démarrer** (via l'interface Docker/Container Manager de ton NAS, ou en SSH) :
