@@ -32,6 +32,24 @@ export function identifyByLabel(file: File) {
   return api<IdentifiedWine>('POST', '/api/scan-etiquette/', fd)
 }
 
+/**
+ * Décode un code-barres présent sur une PHOTO (prise avec l'appareil photo natif).
+ * Contrairement au scan « live » (getUserMedia), la capture par input fichier
+ * fonctionne même hors contexte sécurisé (HTTP), donc sur iPhone/NAS. Import
+ * dynamique de ZXing pour ne pas alourdir le bundle initial.
+ */
+export async function decodeBarcodeFromImage(file: File): Promise<string> {
+  const { BrowserMultiFormatReader } = await import('@zxing/browser')
+  const reader = new BrowserMultiFormatReader()
+  const url = URL.createObjectURL(file)
+  try {
+    const result = await reader.decodeFromImageUrl(url)
+    return result.getText()
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
 /** Normalise une chaîne pour la recherche : minuscules, sans accents ni espaces superflus. */
 function normalize(s: string): string {
   return s
