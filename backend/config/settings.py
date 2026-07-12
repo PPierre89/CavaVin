@@ -248,5 +248,6 @@ ANTHROPIC_TIMEOUT = int(os.getenv("ANTHROPIC_TIMEOUT", "50"))
 # dans l'image Docker) pour la photo d'étiquette. LWIN_ENABLED=False le coupe.
 LWIN_ENABLED = os.getenv("LWIN_ENABLED", "True") == "True"
 TESSERACT_CMD = os.getenv("TESSERACT_CMD", "tesseract")
-# Timeout de l'OCR (secondes) — même contrainte que ci-dessus : < timeout worker.
+# Budget total de l'OCR en secondes (toutes passes tesseract confondues) —
+# même contrainte que ci-dessus : < timeout worker.
 TESSERACT_TIMEOUT = int(os.getenv("TESSERACT_TIMEOUT", "20"))

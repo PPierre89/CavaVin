@@ -7,6 +7,14 @@ ou la saisie texte — est rapprochée du référentiel LWIN importé en base vi
 ``manage.py import_lwin`` (correspondance floue rapidfuzz, tolérante aux
 erreurs d'OCR).
 
+L'OCR est optimisé pour les photos d'étiquettes, un cas hostile à Tesseract
+(polices stylisées, texte clair sur fond sombre, photos de téléphone) :
+pré-traitement Pillow (orientation EXIF, niveaux de gris, redimensionnement,
+autocontraste, inversion des étiquettes sombres), passes multiples de
+segmentation (mise en page automatique + texte épars) dont les sorties sont
+fusionnées, et filtrage des mots par confiance Tesseract (sortie TSV) pour ne
+pas semer de faux tokens dans la correspondance floue.
+
 Qualité volontairement orientée *précision* : on exige que tous les tokens
 significatifs d'une référence soient retrouvés dans l'entrée, plutôt que de
 proposer un vin douteux qui polluerait le catalogue partagé. Un doute = un
@@ -19,6 +27,7 @@ import logging
 import re
 import subprocess
 import unicodedata
+from io import BytesIO
 
 from django.conf import settings
 from rapidfuzz import fuzz
@@ -43,6 +52,96 @@ _STOPWORDS = {
 # Score rapidfuzz minimal (0-100) pour considérer deux tokens équivalents —
 # la tolérance aux coquilles d'OCR (« margaux » lu « rnargaux »).
 _TOKEN_RATIO = 85
+
+# --- Réglages OCR ---
+# Modes de segmentation Tesseract essayés sur chaque variante d'image :
+# 3 = mise en page automatique, 11 = texte épars (mentions dispersées d'une étiquette).
+_PSM_PASSES = (3, 11)
+# Confiance Tesseract minimale (0-100) pour garder un mot de la sortie TSV.
+_OCR_CONF_MIN = 40
+# Confiance moyenne minimale des mots gardés d'une passe : sous ce seuil, la
+# passe entière est du bruit (sur une photo illisible, le mode texte épars
+# hallucine des centaines de « mots » à confiance moyenne ~50, quand du vrai
+# texte sort à ~90) et est écartée en bloc.
+_OCR_CONF_MOYENNE = 65
+# Grand côté cible du redimensionnement : Tesseract lit mal les petites photos
+# et perd du temps sur les très grandes.
+_OCR_TAILLE_CIBLE = 1600
+# Luminance moyenne (0-255) sous laquelle une étiquette est considérée sombre
+# (texte clair) : Tesseract préfère du texte sombre sur fond clair, on inverse.
+_OCR_LUMINANCE_SOMBRE = 110
+# Arrêt anticipé des passes : nombre de tokens significatifs jugé suffisant.
+_OCR_TOKENS_SUFFISANTS = 4
+
+# Mémo module : passe à False au premier échec du pack fra+eng, pour ne pas
+# payer un essai voué à l'échec à chaque passe suivante.
+_langues_ok = True
+
+
+def _variantes(data: bytes) -> list[bytes]:
+    """Variantes PNG pré-traitées d'une photo d'étiquette pour l'OCR.
+
+    Pré-traitement Pillow : orientation EXIF (photos de téléphone), niveaux de
+    gris, redimensionnement vers ``_OCR_TAILLE_CIBLE``, autocontraste. Si
+    l'étiquette est sombre (texte clair sur fond foncé, cas fréquent), une
+    seconde variante inversée est produite. En cas d'image illisible ou de
+    Pillow indisponible, on retombe sur les octets bruts (comportement
+    d'origine, Tesseract se débrouille)."""
+    try:
+        from PIL import Image, ImageOps, ImageStat
+
+        image = Image.open(BytesIO(data))
+        image = ImageOps.exif_transpose(image)
+        image = image.convert("L")
+        grand_cote = max(image.size)
+        if grand_cote and grand_cote != _OCR_TAILLE_CIBLE:
+            facteur = _OCR_TAILLE_CIBLE / grand_cote
+            image = image.resize(
+                (max(1, round(image.width * facteur)), max(1, round(image.height * facteur))),
+                Image.LANCZOS,
+            )
+        image = ImageOps.autocontrast(image, cutoff=1)
+
+        variantes = [image]
+        if ImageStat.Stat(image).mean[0] < _OCR_LUMINANCE_SOMBRE:
+            variantes.append(ImageOps.invert(image))
+
+        sorties = []
+        for v in variantes:
+            tampon = BytesIO()
+            v.save(tampon, "PNG")
+            sorties.append(tampon.getvalue())
+        return sorties
+    except Exception as exc:  # image corrompue, format exotique...
+        logger.warning("pré-traitement OCR impossible (%s), image brute utilisée", exc)
+        return [data]
+
+
+def _texte_tsv(tsv: str) -> str:
+    """Extrait le texte d'une sortie TSV Tesseract, mots douteux écartés.
+
+    Colonnes TSV : level, page, block, par, line, word, left, top, width,
+    height, conf, text — on garde les mots (level 5) dont la confiance
+    atteint ``_OCR_CONF_MIN``. Si la confiance moyenne des mots gardés reste
+    sous ``_OCR_CONF_MOYENNE``, la passe entière est considérée comme une
+    hallucination sur du bruit et écartée."""
+    mots: list[str] = []
+    confs: list[float] = []
+    for ligne in tsv.splitlines()[1:]:
+        champs = ligne.split("\t")
+        if len(champs) < 12:
+            continue
+        try:
+            conf = float(champs[10])
+        except ValueError:
+            continue
+        mot = champs[11].strip()
+        if conf >= _OCR_CONF_MIN and mot:
+            mots.append(mot)
+            confs.append(conf)
+    if not mots or sum(confs) / len(confs) < _OCR_CONF_MOYENNE:
+        return ""
+    return " ".join(mots)
 
 
 def _tokens(texte: str) -> set[str]:
@@ -145,31 +244,67 @@ class LwinProvider(EnrichmentProvider):
         texte = self._ocr(data)
         if not texte:
             return None
-        return self._correspondre(texte)
+        # ocr=True : la sortie OCR d'une photo illisible est un flot de faux
+        # mots — on exige une corroboration plus forte qu'une saisie humaine.
+        return self._correspondre(texte, ocr=True)
 
     def _ocr(self, data: bytes) -> str:
-        """Texte brut de l'étiquette via le binaire tesseract (stdin -> stdout)."""
-        commande = [settings.TESSERACT_CMD, "stdin", "stdout", "-l", "fra+eng"]
+        """Texte de l'étiquette, fusion de plusieurs passes Tesseract.
+
+        Chaque variante d'image (pré-traitée, et inversée si l'étiquette est
+        sombre) est lue avec deux modes de segmentation : mise en page
+        automatique (PSM 3) et texte épars (PSM 11, bien adapté aux mentions
+        dispersées d'une étiquette). Les sorties sont concaténées : la
+        correspondance en aval n'exige que la présence des tokens du
+        référentiel, le surplus ne coûte rien. Arrêt anticipé dès qu'une
+        variante a livré assez de tokens significatifs."""
+        import time
+
+        # TESSERACT_TIMEOUT est le budget TOTAL de l'OCR : les passes se
+        # partagent le temps restant, une photo pathologique (le mode texte
+        # épars peut s'enliser sur du bruit) ne bloque jamais plus longtemps.
+        echeance = time.monotonic() + settings.TESSERACT_TIMEOUT
+        morceaux: list[str] = []
+        for image in _variantes(data):
+            for psm in _PSM_PASSES:
+                restant = echeance - time.monotonic()
+                if restant <= 0:
+                    return "\n".join(morceaux)
+                texte = self._tesseract(image, psm, timeout=restant)
+                if texte:
+                    morceaux.append(texte)
+                if len(_tokens(" ".join(morceaux))) >= _OCR_TOKENS_SUFFISANTS:
+                    return "\n".join(morceaux)  # inutile de payer les passes suivantes
+        return "\n".join(morceaux)
+
+    def _tesseract(self, image: bytes, psm: int, timeout: float | None = None) -> str:
+        """Une passe tesseract (stdin -> TSV), filtrée par confiance par mot.
+
+        La sortie TSV donne une confiance 0-100 par mot : écarter les mots
+        douteux évite que du bruit d'OCR aille fuzzy-matcher une mauvaise
+        référence. ``--dpi 300`` lève l'avertissement des images sans
+        métadonnées (photos recadrées)."""
+        global _langues_ok
+        commande = [settings.TESSERACT_CMD, "stdin", "stdout"]
+        if _langues_ok:
+            commande += ["-l", "fra+eng"]
+        commande += ["--dpi", "300", "--psm", str(psm), "tsv"]
         try:
             resultat = subprocess.run(
                 commande,
-                input=data,
+                input=image,
                 capture_output=True,
-                timeout=settings.TESSERACT_TIMEOUT,
+                timeout=timeout if timeout is not None else settings.TESSERACT_TIMEOUT,
             )
+            if resultat.returncode != 0 and _langues_ok:
+                # Pack de langue absent : on retombe sur la langue par défaut,
+                # et on s'en souvient pour les passes suivantes.
+                _langues_ok = False
+                return self._tesseract(image, psm, timeout=timeout)
             if resultat.returncode != 0:
-                # Pack de langue absent, image illisible… : nouvel essai avec la
-                # langue par défaut avant d'abandonner.
-                resultat = subprocess.run(
-                    commande[:3],
-                    input=data,
-                    capture_output=True,
-                    timeout=settings.TESSERACT_TIMEOUT,
-                )
-                if resultat.returncode != 0:
-                    logger.warning("tesseract a échoué: %s", resultat.stderr[:200])
-                    return ""
-            return resultat.stdout.decode("utf-8", errors="replace")
+                logger.warning("tesseract a échoué: %s", resultat.stderr[:200])
+                return ""
+            return _texte_tsv(resultat.stdout.decode("utf-8", errors="replace"))
         except FileNotFoundError:
             logger.info("tesseract introuvable (%s) : OCR local inactif", settings.TESSERACT_CMD)
             return ""
@@ -177,11 +312,17 @@ class LwinProvider(EnrichmentProvider):
             logger.warning("tesseract: %s", exc)
             return ""
 
-    def _correspondre(self, texte: str) -> NormalizedWine | None:
+    def _correspondre(self, texte: str, ocr: bool = False) -> NormalizedWine | None:
         """Meilleure référence LWIN dont TOUS les tokens significatifs sont
         retrouvés dans l'entrée (tolérance floue par token, pour les coquilles
         d'OCR). À égalité, la référence la plus spécifique (tokens les plus
-        rares, pondération IDF) puis la plus proche de l'entrée l'emporte."""
+        rares, pondération IDF) puis la plus proche de l'entrée l'emporte.
+
+        En mode ``ocr``, l'entrée peut être un flot de faux mots hallucinés
+        par Tesseract sur une photo illisible : un candidat n'est retenu que
+        s'il est corroboré par au moins deux tokens retrouvés, ou par un
+        unique token long (≥ 5 caractères) retrouvé à l'identique — un junk
+        de trois lettres ne suffit plus à « identifier » un vin."""
         tokens_entree = _tokens(texte)
         if not tokens_entree:
             return None
@@ -208,11 +349,14 @@ class LwinProvider(EnrichmentProvider):
             scores = [score_token(t) for t in requis]
             if min(scores) < _TOKEN_RATIO:
                 continue  # au moins un token requis est absent : trop risqué
+            bonus_trouves = [t for t in bonus if score_token(t) >= _TOKEN_RATIO]
+            if ocr and len(requis) + len(bonus_trouves) < 2 and not (
+                len(requis[0]) >= 5 and scores[0] == 100.0
+            ):
+                continue  # sortie OCR : préférer un miss à un vin douteux
             poids = sum(idf.get(t, 1.0) * (s / 100) ** 2 for t, s in zip(requis, scores))
             poids += sum(
-                idf.get(t, 1.0) * (s / 100) ** 2
-                for t in bonus
-                if (s := score_token(t)) >= _TOKEN_RATIO
+                idf.get(t, 1.0) * (score_token(t) / 100) ** 2 for t in bonus_trouves
             )
             candidat = (
                 min(scores) == 100.0,
