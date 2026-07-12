@@ -100,14 +100,14 @@ le provider `lwin` :
 - **OCR local** : la photo d'étiquette est lue par le binaire **Tesseract** (installé dans l'image
   Docker avec le pack français, appelé en sous-processus — aucune dépendance Python). Sans binaire,
   le provider est simplement inerte.
-- **Référentiel LWIN** (Liv-ex Wine Identifiers, ~100 000 identités de vins : producteur, vin,
+- **Référentiel LWIN** (Liv-ex Wine Identifiers, ~200 000 identités de vins : producteur, vin,
   région, pays, couleur, classification) : dump **gratuit** téléchargeable après inscription sur
-  <https://www.liv-ex.com/lwin/>, importé en base via :
+  <https://www.liv-ex.com/lwin/>, accepté tel quel (XLSX d'origine, ou export CSV) :
   ```bash
-  docker compose exec app python manage.py import_lwin /chemin/LWINdatabase.csv
+  docker compose exec app python manage.py import_lwin /chemin/LWINdatabase.xlsx
   ```
-  L'import est idempotent (ré-exécutable après chaque mise à jour du dump). Le code LWIN est
-  persisté sur la cuvée (`lwin_code`).
+  L'import est idempotent (ré-exécutable après chaque mise à jour du dump, ~1 min). Le code LWIN
+  est persisté sur la cuvée (`lwin_code`).
 - **Correspondance floue** (rapidfuzz), orientée *précision* : tous les tokens significatifs d'une
   référence doivent être retrouvés dans la sortie OCR / la saisie (tolérance aux coquilles d'OCR),
   avec pondération par rareté (IDF) pour départager les étiquettes qui mentionnent plusieurs noms

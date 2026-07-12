@@ -102,9 +102,9 @@ class Cuvee(models.Model):
 class ReferenceLwin(models.Model):
     """Entrée du référentiel LWIN (Liv-ex Wine Identifiers).
 
-    Base d'identités de vins (~100 000 entrées : producteur, vin, région, pays,
+    Base d'identités de vins (~200 000 entrées : producteur, vin, région, pays,
     couleur), importée localement via ``manage.py import_lwin`` depuis le dump
-    CSV gratuit de Liv-ex. Sert de repli 100 % local à l'identification
+    XLSX/CSV gratuit de Liv-ex. Sert de repli 100 % local à l'identification
     (provider ``lwin``) : correspondance floue entre la sortie OCR / la saisie
     texte et un nom canonique, sans aucun appel réseau.
     """

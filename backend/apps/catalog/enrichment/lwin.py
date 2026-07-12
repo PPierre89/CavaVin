@@ -69,19 +69,26 @@ def _token_trouve(token_ref: str, tokens_entree: set[str]) -> float:
 _cache: dict = {"version": None, "refs": [], "idf": {}}
 
 
-def _referentiel() -> tuple[list[tuple[int, set[str], str]], dict[str, float]]:
+def _referentiel() -> tuple[list[tuple[int, tuple, tuple, str]], dict[str, float]]:
     """Référentiel LWIN prêt pour la correspondance.
 
-    Renvoie ``(refs, idf)`` où ``refs`` liste (id, tokens significatifs, chaîne
-    complète) et ``idf`` pondère chaque token par sa rareté dans le corpus —
-    « palmer » (rare) pèse plus que « margaux » (nom de commune omniprésent),
-    ce qui départage les étiquettes qui mentionnent plusieurs noms.
+    Renvoie ``(refs, idf)`` où ``refs`` liste (id, tokens requis, tokens bonus,
+    chaîne complète) et ``idf`` pondère chaque token par sa rareté dans le
+    corpus — « palmer » (rare) pèse plus que « margaux » (nom de commune
+    omniprésent), ce qui départage les étiquettes qui mentionnent plusieurs noms.
 
-    Les tokens significatifs sont ceux du nom du vin s'il existe, sinon ceux du
-    producteur : « La Tâche » doit correspondre sans exiger « Domaine de la
-    Romanée-Conti » dans l'entrée.
+    - Tokens **requis** : ceux du nom du vin s'il existe, sinon ceux du
+      producteur — « La Tâche » doit correspondre sans exiger « Domaine de la
+      Romanée-Conti » dans l'entrée.
+    - Tokens **bonus** : ceux de la sous-région. Sur le dump réel, l'identité
+      des vins de Bourgogne est portée par la sous-région (climat) avec un nom
+      de vin vide — « Romanée-Conti / La Tâche » désigne le bon climat parmi
+      toutes les entrées du même domaine. Jamais requis (la commune d'un
+      Bordeaux ne doit pas suffire à le faire correspondre), seulement comptés
+      quand ils sont retrouvés.
     """
     import math
+    import sys
 
     from ..models import ReferenceLwin
 
@@ -89,12 +96,21 @@ def _referentiel() -> tuple[list[tuple[int, set[str], str]], dict[str, float]]:
     if _cache["version"] != version:
         refs = []
         df: dict[str, int] = {}
-        for pk, producteur, vin in ReferenceLwin.objects.values_list("pk", "producteur", "vin"):
-            toks = _tokens(vin) or _tokens(producteur)
-            if not toks:
+        lignes = ReferenceLwin.objects.values_list("pk", "producteur", "vin", "sous_region")
+        for pk, producteur, vin, sous_region in lignes:
+            requis = _tokens(vin) or _tokens(producteur)
+            if not requis:
                 continue
-            refs.append((pk, toks, f"{producteur} {vin}".strip()))
-            for t in toks:
+            bonus = _tokens(sous_region) - requis
+            # Tokens internés + tuples : le dump réel fait ~200 000 lignes, on
+            # partage les chaînes récurrentes (« margaux », « pinot »…) en mémoire.
+            refs.append((
+                pk,
+                tuple(sys.intern(t) for t in requis),
+                tuple(sys.intern(t) for t in bonus),
+                f"{producteur} {vin} {sous_region}".strip(),
+            ))
+            for t in requis | bonus:
                 df[t] = df.get(t, 0) + 1
         n = max(len(refs), 1)
         _cache["version"] = version
@@ -181,13 +197,26 @@ class LwinProvider(EnrichmentProvider):
                 scores_vocab[token_ref] = _token_trouve(token_ref, tokens_entree)
             return scores_vocab[token_ref]
 
-        meilleur: tuple | None = None  # (poids idf, ratio global, score moyen, -pk)
-        for pk, tokens_ref, chaine in refs:
-            scores = [score_token(t) for t in tokens_ref]
+        # Classement : une référence dont TOUS les tokens requis sont retrouvés
+        # à l'identique prime toujours sur une correspondance floue (« La Tâche »
+        # exact bat « Taches » flou) ; puis l'IDF pondéré par la qualité du match
+        # départage (token rare ET bien retrouvé), les tokens bonus (sous-région)
+        # retrouvés s'y ajoutant — ils désignent le bon climat parmi les entrées
+        # d'un même domaine ; enfin la proximité globale à l'entrée.
+        meilleur: tuple | None = None  # (exact, idf pondéré, ratio global, score moyen, -pk)
+        for pk, requis, bonus, chaine in refs:
+            scores = [score_token(t) for t in requis]
             if min(scores) < _TOKEN_RATIO:
-                continue  # au moins un token de la référence est absent : trop risqué
+                continue  # au moins un token requis est absent : trop risqué
+            poids = sum(idf.get(t, 1.0) * (s / 100) ** 2 for t, s in zip(requis, scores))
+            poids += sum(
+                idf.get(t, 1.0) * (s / 100) ** 2
+                for t in bonus
+                if (s := score_token(t)) >= _TOKEN_RATIO
+            )
             candidat = (
-                sum(idf.get(t, 1.0) for t in tokens_ref),
+                min(scores) == 100.0,
+                poids,
                 fuzz.token_set_ratio(chaine.lower(), texte.lower()),
                 sum(scores) / len(scores),
                 -pk,  # départage stable
@@ -199,8 +228,8 @@ class LwinProvider(EnrichmentProvider):
 
         from ..models import ReferenceLwin
 
-        ref = ReferenceLwin.objects.get(pk=-meilleur[3])
-        return self._to_normalized(ref, confiance=meilleur[2] / 100, millesime=parse_vintage(texte))
+        ref = ReferenceLwin.objects.get(pk=-meilleur[4])
+        return self._to_normalized(ref, confiance=meilleur[3] / 100, millesime=parse_vintage(texte))
 
     def _to_normalized(self, ref, confiance: float, millesime: int | None) -> NormalizedWine:
         # Détail minimal au format wineapi : persisté par ingest.upsert_cuvee

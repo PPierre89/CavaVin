@@ -768,6 +768,17 @@ class LwinProviderTests(TestCase):
             lwin="1017842", producteur="Domaine de la Romanée-Conti", vin="La Tâche",
             pays="France", region="Bourgogne", couleur="ROUGE",
         )
+        # Pièges observés sur le dump réel : proches en correspondance floue
+        # (« Taches » vs « Tâche », « Palmier » vs « Palmer »), un match exact
+        # doit toujours l'emporter.
+        ReferenceLwin.objects.create(
+            lwin="1357059", producteur="Robert Denogent", vin="Taches",
+            pays="France", region="Bourgogne", sous_region="Mâcon", couleur="BLANC",
+        )
+        ReferenceLwin.objects.create(
+            lwin="2212733", producteur="Laurent Ponsot", vin="Cuvée du Palmier",
+            pays="France", region="Bourgogne", couleur="ROUGE",
+        )
 
     def test_enabled_suit_le_reglage(self):
         self.assertTrue(self.provider.enabled)
@@ -808,6 +819,24 @@ class LwinProviderTests(TestCase):
         wine = self.provider.lookup_by_text("Chateau Palmer Margaux 1998")
         self.assertIsNotNone(wine)
         self.assertEqual(wine.domaine_nom, "Château Palmer")
+
+    def test_climat_bourgogne_en_sous_region_departage(self):
+        """Sur le dump réel, les vins de Bourgogne d'un même domaine partagent
+        le nom du producteur (vin vide) et se distinguent par la sous-région
+        (climat) : elle doit départager sans jamais être exigée."""
+        ReferenceLwin.objects.create(
+            lwin="2000001", producteur="Domaine Fictif de Vosne", vin="",
+            sous_region="Echezeaux", region="Bourgogne", couleur="ROUGE",
+        )
+        ReferenceLwin.objects.create(
+            lwin="2000002", producteur="Domaine Fictif de Vosne", vin="",
+            sous_region="Malconsorts", region="Bourgogne", couleur="ROUGE",
+        )
+        wine = self.provider.lookup_by_text("domaine fictif de vosne malconsorts 2019")
+        self.assertEqual(wine.raw["wineapi_detail"]["lwinCode"], "2000002")
+        self.assertEqual(wine.appellation, "Malconsorts")
+        # Sans mention du climat, le domaine correspond quand même (au 1er climat).
+        self.assertIsNotNone(self.provider.lookup_by_text("domaine fictif de vosne"))
 
     def test_texte_sans_token_significatif_est_un_miss(self):
         self.assertIsNone(self.provider.lookup_by_text("grand vin de france"))
@@ -852,16 +881,20 @@ class LwinProviderTests(TestCase):
 
 
 class ImportLwinCommandTests(TestCase):
-    """Commande import_lwin : import du dump CSV, filtrage, idempotence."""
+    """Commande import_lwin : import du dump XLSX/CSV, filtrage, idempotence."""
 
-    _ENTETES = (
-        "LWIN,STATUS,DISPLAY_NAME,PRODUCER_TITLE,PRODUCER_NAME,WINE,"
-        "COUNTRY,REGION,SUB_REGION,COLOUR,TYPE,CLASSIFICATION\n"
-    )
+    # Colonnes du dump Liv-ex réel (sous-ensemble utile) : l'effervescence est
+    # portée par SUB_TYPE, TYPE valant toujours « Wine ».
+    _COLONNES = [
+        "LWIN", "STATUS", "DISPLAY_NAME", "PRODUCER_TITLE", "PRODUCER_NAME",
+        "WINE", "COUNTRY", "REGION", "SUB_REGION", "COLOUR", "TYPE",
+        "SUB_TYPE", "CLASSIFICATION",
+    ]
 
-    def _importer(self, contenu_csv: str) -> str:
+    def _importer_csv(self, lignes: list[str]) -> str:
+        contenu = ",".join(self._COLONNES) + "\n" + "".join(lignes)
         with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
-            f.write(contenu_csv)
+            f.write(contenu)
             chemin = f.name
         try:
             sortie = StringIO()
@@ -871,13 +904,12 @@ class ImportLwinCommandTests(TestCase):
             os.unlink(chemin)
 
     def test_import_filtre_et_mappe(self):
-        self._importer(
-            self._ENTETES
-            + "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux,Red,Still,1er Cru\n"
-            + "1099999,Deleted,Vin Supprimé,Chateau,Disparu,,France,,,Red,Still,\n"
-            + ",Live,Sans Code,X,Y,,,,,,,\n"
-            + "1055555,Live,Bollinger,,Bollinger,Grande Année,France,Champagne,,White,Sparkling,\n"
-        )
+        self._importer_csv([
+            "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux,Red,Wine,Still,1er Cru\n",
+            "1099999,Deleted,Vin Supprimé,Chateau,Disparu,,France,,,Red,Wine,Still,\n",
+            ",Live,Sans Code,X,Y,,,,,,,,\n",
+            "1055555,Live,Bollinger,,Bollinger,Grande Année,France,Champagne,,White,Wine,Sparkling,\n",
+        ])
         self.assertEqual(ReferenceLwin.objects.count(), 2)  # Deleted et sans LWIN écartés
         margaux = ReferenceLwin.objects.get(lwin="1011247")
         self.assertEqual(margaux.producteur, "Chateau Margaux")
@@ -886,23 +918,52 @@ class ImportLwinCommandTests(TestCase):
         self.assertEqual(margaux.classification, "1er Cru")
         bollinger = ReferenceLwin.objects.get(lwin="1055555")
         self.assertEqual(bollinger.vin, "Grande Année")
-        self.assertEqual(bollinger.couleur, "BULLES")  # sparkling prime sur white
+        self.assertEqual(bollinger.couleur, "BULLES")  # sparkling (SUB_TYPE) prime sur white
 
     def test_reimport_met_a_jour_sans_doublonner(self):
-        ligne = "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux,Red,Still,\n"
-        self._importer(self._ENTETES + ligne)
-        self._importer(
-            self._ENTETES
-            + "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux AOC,Red,Still,\n"
-        )
+        self._importer_csv([
+            "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux,Red,Wine,Still,\n"
+        ])
+        self._importer_csv([
+            "1011247,Live,Chateau Margaux,Chateau,Margaux,,France,Bordeaux,Margaux AOC,Red,Wine,Still,\n"
+        ])
         self.assertEqual(ReferenceLwin.objects.count(), 1)
         self.assertEqual(ReferenceLwin.objects.get(lwin="1011247").sous_region, "Margaux AOC")
+
+    def test_import_xlsx_normalise_na_et_codes_numeriques(self):
+        """Le dump Liv-ex d'origine (XLSX) est accepté tel quel : codes LWIN en
+        nombres flottants et absences encodées « NA » sont normalisés."""
+        import openpyxl
+
+        classeur = openpyxl.Workbook()
+        feuille = classeur.active
+        feuille.append(self._COLONNES)
+        feuille.append([
+            1011247.0, "Live", "Chateau Margaux", "NA", "Chateau Margaux", "NA",
+            "France", "Bordeaux", "Margaux", "Red", "Wine", "Still", "NA",
+        ])
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            chemin = f.name
+        classeur.save(chemin)
+        try:
+            call_command("import_lwin", chemin, stdout=StringIO())
+        finally:
+            os.unlink(chemin)
+
+        ref = ReferenceLwin.objects.get()
+        self.assertEqual(ref.lwin, "1011247")  # 1011247.0 -> "1011247"
+        self.assertEqual(ref.producteur, "Chateau Margaux")  # « NA » ignoré, pas préfixé
+        self.assertEqual(ref.vin, "")
+        self.assertEqual(ref.classification, "")
+        self.assertEqual(ref.couleur, "ROUGE")
 
     def test_fichier_absent_leve_une_erreur(self):
         from django.core.management.base import CommandError
 
         with self.assertRaises(CommandError):
             call_command("import_lwin", "/chemin/inexistant.csv")
+        with self.assertRaises(CommandError):
+            call_command("import_lwin", "/chemin/inexistant.xlsx")
 
 
 class EnsureSuperuserCommandTests(TestCase):
