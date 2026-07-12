@@ -37,6 +37,14 @@ def get_enabled_providers() -> list[EnrichmentProvider]:
     return [p for p in _PROVIDERS if p.enabled]
 
 
+def get_all_providers() -> list[EnrichmentProvider]:
+    """Retourne tous les fournisseurs (activés ou non), dans l'ordre de la cascade.
+
+    Utile au panneau d'administration pour afficher l'état (actif / inactif) de
+    chaque source d'enrichissement sans divulguer les clés d'API."""
+    return list(_PROVIDERS)
+
+
 def get_provider(name: str) -> EnrichmentProvider | None:
     """Retourne un fournisseur par son nom (activé uniquement), sinon None."""
     return next((p for p in _PROVIDERS if p.name == name and p.enabled), None)

@@ -72,3 +72,119 @@ class LoginThrottleTests(APITestCase):
         # La tentative suivante est bloquée par le throttle, pas par les identifiants.
         resp = self.client.post(self.url, {"username": "bob", "password": "faux"})
         self.assertEqual(resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+
+class MeViewTests(APITestCase):
+    """GET /api/auth/me/ : profil du compte connecté (rôle inclus)."""
+
+    def test_anonyme_401(self):
+        resp = self.client.get(reverse("me"))
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_renvoie_le_role_staff(self):
+        user = User.objects.create_user(
+            username="chef", password="x", email="chef@example.com", is_staff=True
+        )
+        self.client.force_authenticate(user=user)
+        resp = self.client.get(reverse("me"))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["username"], "chef")
+        self.assertEqual(resp.data["email"], "chef@example.com")
+        self.assertTrue(resp.data["is_staff"])
+        self.assertFalse(resp.data["is_superuser"])
+
+
+class AdminApercuTests(APITestCase):
+    """GET /api/admin-panel/apercu/ : tableau de bord réservé au staff."""
+
+    def setUp(self):
+        self.url = reverse("admin-apercu")
+
+    def test_non_staff_403(self):
+        user = User.objects.create_user(username="lambda", password="x")
+        self.client.force_authenticate(user=user)
+        self.assertEqual(self.client.get(self.url).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_anonyme_401(self):
+        self.assertEqual(self.client.get(self.url).status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_staff_recoit_les_agregats(self):
+        staff = User.objects.create_user(username="chef", password="x", is_staff=True)
+        User.objects.create_user(username="autre", password="x")
+        self.client.force_authenticate(user=staff)
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["utilisateurs"]["total"], 2)
+        self.assertEqual(resp.data["utilisateurs"]["staff"], 1)
+        self.assertIn("catalogue", resp.data)
+        self.assertIn("stock", resp.data)
+        self.assertEqual(resp.data["systeme"]["version"], settings.APP_VERSION)
+        # Les fournisseurs d'enrichissement sont listés avec leur état, sans clés.
+        self.assertTrue(any(p["nom"] == "openfoodfacts" for p in resp.data["systeme"]["providers"]))
+        self.assertNotIn("cle", str(resp.data["systeme"]["providers"]))
+
+
+class AdminUtilisateurTests(APITestCase):
+    """/api/admin-panel/utilisateurs/ : gestion des comptes (staff uniquement)."""
+
+    def setUp(self):
+        self.staff = User.objects.create_user(username="chef", password="x", is_staff=True)
+        self.cible = User.objects.create_user(username="cible", password="x")
+        self.liste = reverse("admin-utilisateur-list")
+        self.detail = reverse("admin-utilisateur-detail", args=[self.cible.pk])
+
+    def test_non_staff_403(self):
+        self.client.force_authenticate(user=self.cible)
+        self.assertEqual(self.client.get(self.liste).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_staff_liste_les_comptes(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.get(self.liste)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["count"], 2)
+
+    def test_desactiver_un_compte(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.patch(self.detail, {"is_active": False})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.cible.refresh_from_db()
+        self.assertFalse(self.cible.is_active)
+
+    def test_promouvoir_staff(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.patch(self.detail, {"is_staff": True})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.cible.refresh_from_db()
+        self.assertTrue(self.cible.is_staff)
+
+    def test_impossible_de_se_modifier_soi_meme(self):
+        self.client.force_authenticate(user=self.staff)
+        url = reverse("admin-utilisateur-detail", args=[self.staff.pk])
+        resp = self.client.patch(url, {"is_staff": False})
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_staff)
+
+    def test_impossible_de_se_supprimer_soi_meme(self):
+        self.client.force_authenticate(user=self.staff)
+        url = reverse("admin-utilisateur-detail", args=[self.staff.pk])
+        self.assertEqual(self.client.delete(url).status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(User.objects.filter(pk=self.staff.pk).exists())
+
+    def test_staff_non_superuser_ne_touche_pas_un_superuser(self):
+        boss = User.objects.create_superuser(username="boss", password="x")
+        self.client.force_authenticate(user=self.staff)
+        url = reverse("admin-utilisateur-detail", args=[boss.pk])
+        self.assertEqual(self.client.delete(url).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(User.objects.filter(pk=boss.pk).exists())
+
+    def test_supprimer_un_compte(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.delete(self.detail)
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(User.objects.filter(pk=self.cible.pk).exists())
+
+    def test_pas_de_creation_de_compte(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.post(self.liste, {"username": "nouveau", "password": "x"})
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
