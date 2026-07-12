@@ -747,6 +747,7 @@ class LwinProviderTests(TestCase):
 
         # Le référentiel est mis en cache au niveau module : on repart à neuf.
         module_lwin._cache = {"version": None, "refs": [], "idf": {}}
+        module_lwin._langues_ok = True  # mémo du pack fra+eng, remis à neuf
         self.provider = LwinProvider()
         ReferenceLwin.objects.create(
             lwin="1011247", producteur="Château Margaux", pays="France",
@@ -844,18 +845,88 @@ class LwinProviderTests(TestCase):
     def test_aucune_correspondance_est_un_miss(self):
         self.assertIsNone(self.provider.lookup_by_text("Screaming Eagle Napa"))
 
+    @staticmethod
+    def _tsv(*mots_conf) -> bytes:
+        """Fabrique une sortie TSV tesseract minimale [(mot, confiance), ...]."""
+        lignes = ["level\tpage\tblock\tpar\tline\tword\tleft\ttop\twidth\theight\tconf\ttext"]
+        for mot, conf in mots_conf:
+            lignes.append(f"5\t1\t1\t1\t1\t1\t0\t0\t10\t10\t{conf}\t{mot}")
+        return "\n".join(lignes).encode()
+
     @patch("apps.catalog.enrichment.lwin.subprocess.run")
     def test_lookup_by_image_ocr_puis_correspondance(self, mock_run):
         mock_run.return_value = MagicMock(
-            returncode=0, stdout="Chateau Palmer\nMargaux\n1998\n".encode()
+            returncode=0,
+            stdout=self._tsv(("Chateau", 91), ("Palmer", 88), ("Margaux", 90), ("1998", 95)),
         )
         wine = self.provider.lookup_by_image(b"fausse-image", "image/jpeg")
         self.assertIsNotNone(wine)
         self.assertEqual(wine.domaine_nom, "Château Palmer")
         self.assertEqual(wine.millesime, 1998)
-        # L'image est passée telle quelle sur stdin du binaire tesseract.
+        # Octets illisibles par Pillow : repli sur l'image brute, passée sur stdin.
         self.assertEqual(mock_run.call_args.kwargs["input"], b"fausse-image")
-        self.assertIn("tesseract", mock_run.call_args.args[0][0])
+        args = mock_run.call_args.args[0]
+        self.assertIn("tesseract", args[0])
+        self.assertIn("--psm", args)
+        self.assertIn("tsv", args)
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_ocr_illisible_prefere_un_miss_a_un_vin_douteux(self, mock_run):
+        """Une photo illisible fait halluciner à Tesseract des petits mots qui
+        peuvent matcher une référence exotique (« tel » -> « Pa-Tel ») : en
+        mode OCR, un unique token court ne suffit pas à identifier un vin."""
+        ReferenceLwin.objects.create(lwin="2371045", producteur="Maturana", vin="Pa-Tel")
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=self._tsv(("cae", 70), ("tel", 78), ("pit", 68), ("fed", 72)),
+        )
+        self.assertIsNone(self.provider.lookup_by_image(b"img", "image/jpeg"))
+        # La même référence reste trouvable par une saisie humaine.
+        wine = self.provider.lookup_by_text("maturana pa-tel")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Maturana")
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_passe_ocr_a_confiance_moyenne_faible_ecartee_en_bloc(self, mock_run):
+        """Sur une photo illisible, le mode texte épars hallucine des mots à
+        confiance moyenne ~50 : la passe entière doit être écartée, même si
+        un vrai nom s'y glisse."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=self._tsv(("Margaux", 55), ("bers", 48), ("tear", 52), ("fits", 41)),
+        )
+        self.assertIsNone(self.provider.lookup_by_image(b"img", "image/jpeg"))
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_ocr_ecarte_les_mots_de_faible_confiance(self, mock_run):
+        # « Palmer » douteux (conf < 40) : il ne doit pas atteindre la
+        # correspondance floue, sinon n'importe quel bruit d'OCR matcherait.
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout=self._tsv(("Palmer", 12), ("Margaux", 91))
+        )
+        wine = self.provider.lookup_by_image(b"img", "image/jpeg")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Margaux")  # pas Palmer
+
+    def test_variantes_pretraite_et_inverse_les_etiquettes_sombres(self):
+        from PIL import Image
+        from io import BytesIO
+
+        from .enrichment.lwin import _variantes
+
+        def png(couleur) -> bytes:
+            tampon = BytesIO()
+            Image.new("RGB", (200, 100), couleur).save(tampon, "PNG")
+            return tampon.getvalue()
+
+        claire = _variantes(png("ivory"))
+        sombre = _variantes(png("black"))
+        self.assertEqual(len(claire), 1)  # étiquette claire : pas d'inversion
+        self.assertEqual(len(sombre), 2)  # étiquette sombre : + variante inversée
+        # Les variantes sont des PNG pré-traités, pas les octets d'origine.
+        self.assertTrue(all(v.startswith(b"\x89PNG") for v in claire + sombre))
+        # Octets illisibles : repli sur l'image brute.
+        self.assertEqual(_variantes(b"pas-une-image"), [b"pas-une-image"])
 
     @patch("apps.catalog.enrichment.lwin.subprocess.run")
     def test_tesseract_absent_est_un_miss(self, mock_run):
@@ -869,15 +940,17 @@ class LwinProviderTests(TestCase):
 
     @patch("apps.catalog.enrichment.lwin.subprocess.run")
     def test_ocr_replie_sur_la_langue_par_defaut(self, mock_run):
-        # Pack fra absent : 1er essai en échec, 2e essai sans -l réussit.
+        # Pack fra absent : 1er essai en échec, puis toutes les passes suivantes
+        # repartent sans -l (mémo module), sans nouvel essai voué à l'échec.
+        ok = MagicMock(returncode=0, stdout=self._tsv(("Chateau", 90), ("Palmer", 90), ("1998", 95)))
         mock_run.side_effect = [
             MagicMock(returncode=1, stderr=b"Error opening data file fra"),
-            MagicMock(returncode=0, stdout=b"Chateau Palmer 1998"),
+            ok, ok,
         ]
         wine = self.provider.lookup_by_image(b"img", "image/jpeg")
         self.assertIsNotNone(wine)
-        self.assertEqual(mock_run.call_count, 2)
-        self.assertNotIn("-l", mock_run.call_args.args[0])
+        for appel in mock_run.call_args_list[1:]:
+            self.assertNotIn("-l", appel.args[0])
 
 
 class ImportLwinCommandTests(TestCase):
