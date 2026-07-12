@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useAuth } from './auth'
+import { useToast } from './toast'
+import { useTorch } from './torch'
 import { DataProvider, useData } from './data'
 import Login from './screens/Login'
 import AccueilScreen from './screens/AccueilScreen'
@@ -52,9 +54,38 @@ function TabIcon({ tab, active }: { tab: Tab; active: boolean }) {
   )
 }
 
+/* Icône lampe torche : corps trapézoïdal + manche, rayons quand allumée. */
+function TorchIcon({ on }: { on: boolean }) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 6h6l-1 4h-4L9 6z" />
+      <rect x="10" y="10" width="4" height="9" rx="1" />
+      {on && (
+        <>
+          <path d="M12 1.5V3" />
+          <path d="M6.8 2.6l.7 1.2" />
+          <path d="M17.2 2.6l-.7 1.2" />
+        </>
+      )}
+    </svg>
+  )
+}
+
 function Shell() {
   const { username, isStaff, logout } = useAuth()
   const { loading } = useData()
+  const toast = useToast()
+  const torch = useTorch()
   const [view, setView] = useState<View>('accueil')
   const [seg, setSeg] = useState<Seg>('bouteille')
   const [compte, setCompte] = useState(false)
@@ -67,6 +98,11 @@ function Shell() {
     setSeg(s)
     go('ajouter')
   }
+  const toggleTorche = async () => {
+    if (!(await torch.toggle())) {
+      toast('Lampe torche indisponible sur cet appareil ou ce navigateur.', 'err')
+    }
+  }
 
   return (
     <>
@@ -78,13 +114,25 @@ function Shell() {
           <Logo className="w-[26px] h-[26px]" />
           <span className="font-serif text-[1.4rem] text-ink-bright leading-none">CavaVin</span>
         </div>
-        <button
-          onClick={() => setCompte(true)}
-          aria-label="Mon compte"
-          className="w-[30px] h-[30px] rounded-full bg-gold grid place-items-center text-[13px] font-bold text-ink-dark"
-        >
-          {(username || '?').charAt(0).toUpperCase()}
-        </button>
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={toggleTorche}
+            aria-label={torch.on ? 'Éteindre la lampe torche' : 'Allumer la lampe torche'}
+            aria-pressed={torch.on}
+            className={`w-[30px] h-[30px] rounded-full grid place-items-center border transition ${
+              torch.on ? 'bg-gold text-ink-dark border-gold' : 'border-line text-muted'
+            }`}
+          >
+            <TorchIcon on={torch.on} />
+          </button>
+          <button
+            onClick={() => setCompte(true)}
+            aria-label="Mon compte"
+            className="w-[30px] h-[30px] rounded-full bg-gold grid place-items-center text-[13px] font-bold text-ink-dark"
+          >
+            {(username || '?').charAt(0).toUpperCase()}
+          </button>
+        </div>
       </header>
 
       <main
