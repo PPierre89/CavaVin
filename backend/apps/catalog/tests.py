@@ -746,7 +746,7 @@ class LwinProviderTests(TestCase):
         from .enrichment.lwin import LwinProvider
 
         # Le référentiel est mis en cache au niveau module : on repart à neuf.
-        module_lwin._cache = {"version": None, "refs": [], "idf": {}}
+        module_lwin._cache = {"version": None, "refs": [], "idf": {}, "postings": {}, "vocab": []}
         module_lwin._langues_ok = True  # mémo du pack fra+eng, remis à neuf
         self.provider = LwinProvider()
         ReferenceLwin.objects.create(
@@ -820,6 +820,40 @@ class LwinProviderTests(TestCase):
         wine = self.provider.lookup_by_text("Chateau Palmer Margaux 1998")
         self.assertIsNotNone(wine)
         self.assertEqual(wine.domaine_nom, "Château Palmer")
+
+    def test_ligatures_normalisees(self):
+        """« Cœur » doit se tokeniser en « coeur » (la ligature œ n'a pas de
+        décomposition NFKD) pour correspondre à une saisie sans ligature."""
+        ReferenceLwin.objects.create(
+            lwin="3000001", producteur="Vollereaux", vin="Cœur de Cuvée",
+            pays="France", region="Champagne", couleur="BULLES",
+        )
+        wine = self.provider.lookup_by_text("vollereaux coeur de cuvee 2014")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.cuvee_nom, "Cœur de Cuvée")
+
+    def test_nom_generique_exige_le_producteur(self):
+        """Un vin nommé d'après son seul cépage (« Riesling ») ne doit pas
+        correspondre sans son producteur — sinon « chardonnay » seul
+        renverrait le chardonnay d'un producteur au hasard."""
+        ReferenceLwin.objects.create(
+            lwin="3000002", producteur="Trimbach", vin="Riesling",
+            pays="France", region="Alsace", couleur="BLANC",
+        )
+        self.assertIsNone(self.provider.lookup_by_text("riesling 2020"))
+        self.assertIsNone(self.provider.lookup_by_text("brut rosé"))
+        wine = self.provider.lookup_by_text("trimbach riesling 2020")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Trimbach")
+
+    def test_suggestions_renvoient_les_candidats_proches(self):
+        """Quand plusieurs références restent plausibles, les suivantes sont
+        renvoyées en suggestions (même contrat que wineapi)."""
+        wine = self.provider.lookup_by_text("pavillon rouge du chateau margaux 2016")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.cuvee_nom, "Pavillon Rouge du Château Margaux")
+        # Le grand vin, candidat plausible (« margaux » retrouvé), est suggéré.
+        self.assertTrue(any("Château Margaux" in s for s in wine.raw["suggestions"]))
 
     def test_climat_bourgogne_en_sous_region_departage(self):
         """Sur le dump réel, les vins de Bourgogne d'un même domaine partagent
