@@ -10,7 +10,9 @@ import {
   isValidEan,
   MAX_LABEL_SIZE,
   searchLocalCuvees,
+  searchReferentiel,
   type IdentifiedWine,
+  type SuggestionReferentiel,
 } from '../identification'
 import type { Cuvee } from '../types'
 
@@ -201,6 +203,51 @@ export function VinIdentification({
   // Suggestions locales (mémoire, zéro appel réseau) recalculées à chaque frappe.
   const matches = useMemo(() => searchLocalCuvees(cuvees, q), [cuvees, q])
 
+  // Recherche dynamique dans le référentiel LWIN local (côté serveur, aucun
+  // quota externe) : déclenchée au fil de la frappe avec un debounce, le
+  // dernier mot étant traité comme un préfixe (« marg » -> « Margaux »).
+  const [referentiel, setReferentiel] = useState<SuggestionReferentiel[]>([])
+  useEffect(() => {
+    if (q.length < 2) {
+      setReferentiel([])
+      return
+    }
+    let annule = false
+    const timer = setTimeout(async () => {
+      try {
+        const resultats = await searchReferentiel(q)
+        if (!annule) setReferentiel(resultats)
+      } catch {
+        // Référentiel non importé / réseau : la recherche locale reste servie.
+        if (!annule) setReferentiel([])
+      }
+    }, 300)
+    return () => {
+      annule = true
+      clearTimeout(timer)
+    }
+  }, [q])
+
+  // Écarte les suggestions du référentiel déjà présentes dans le catalogue
+  // local affiché au-dessus (même code LWIN).
+  const suggestionsRef = useMemo(() => {
+    const locaux = new Set(matches.map((c) => c.lwin_code).filter(Boolean))
+    return referentiel.filter((s) => !locaux.has(s.lwin)).slice(0, 4)
+  }, [referentiel, matches])
+
+  /** Sélection d'une suggestion du référentiel : résolution locale par code
+   *  LWIN côté serveur (cascade externe court-circuitée, aucun quota). */
+  function pickReferentiel(s: SuggestionReferentiel) {
+    setSearch('')
+    setFocused(false)
+    run(
+      'text',
+      () => identifyByText(q, s.lwin),
+      'Identifié (référentiel)',
+      'Vin non identifié. Ajoute-le manuellement.',
+    )
+  }
+
   /** Sélection d'une cuvée déjà en base : aucun appel externe, aucun quota. */
   function pickLocal(c: Cuvee) {
     setSearch('')
@@ -324,6 +371,28 @@ export function VinIdentification({
                     <div className="text-ink text-sm truncate">
                       {c.nom}
                       {c.appellation ? ` · ${c.appellation}` : ''}
+                    </div>
+                  </button>
+                ))}
+                {suggestionsRef.length > 0 && (
+                  <div className="px-3.5 pt-2 pb-1 text-[0.68rem] uppercase tracking-wider text-muted border-t border-line/40">
+                    Référentiel
+                  </div>
+                )}
+                {suggestionsRef.map((s) => (
+                  <button
+                    key={s.lwin}
+                    onMouseDown={(e) => (e.preventDefault(), pickReferentiel(s))}
+                    disabled={busy}
+                    className="w-full text-left px-3.5 py-2.5 border-b border-line/40 last:border-b-0 hover:bg-white/5 transition disabled:opacity-60"
+                  >
+                    <div className="text-muted text-[0.78rem] truncate">
+                      {s.producteur}
+                      {s.pays ? ` · ${s.pays}` : ''}
+                    </div>
+                    <div className="text-ink text-sm truncate">
+                      {s.vin || s.producteur}
+                      {s.appellation ? ` · ${s.appellation}` : ''}
                     </div>
                   </button>
                 ))}

@@ -20,15 +20,17 @@ from .enrichment import (
     refresh_wineapi_detail,
     wineapi_detail,
 )
-from .enrichment.normalize import strip_vintage
+from .enrichment.lwin import LwinProvider, rechercher_lwin
+from .enrichment.normalize import guess_couleur, parse_vintage, strip_vintage
 from .ingest import enrich_cuvee_from_wineapi, upsert_cuvee
-from .models import Cepage, Cuvee, Domaine
+from .models import Cepage, Cuvee, Domaine, ReferenceLwin
 from .permissions import LectureOuEcritureSansSuppression
 from .serializers import (
     CepageSerializer,
     CuveeSerializer,
     DomaineSerializer,
     IdentifierVinSerializer,
+    RechercheVinsSerializer,
     ScanCodeBarresSerializer,
     ScanEtiquetteSerializer,
 )
@@ -327,6 +329,20 @@ class IdentifierVinView(APIView):
         serializer.is_valid(raise_exception=True)
         query = serializer.validated_data["query"]
 
+        # --- Sélection d'une suggestion de la recherche dynamique ---
+        # Le code LWIN désigne la référence sans ambiguïté : résolution locale
+        # directe, aucun appel externe, aucun quota. Code inconnu (référentiel
+        # ré-importé…) : on retombe sur le flux normal.
+        code_lwin = serializer.validated_data.get("lwin", "")
+        if code_lwin:
+            reference = ReferenceLwin.objects.filter(lwin=code_lwin).first()
+            if reference is not None:
+                wine = LwinProvider()._to_normalized(
+                    reference, confiance=1.0, millesime=parse_vintage(query)
+                )
+                cuvee, created = upsert_cuvee(wine)
+                return _enriched_response(wine, cuvee, created)
+
         # --- Cache local : correspondance sur le nom (millésime retiré) ---
         # wineapi stocke le nom sans millésime ; on aligne la requête pour que
         # 'Chateau Petrus 2015' retombe sur la cuvée 'Chateau Petrus' déjà en base.
@@ -354,6 +370,41 @@ class IdentifierVinView(APIView):
             {"source": None, "detail": "Vin non identifié"},
             status=status.HTTP_404_NOT_FOUND,
         )
+
+
+class RechercheVinsView(APIView):
+    """
+    Recherche dynamique (autocomplétion) dans le référentiel LWIN local.
+
+    `GET /api/recherche-vins/?q=...` — pensé pour être appelé au fil de la
+    frappe (debounce côté client) : 100 % local (aucun quota externe), le
+    dernier mot est traité comme un préfixe (« marg » -> « Margaux »), la
+    requête est comprise sémantiquement (millésime extrait, couleur mentionnée
+    appliquée en filtre : « palmer rouge 2015 »), et la tolérance aux fautes
+    de frappe est celle de la correspondance LWIN.
+
+    Réponse : `{"resultats": [{lwin, libelle, producteur, vin, appellation,
+    region, pays, couleur, millesime}]}` — sélectionner un résultat côté
+    client revient à appeler `identifier-vin` avec son code `lwin`.
+    """
+
+    serializer_class = RechercheVinsSerializer
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "recherche"
+
+    def get(self, request):
+        q = (request.query_params.get("q") or "").strip()
+        if len(q) < 2:
+            return Response({"resultats": []})
+
+        # Compréhension de la requête : millésime et couleur sont extraits et
+        # appliqués (filtre couleur, millésime renvoyé pour pré-remplir).
+        millesime = parse_vintage(q)
+        couleur = guess_couleur(q)
+        resultats = rechercher_lwin(q, limite=6, couleur=couleur if couleur != "AUTRE" else None)
+        for r in resultats:
+            r["millesime"] = millesime
+        return Response({"resultats": resultats})
 
 
 class ScanEtiquetteView(APIView):

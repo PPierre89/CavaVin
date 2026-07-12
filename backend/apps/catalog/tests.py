@@ -305,6 +305,93 @@ class IdentifierVinViewTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
 
+class IdentifierVinLwinTests(APITestCase):
+    """POST /api/identifier-vin/ avec un code `lwin` : résolution locale directe
+    (sélection d'une suggestion de la recherche dynamique), sans cascade externe."""
+
+    def setUp(self):
+        from .enrichment import lwin as module_lwin
+
+        cache.clear()
+        module_lwin._cache = {"version": None, "refs": [], "idf": {}, "postings": {}, "vocab": []}
+        self.url = reverse("identifier-vin")
+        self.client.force_authenticate(User.objects.create_user("alice", password="x"))
+        ReferenceLwin.objects.create(
+            lwin="1011248", producteur="Château Palmer", pays="France",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+        )
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_selection_lwin_court_circuite_la_cascade(self, mock_providers):
+        resp = self.client.post(self.url, {"query": "Château Palmer 1998", "lwin": "1011248"})
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["source"], "lwin")
+        self.assertEqual(resp.data["millesime"], 1998)
+        self.assertEqual(resp.data["cuvee"]["lwin_code"], "1011248")
+        self.assertEqual(resp.data["cuvee"]["couleur"], "ROUGE")
+        mock_providers.assert_not_called()  # aucun provider externe sollicité
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_lwin_inconnu_retombe_sur_la_cascade(self, mock_providers):
+        # Code périmé (référentiel ré-importé…) : flux normal, ici échec total.
+        mock_providers.return_value = [_FakeProvider(wine=None)]
+        resp = self.client.post(self.url, {"query": "Vin fantôme", "lwin": "9999999"})
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class RechercheVinsViewTests(APITestCase):
+    """GET /api/recherche-vins/ : autocomplétion locale sur le référentiel LWIN
+    (préfixe, extraction millésime/couleur, requêtes trop vagues)."""
+
+    def setUp(self):
+        from .enrichment import lwin as module_lwin
+
+        cache.clear()
+        module_lwin._cache = {"version": None, "refs": [], "idf": {}, "postings": {}, "vocab": []}
+        self.url = reverse("recherche-vins")
+        ReferenceLwin.objects.create(
+            lwin="1011247", producteur="Château Margaux", pays="France",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+        )
+        ReferenceLwin.objects.create(
+            lwin="1011248", producteur="Château Palmer", pays="France",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+        )
+        ReferenceLwin.objects.create(
+            lwin="1055555", producteur="Bollinger", vin="Grande Année",
+            pays="France", region="Champagne", couleur="BULLES",
+        )
+
+    def test_prefixe_au_fil_de_la_frappe(self):
+        resp = self.client.get(self.url, {"q": "chateau marg"})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        lwins = [r["lwin"] for r in resp.data["resultats"]]
+        self.assertIn("1011247", lwins)  # « marg » préfixe « margaux »
+        premier = resp.data["resultats"][0]
+        self.assertEqual(premier["libelle"], "Château Margaux (Margaux)")
+        self.assertEqual(premier["couleur"], "ROUGE")
+
+    def test_millesime_extrait_et_couleur_filtree(self):
+        resp = self.client.get(self.url, {"q": "palmer rouge 1998"})
+        self.assertEqual(resp.data["resultats"][0]["millesime"], 1998)
+        # « palmer blanc » : la couleur mentionnée contredit la référence (ROUGE).
+        resp = self.client.get(self.url, {"q": "palmer blanc"})
+        self.assertEqual(resp.data["resultats"], [])
+
+    def test_requete_trop_courte_ou_trop_vague(self):
+        self.assertEqual(self.client.get(self.url, {"q": "m"}).data["resultats"], [])
+        self.assertEqual(self.client.get(self.url).data["resultats"], [])
+        # Que des mots génériques : rien d'identifiant.
+        self.assertEqual(self.client.get(self.url, {"q": "grande annee"}).data["resultats"], [])
+
+    def test_accessible_sans_authentification(self):
+        # Le référentiel est public en lecture, comme le reste du catalogue.
+        resp = self.client.get(self.url, {"q": "bollinger grande annee"})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["resultats"][0]["lwin"], "1055555")
+
+
 class ScanEtiquetteViewTests(APITestCase):
     """US 02/03 — POST /api/scan-etiquette/ : upload validé, cascade image, échec."""
 
