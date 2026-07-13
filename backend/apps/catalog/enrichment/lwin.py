@@ -612,6 +612,9 @@ class LwinProvider(EnrichmentProvider):
             millesime=millesime,
             source=self.name,
             reference_externe_id="",  # source locale : rien à re-synchroniser
+            # Confiance = score de correspondance floue : un match faible ne doit
+            # pas primer sur une autre source lors de la consolidation.
+            confiance=round(confiance, 2),
             raw={
                 "confidence": round(confiance, 2),
                 "auto_added": False,

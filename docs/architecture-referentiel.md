@@ -292,9 +292,15 @@ respecte les conventions (`makemigrations` commité, tests, commits conventionne
   qu'aucune source ne contredit ; les cépages (M2M) restent gérés par
   `enrich_cuvee_from_wineapi` (arbitrage inter-canaux à affiner).
 
-- **Phase 3 — LWIN comme canal du référentiel (refactor).**
-  Relier `ReferenceLwin` aux `Cuvee` (clé `lwin`), déverser les identités LWIN en
-  observations lors du matching, réconcilier. → traite D4.
+- **Phase 3 — LWIN comme canal du référentiel (refactor). ✅ *Faite.***
+  Le code LWIN devient une **identité canonique** de la cuvée : clé de
+  déduplication (entre relevés LWIN et avec les cuvées wineapi qui portent un
+  `lwinCode`) et contrainte d'unicité partielle sur `Cuvee.lwin_code` (migration
+  `0011`, avec dédoublonnage préalable). Le provider LWIN transmet son **score de
+  correspondance floue** comme confiance du relevé (`NormalizedWine.confiance`),
+  au lieu du défaut de canal — un match faible ne prime plus à la consolidation.
+  `lwin_code` est posé à la création (garde-fou d'unicité) et sorti des champs
+  enrichis/consolidés (identité, pas attribut). → traite D4.
 
 - **Phase 4 — `MillesimeReference` (feat).**
   Extraire `apogee.MILLESIMES` en table sourçable ; seed = valeurs actuelles. →

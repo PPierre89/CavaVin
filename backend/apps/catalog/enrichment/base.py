@@ -30,6 +30,10 @@ class NormalizedWine:
     code_barres: str = ""
     source: str = ""  # nom du fournisseur ayant répondu
     reference_externe_id: str = ""
+    # Confiance propre à CE relevé (0 à 1), quand le fournisseur sait la qualifier
+    # (ex: score de correspondance floue LWIN). None => la confiance a priori du
+    # canal s'applique (cf. ingest._confiance_pour). Alimente la consolidation.
+    confiance: float | None = None
     raw: dict = field(default_factory=dict)
 
 

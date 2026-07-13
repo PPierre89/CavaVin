@@ -424,6 +424,82 @@ class ConsolidationTests(TestCase):
         self.assertEqual(self.cuvee.region, "Bordeaux")
 
 
+class LwinCanalTests(TestCase):
+    """Phase 3 : le code LWIN comme identité canonique + confiance du relevé."""
+
+    def _wine_lwin(self, lwin, *, producteur="Dom", vin="C", confiance=0.9):
+        detail = {
+            "name": vin, "winery": {"name": producteur},
+            "region": {"name": "Bordeaux", "country": "France"},
+            "lwinCode": lwin,
+        }
+        return NormalizedWine(
+            domaine_nom=producteur, cuvee_nom=vin, couleur="ROUGE",
+            source="lwin", confiance=confiance, raw={"wineapi_detail": detail},
+        )
+
+    def test_reconciliation_par_code_lwin(self):
+        """Deux relevés LWIN du même vin convergent vers une seule cuvée."""
+        _, created1 = upsert_cuvee(self._wine_lwin("1234567890123456"))
+        cuvee, created2 = upsert_cuvee(
+            self._wine_lwin("1234567890123456", vin="Nom OCR différent")
+        )
+        self.assertTrue(created1)
+        self.assertFalse(created2)
+        self.assertEqual(Cuvee.objects.filter(lwin_code="1234567890123456").count(), 1)
+
+    def test_lwin_reconcilie_avec_une_cuvee_wineapi(self):
+        """Une cuvée créée par wineapi (portant un code LWIN) est retrouvée par LWIN."""
+        detail = {"id": 9, "lwinCode": "9999999999999999", "region": {"name": "Bordeaux"}}
+        upsert_cuvee(NormalizedWine(
+            domaine_nom="Dom", cuvee_nom="C", couleur="ROUGE",
+            reference_externe_id="wine-9", source="wineapi",
+            raw={"wineapi_detail": detail},
+        ))
+        _, created = upsert_cuvee(self._wine_lwin("9999999999999999"))
+        self.assertFalse(created)  # réconciliée, pas dupliquée
+        self.assertEqual(Cuvee.objects.filter(lwin_code="9999999999999999").count(), 1)
+
+    def test_contrainte_unicite_lwin_code(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        Cuvee.objects.create(domaine=domaine, nom="A", couleur="ROUGE", lwin_code="1111111111111111")
+        with self.assertRaises(IntegrityError):
+            Cuvee.objects.create(domaine=domaine, nom="B", couleur="ROUGE", lwin_code="1111111111111111")
+
+    def test_confiance_du_releve_lwin_transmise_a_l_observation(self):
+        """Un match LWIN faible pèse moins qu'un canal a priori fiable."""
+        cuvee, _ = upsert_cuvee(self._wine_lwin("2222222222222222", confiance=0.55))
+        obs = cuvee.observations.get(canal="lwin")
+        self.assertEqual(float(obs.confiance), 0.55)  # score réel, pas le défaut 0.95
+
+    def test_code_lwin_partage_par_deux_vins_distincts_ne_plante_pas(self):
+        """Garde-fou : deux id wineapi portant le même code LWIN ne violent pas
+        l'unicité — le second est créé sans code LWIN plutôt que de faire échouer
+        le scan."""
+        def wine(ref):
+            return NormalizedWine(
+                domaine_nom="Dom", cuvee_nom=f"C-{ref}", couleur="ROUGE",
+                reference_externe_id=ref, source="wineapi",
+                raw={"wineapi_detail": {"id": ref, "lwinCode": "5555555555555555"}},
+            )
+        _, c1 = upsert_cuvee(wine("wine-a"))
+        _, c2 = upsert_cuvee(wine("wine-b"))
+        self.assertTrue(c1)
+        self.assertTrue(c2)  # créé (vin distinct), sans code LWIN
+        self.assertEqual(Cuvee.objects.filter(lwin_code="5555555555555555").count(), 1)
+        self.assertEqual(Cuvee.objects.get(reference_externe_id="wine-b").lwin_code, "")
+
+    def test_match_lwin_faible_ne_prime_pas_sur_wineapi(self):
+        """La consolidation profil départage par confiance : wineapi > LWIN faible."""
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="C", couleur="ROUGE")
+        enregistrer_observation(cuvee, canal="lwin", champs={"region": "Faux"}, confiance=0.50)
+        enregistrer_observation(cuvee, canal="wineapi", champs={"region": "Bordeaux"}, confiance=0.70)
+        consolider(cuvee)
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.region, "Bordeaux")
+
+
 class DedupIdentiteMigrationTests(TransactionTestCase):
     """Migration 0008 : dédoublonnage des identités avant pose des contraintes.
 

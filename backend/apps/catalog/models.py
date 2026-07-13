@@ -120,6 +120,14 @@ class Cuvee(models.Model):
                 condition=~models.Q(reference_externe_id=""),
                 name="unique_cuvee_reference_externe",
             ),
+            # Le code LWIN (Liv-ex) est une identité de vin canonique : il
+            # réconcilie les relevés LWIN entre eux et avec les autres canaux
+            # (cf. docs/architecture-referentiel.md, Phase 3 / D4).
+            models.UniqueConstraint(
+                fields=["lwin_code"],
+                condition=~models.Q(lwin_code=""),
+                name="unique_cuvee_lwin_code",
+            ),
         ]
 
     def __str__(self):

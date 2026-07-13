@@ -9,9 +9,12 @@ from .enrichment import NormalizedWine
 from .models import Cepage, Cuvee, Domaine, SourceObservation
 
 # Champs de la cuvée alimentés par l'enrichissement wineapi (hors cépages M2M).
+# `lwin_code` en est exclu : c'est une identité canonique (clé de déduplication,
+# contrainte unique), posée une fois à la création par ``upsert_cuvee`` — pas un
+# attribut ré-écrit à chaque enrichissement (au risque de violer l'unicité).
 _ENRICH_FIELDS = (
     "region", "pays", "classification", "description", "elaborate", "corps",
-    "acidite", "degre_alcool", "image_url", "lwin_code", "note_moyenne",
+    "acidite", "degre_alcool", "image_url", "note_moyenne",
     "nb_notes", "prix_min", "prix_max", "devise", "accords", "scores",
     "prix_marchands",
 )
@@ -76,8 +79,12 @@ def _observation_depuis_wine(cuvee: Cuvee, wine: NormalizedWine) -> None:
     detail = wine.raw.get("wineapi_detail")
     if detail:
         champs.update(wine_profile.normalize_detail(detail))
+    # Confiance propre au relevé si le canal la qualifie (ex: score LWIN), bornée
+    # à 1 ; sinon la confiance a priori du canal s'applique.
+    confiance = None if wine.confiance is None else min(1.0, max(0.0, wine.confiance))
     enregistrer_observation(
-        cuvee, canal=wine.source, payload_brut=wine.raw, champs=champs
+        cuvee, canal=wine.source, payload_brut=wine.raw, champs=champs,
+        confiance=confiance,
     )
 
 
@@ -196,7 +203,8 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
     Clé de déduplication, par ordre de priorité :
       1. code-barres  (chemin US 01)
       2. référence externe wineapi  (chemin US 04)
-      3. (domaine, nom)  (dernier recours)
+      3. code LWIN  (réconcilie les relevés LWIN entre eux et avec les autres canaux)
+      4. (domaine, nom)  (dernier recours)
 
     Si le vin porte un détail wineapi (``raw["wineapi_detail"]``), la cuvée est
     enrichie et persistée dans la foulée (corps, notes, prix, accords, avis...).
@@ -206,19 +214,33 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
 
     domaine = _domaine_pour(wine.domaine_nom)
 
+    detail = wine.raw.get("wineapi_detail")
+    lwin_code = (detail or {}).get("lwinCode") or ""
+
+    # Garde-fou d'unicité : deux vins distincts (ex: deux id wineapi) peuvent, de
+    # façon exceptionnelle, porter le même code LWIN. Le premier à le revendiquer
+    # le garde ; les suivants restent sans code LWIN plutôt que de violer la
+    # contrainte (et de faire échouer le scan). Ne concerne pas la réconciliation
+    # LWIN pure, qui retrouve la cuvée existante par ce même code.
+    if lwin_code and Cuvee.objects.filter(lwin_code=lwin_code).exists():
+        lwin_code_creation = ""
+    else:
+        lwin_code_creation = lwin_code
+
     if wine.code_barres:
         lookup = {"code_barres": wine.code_barres}
     elif wine.reference_externe_id:
         lookup = {"reference_externe_id": wine.reference_externe_id}
+    elif lwin_code:
+        lookup = {"lwin_code": lwin_code}
     else:
         lookup = {"domaine": domaine, "nom": wine.cuvee_nom}
 
     # filter().first() plutôt que get_or_create : la clé de repli (domaine, nom)
     # n'a pas de contrainte unique, et get_or_create lèverait
     # MultipleObjectsReturned (donc 500 sur tous les scans suivants) si un doublon
-    # historique subsistait. (Les clés fortes code-barres / référence externe sont
-    # désormais contraintes uniques, cf. Phase 0.)
-    detail = wine.raw.get("wineapi_detail")
+    # historique subsistait. (Les clés fortes code-barres / référence externe /
+    # code LWIN sont désormais contraintes uniques, cf. Phases 0 et 3.)
     cuvee = Cuvee.objects.filter(**lookup).order_by("pk").first()
     created = cuvee is None
     if created:
@@ -229,6 +251,9 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
             appellation=wine.appellation,
             code_barres=wine.code_barres,
             reference_externe_id=wine.reference_externe_id,
+            # Renseigné dès la création pour que la réconciliation par code LWIN
+            # fonctionne au relevé suivant, sans attendre la consolidation.
+            lwin_code=lwin_code_creation,
         )
         if wine.cepages:
             cepages = [Cepage.objects.get_or_create(nom=nom)[0] for nom in wine.cepages]

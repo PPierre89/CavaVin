@@ -27,9 +27,11 @@ from __future__ import annotations
 from .models import Cuvee, SourceObservation
 
 # Champs de profil (stables) : arbitrés à la confiance, puis à la récence.
+# `lwin_code` est volontairement absent : c'est une identité canonique gérée par
+# ``ingest`` (clé de déduplication, contrainte unique), pas un champ arbitré.
 _CHAMPS_PROFIL = (
     "region", "pays", "classification", "description", "elaborate", "corps",
-    "acidite", "degre_alcool", "image_url", "lwin_code",
+    "acidite", "degre_alcool", "image_url",
 )
 # Champs de marché (volatils) : arbitrés à la récence, puis à la confiance.
 _CHAMPS_MARCHE = (
