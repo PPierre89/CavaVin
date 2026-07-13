@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import models
 
 
@@ -145,3 +147,49 @@ class ReferenceLwin(models.Model):
 
     def __str__(self):
         return f"{self.producteur} - {self.vin}" if self.vin else self.producteur
+
+
+class SourceObservation(models.Model):
+    """Relevé brut d'un canal d'enrichissement pour une cuvée (append-only).
+
+    Chaque hit d'un canal (Open Food Facts, Claude, wineapi, LWIN, scraping…)
+    dépose ici une ligne : le payload brut *tel que renvoyé par le canal* et les
+    champs normalisés qu'il affirme, horodatés et pondérés d'une confiance. On
+    n'écrase jamais une observation : l'historique complet reste disponible pour
+    re-consolider la cuvée sans re-solliciter les sources (cf.
+    docs/architecture-referentiel.md, Phase 1). La projection consolidée et
+    l'arbitrage entre observations relèvent de la Phase 2.
+    """
+
+    cuvee = models.ForeignKey(
+        Cuvee, on_delete=models.CASCADE, related_name="observations"
+    )
+    canal = models.CharField(
+        max_length=64,
+        db_index=True,
+        help_text="Canal source (ex: wineapi, claude, lwin, openfoodfacts, scrape:...).",
+    )
+    releve_le = models.DateTimeField(auto_now_add=True)
+    confiance = models.DecimalField(
+        max_digits=3,
+        decimal_places=2,
+        default=Decimal("0.50"),
+        help_text="Confiance a priori dans ce relevé (0 à 1), défaut par canal.",
+    )
+    payload_brut = models.JSONField(
+        default=dict, blank=True, help_text="Réponse brute du canal, telle quelle."
+    )
+    champs = models.JSONField(
+        default=dict, blank=True, help_text="Champs normalisés affirmés par ce relevé."
+    )
+
+    class Meta:
+        ordering = ["-releve_le"]
+        verbose_name = "observation de source"
+        verbose_name_plural = "observations de source"
+        indexes = [
+            models.Index(fields=["cuvee", "canal"]),
+        ]
+
+    def __str__(self):
+        return f"{self.cuvee} ← {self.canal} ({self.releve_le:%Y-%m-%d})"

@@ -274,10 +274,13 @@ respecte les conventions (`makemigrations` commité, tests, commits conventionne
   scindés et les `Cuvee` en double sur une clé forte (en re-pointant le stock
   privé), puis pose les contraintes. → traite D3.
 
-- **Phase 1 — `SourceObservation` (feat).**
-  Créer la table, faire écrire `ingest` dedans pour **tous** les canaux (le
-  payload brut wineapi actuel devient une observation parmi d'autres).
-  `Cuvee.wineapi_detail` conservé en lecture le temps de la bascule. → traite D1.
+- **Phase 1 — `SourceObservation` (feat). ✅ *Faite.***
+  Table `SourceObservation` (append-only : `cuvee`, `canal`, `releve_le`,
+  `confiance`, `payload_brut`, `champs`). `ingest.upsert_cuvee` y dépose une
+  observation pour **tout** canal (via `NormalizedWine.source`/`raw`) et
+  `ingest.synchroniser_wineapi` en dépose une pour la synchro wineapi
+  manuelle/paresseuse des vues. Confiance a priori par canal (`_CONFIANCE_CANAL`,
+  §5). `Cuvee.wineapi_detail` conservé en lecture le temps de la bascule. → traite D1.
 
 - **Phase 2 — Consolidation + provenance (feat).**
   Introduire `consolidate(cuvee)` + la carte de provenance ; déplacer l'arbitrage

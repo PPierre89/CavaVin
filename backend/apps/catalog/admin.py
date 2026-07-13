@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Cepage, Cuvee, Domaine, ReferenceLwin
+from .models import Cepage, Cuvee, Domaine, ReferenceLwin, SourceObservation
 
 
 @admin.register(Domaine)
@@ -31,6 +31,18 @@ class ReferenceLwinAdmin(admin.ModelAdmin):
     list_display = ["lwin", "producteur", "vin", "region", "pays", "couleur"]
     list_filter = ["couleur", "pays"]
     search_fields = ["lwin", "producteur", "vin", "region"]
+
+
+@admin.register(SourceObservation)
+class SourceObservationAdmin(admin.ModelAdmin):
+    # Historique brut par canal (append-only) : consultation seulement.
+    list_display = ["cuvee", "canal", "confiance", "releve_le"]
+    list_filter = ["canal"]
+    search_fields = ["cuvee__nom", "cuvee__domaine__nom", "canal"]
+    readonly_fields = ["cuvee", "canal", "confiance", "releve_le", "payload_brut", "champs"]
+
+    def has_add_permission(self, request):
+        return False
 
 
 admin.site.site_header = "Cave à Vin - Administration"

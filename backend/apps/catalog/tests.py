@@ -27,8 +27,13 @@ from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.wineapi import WineApiProvider
 from . import apogee, sommellerie, wine_profile
-from .ingest import enrich_cuvee_from_wineapi, upsert_cuvee
-from .models import Cepage, Cuvee, Domaine, ReferenceLwin
+from .ingest import (
+    enregistrer_observation,
+    enrich_cuvee_from_wineapi,
+    synchroniser_wineapi,
+    upsert_cuvee,
+)
+from .models import Cepage, Cuvee, Domaine, ReferenceLwin, SourceObservation
 from .serializers import ScanEtiquetteSerializer
 
 User = get_user_model()
@@ -283,6 +288,64 @@ class UpsertCuveeTests(TestCase):
         self.assertEqual(
             Cuvee.objects.get(code_barres="900").domaine.region, "Bordeaux"
         )
+
+
+class SourceObservationTests(TestCase):
+    """Phase 1 : chaque hit de canal dépose une observation brute (append-only)."""
+
+    def test_upsert_enregistre_une_observation_du_canal(self):
+        w = NormalizedWine(
+            domaine_nom="Dom", cuvee_nom="C", couleur="ROUGE",
+            code_barres="123", source="openfoodfacts",
+            raw={"brands": "Dom", "categories": "Vins"},
+        )
+        cuvee, _ = upsert_cuvee(w)
+        obs = cuvee.observations.get()
+        self.assertEqual(obs.canal, "openfoodfacts")
+        self.assertEqual(obs.payload_brut, {"brands": "Dom", "categories": "Vins"})
+        self.assertEqual(obs.champs["code_barres"], "123")
+        self.assertEqual(obs.champs["couleur"], "ROUGE")
+        self.assertEqual(float(obs.confiance), 0.90)  # défaut du canal OFF
+
+    def test_observations_s_accumulent_sans_ecraser(self):
+        """Deux hits (canaux différents) sur le même vin = deux observations."""
+        cle = {"reference_externe_id": "wine-7"}
+        upsert_cuvee(NormalizedWine(domaine_nom="Dom", cuvee_nom="C", source="claude", **cle))
+        cuvee, _ = upsert_cuvee(
+            NormalizedWine(domaine_nom="Dom", cuvee_nom="C", source="wineapi", **cle)
+        )
+        self.assertEqual(cuvee.observations.count(), 2)
+        self.assertEqual(
+            set(cuvee.observations.values_list("canal", flat=True)),
+            {"claude", "wineapi"},
+        )
+
+    def test_confiance_par_defaut_du_canal(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="C", couleur="ROUGE")
+        obs_lwin = enregistrer_observation(cuvee, canal="lwin")
+        obs_scrape = enregistrer_observation(cuvee, canal="scrape:exemple")
+        obs_inconnu = enregistrer_observation(cuvee, canal="mystere")
+        self.assertEqual(float(obs_lwin.confiance), 0.95)
+        self.assertEqual(float(obs_scrape.confiance), 0.40)  # scraping arbitre en dernier
+        self.assertEqual(float(obs_inconnu.confiance), 0.50)  # défaut
+
+    def test_synchroniser_wineapi_observe_et_projette(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="C", couleur="ROUGE")
+        detail = {"id": 7, "wine": {"name": "C", "region": "Bordeaux"}}
+        synchroniser_wineapi(cuvee, detail)
+        obs = cuvee.observations.get()
+        self.assertEqual(obs.canal, "wineapi")
+        self.assertEqual(obs.payload_brut, detail)
+        cuvee.refresh_from_db()
+        self.assertIsNotNone(cuvee.enrichi_le)  # projection appliquée
+
+    def test_synchroniser_wineapi_sans_detail_n_observe_rien(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="C", couleur="ROUGE")
+        synchroniser_wineapi(cuvee, None)
+        self.assertEqual(cuvee.observations.count(), 0)
 
 
 class DedupIdentiteMigrationTests(TransactionTestCase):

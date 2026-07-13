@@ -22,7 +22,7 @@ from .enrichment import (
 )
 from .enrichment.lwin import LwinProvider, rechercher_lwin
 from .enrichment.normalize import guess_couleur, parse_vintage, strip_vintage
-from .ingest import enrich_cuvee_from_wineapi, upsert_cuvee
+from .ingest import synchroniser_wineapi, upsert_cuvee
 from .models import Cepage, Cuvee, Domaine, ReferenceLwin
 from .permissions import LectureOuEcritureSansSuppression
 from .serializers import (
@@ -234,7 +234,7 @@ class CuveeViewSet(viewsets.ModelViewSet):
         if cuvee.reference_externe_id and cuvee.enrichi_le is None:
             detail = wineapi_detail(cuvee.reference_externe_id)
             if detail:
-                enrich_cuvee_from_wineapi(cuvee, detail)
+                synchroniser_wineapi(cuvee, detail)
         return Response(_build_fiche(cuvee, request.user))
 
     @action(detail=True, methods=["post"])
@@ -261,7 +261,7 @@ class CuveeViewSet(viewsets.ModelViewSet):
         cache.set(cle_cooldown, True, settings.WINEAPI_REFRESH_COOLDOWN)
 
         detail = refresh_wineapi_detail(cuvee.reference_externe_id)
-        enrich_cuvee_from_wineapi(cuvee, detail)
+        synchroniser_wineapi(cuvee, detail)
         return Response(_build_fiche(cuvee, request.user))
 
 
