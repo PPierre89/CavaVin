@@ -85,6 +85,23 @@ def _fusionne_historique_prix(existant, detail: dict, data: dict) -> list[dict]:
     return ordonnee[-_HISTORIQUE_PRIX_MAX:]
 
 
+def _domaine_pour(nom: str) -> Domaine:
+    """Retrouve le domaine (producteur) par son nom, ou le crée.
+
+    Le nom est l'identité canonique d'un producteur. On préfère réutiliser une
+    fiche déjà renseignée avec une région ; à défaut la fiche sans région ; sinon
+    on en crée une (région vide). Corrige le défaut de l'ancien
+    ``get_or_create(nom=…, region="")`` qui scindait un même producteur en deux
+    fiches quand un canal d'enrichissement le (re)créait sans région alors qu'une
+    fiche régionale existait déjà (cf. docs/architecture-referentiel.md, D3).
+    """
+    existant = (
+        Domaine.objects.filter(nom=nom).exclude(region="").order_by("pk").first()
+        or Domaine.objects.filter(nom=nom, region="").order_by("pk").first()
+    )
+    return existant or Domaine.objects.create(nom=nom, region="")
+
+
 @transaction.atomic
 def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
     """
@@ -103,7 +120,7 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
     couleurs_valides = dict(Cuvee.Couleur.choices)
     couleur = wine.couleur if wine.couleur in couleurs_valides else Cuvee.Couleur.AUTRE
 
-    domaine, _ = Domaine.objects.get_or_create(nom=wine.domaine_nom, region="")
+    domaine = _domaine_pour(wine.domaine_nom)
 
     if wine.code_barres:
         lookup = {"code_barres": wine.code_barres}

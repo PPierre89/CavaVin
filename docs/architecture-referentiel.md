@@ -266,11 +266,13 @@ Confiances par défaut suggérées (ajustables) : `lwin 0.95`, `openfoodfacts 0.
 Chaque phase est déployable seule, garde l'API et le comportement actuels, et
 respecte les conventions (`makemigrations` commité, tests, commits conventionnels).
 
-- **Phase 0 — Verrouiller l'identité (fix, faible risque).**
-  Ajouter les contraintes d'unicité canoniques en base + corriger le
-  `get_or_create(region="")` de `ingest` (rattacher au domaine existant quelle
-  que soit sa région). Migration de dédoublonnage des `Domaine`/`Cuvee`
-  existants au passage. → traite D3.
+- **Phase 0 — Verrouiller l'identité (fix, faible risque). ✅ *Faite.***
+  Contraintes d'unicité canoniques partielles sur `Cuvee.code_barres` et
+  `Cuvee.reference_externe_id` ; `ingest` rattache désormais un producteur à sa
+  fiche existante (avec région) au lieu d'en créer une vide (`_domaine_pour`).
+  Migration `0008_dedup_identite_cuvee` : dédoublonne d'abord les `Domaine`
+  scindés et les `Cuvee` en double sur une clé forte (en re-pointant le stock
+  privé), puis pose les contraintes. → traite D3.
 
 - **Phase 1 — `SourceObservation` (feat).**
   Créer la table, faire écrire `ingest` dedans pour **tous** les canaux (le
