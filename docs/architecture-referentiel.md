@@ -310,10 +310,14 @@ respecte les conventions (`makemigrations` commité, tests, commits conventionne
   comme repli hors-ligne ; `Bouteille.fenetre_apogee` injecte
   `MillesimeReference.table()` (mise en cache, invalidée à l'édition). → traite D6.
 
-- **Phase 5 — Cadre scraping (feat, optionnel).**
-  Provider scraping avec confiance basse, limitation de débit, respect CGU/robots,
-  provenance obligatoire — une fois la consolidation en place pour l'arbitrer. →
-  traite D7.
+- **Phase 5 — Cadre scraping (feat, optionnel). ✅ *Faite.***
+  Base `enrichment.scraping.ScrapingProvider` qui **impose** les garde-fous —
+  respect du robots.txt (abstention si injoignable), limitation de débit par
+  hôte, provenance obligatoire `scrape:<slug>` (donc confiance la plus basse,
+  arbitrée en dernier), échecs traités en *miss* silencieux — **désactivée par
+  défaut** (double verrou `SCRAPING_ENABLED` + slug du fournisseur). Aucun site
+  n'est scrapé : le cadre attend un fournisseur concret ciblant une source
+  *autorisée*, qui n'implémente que l'URL et le parsing. → traite D7.
 
 ## 7. Risques & garde-fous
 
@@ -335,6 +339,23 @@ respecte les conventions (`makemigrations` commité, tests, commits conventionne
 
 ---
 
-*Prochaine étape suggérée : valider la **Phase 0** (verrouillage de l'identité),
-qui apporte le plus de valeur immédiate — garantir qu'un vin = une ligne — pour
-le risque le plus faible.*
+## 8. État de la trajectoire
+
+Les six phases sont livrées : le socle visé — **une base unique, sourcée par
+plusieurs canaux, consolidée explicitement avec provenance, et faisant
+autorité** — est en place.
+
+| Phase | Sujet | Diagnostic | État |
+|---|---|---|---|
+| 0 | Verrouillage de l'identité canonique | D3 | ✅ |
+| 1 | `SourceObservation` — brut par canal | D1 | ✅ |
+| 2 | Consolidation explicite + provenance | D2, D5 | ✅ |
+| 3 | LWIN comme identité canonique | D4 | ✅ |
+| 4 | `MillesimeReference` sourçable | D6 | ✅ |
+| 5 | Cadre scraping (base, désactivée) | D7 | ✅ |
+
+**Raffinements restants** (hors trajectoire initiale) : arbitrage inter-canaux
+des **cépages** (encore gérés par `enrich_cuvee_from_wineapi`), exposition
+éventuelle de la **provenance** dans l'API/fiche (aujourd'hui admin seulement),
+et branchement d'un **fournisseur de scraping concret** le jour où une source
+*autorisée* est identifiée.

@@ -26,6 +26,7 @@ from rest_framework.test import APITestCase
 from .enrichment import EnrichmentError, NormalizedWine
 from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
+from .enrichment.scraping import ScrapingProvider
 from .enrichment.wineapi import WineApiProvider
 from . import apogee, sommellerie, wine_profile
 from .consolidation import consolider
@@ -238,6 +239,107 @@ class OpenFoodFactsProviderTests(SimpleTestCase):
         )
         wine = self.provider.lookup_by_barcode("1")
         self.assertEqual(wine.millesime, 2018)
+
+
+class _FakeScrape(ScrapingProvider):
+    """Fournisseur de scraping factice pour exercer le cadre sans réseau."""
+
+    slug = "exemple"
+    contenu = "Château Margaux 2015"
+    fetch_appels = 0
+
+    def url_pour_texte(self, query):
+        return "https://exemple.test/recherche?q=" + query
+
+    def parser_texte(self, contenu, query):
+        if "Margaux" in contenu:
+            return NormalizedWine(
+                domaine_nom="Château Margaux", cuvee_nom="Grand Vin", couleur="ROUGE"
+            )
+        return None
+
+    def _fetch(self, url):  # pas de réseau : contenu canné
+        self.fetch_appels += 1
+        return self.contenu
+
+
+class ScrapingProviderTests(SimpleTestCase):
+    """Phase 5 : le cadre de scraping impose ses garde-fous (D7)."""
+
+    def setUp(self):
+        cache.clear()  # remet à zéro le limiteur de débit.
+        self.provider = _FakeScrape()
+
+    @override_settings(SCRAPING_ENABLED=False)
+    def test_desactive_par_defaut(self):
+        self.assertFalse(self.provider.enabled)
+        self.assertIsNone(self.provider.lookup_by_text("Margaux"))
+        self.assertEqual(self.provider.fetch_appels, 0)  # aucun accès réseau
+
+    @override_settings(SCRAPING_ENABLED=True)
+    def test_slug_vide_reste_inerte(self):
+        # La base nue (sans slug) ne s'active pas, même réglage global à True.
+        self.assertFalse(ScrapingProvider().enabled)
+
+    @override_settings(SCRAPING_ENABLED=True, SCRAPING_RESPECT_ROBOTS=False)
+    def test_provenance_scrape_imposee(self):
+        wine = self.provider.lookup_by_text("Margaux")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.source, "scrape:exemple")  # provenance forcée par le cadre
+
+    @override_settings(SCRAPING_ENABLED=True, SCRAPING_RESPECT_ROBOTS=False)
+    def test_limitation_de_debit(self):
+        self.assertIsNotNone(self.provider.lookup_by_text("Margaux"))
+        # Deuxième requête vers le même hôte dans l'intervalle : bloquée.
+        self.assertIsNone(self.provider.lookup_by_text("Margaux"))
+        self.assertEqual(self.provider.fetch_appels, 1)
+
+    @override_settings(SCRAPING_ENABLED=True, SCRAPING_RESPECT_ROBOTS=True)
+    def test_robots_interdit_bloque_sans_fetch(self):
+        with patch.object(_FakeScrape, "_robots_txt", return_value="User-agent: *\nDisallow: /"):
+            self.assertIsNone(self.provider.lookup_by_text("Margaux"))
+        self.assertEqual(self.provider.fetch_appels, 0)
+
+    @override_settings(SCRAPING_ENABLED=True, SCRAPING_RESPECT_ROBOTS=True)
+    def test_robots_injoignable_abstention(self):
+        with patch.object(_FakeScrape, "_robots_txt", return_value=None):
+            self.assertIsNone(self.provider.lookup_by_text("Margaux"))
+
+    @override_settings(SCRAPING_ENABLED=True, SCRAPING_RESPECT_ROBOTS=True)
+    def test_robots_autorise_laisse_passer(self):
+        with patch.object(_FakeScrape, "_robots_txt", return_value="User-agent: *\nAllow: /"):
+            wine = self.provider.lookup_by_text("Margaux")
+        self.assertEqual(wine.source, "scrape:exemple")
+
+    @override_settings(SCRAPING_ENABLED=True, SCRAPING_RESPECT_ROBOTS=False)
+    def test_echec_reseau_est_un_miss_sans_exception(self):
+        with patch.object(_FakeScrape, "_fetch", return_value=None):
+            self.assertIsNone(self.provider.lookup_by_text("Margaux"))
+
+    @override_settings(SCRAPING_ENABLED=True, SCRAPING_RESPECT_ROBOTS=False)
+    def test_parsing_fragile_ne_leve_pas(self):
+        with patch.object(_FakeScrape, "parser_texte", side_effect=ValueError("front cassé")):
+            self.assertIsNone(self.provider.lookup_by_text("Margaux"))
+
+    _URLOPEN = "apps.catalog.enrichment.scraping.urllib.request.urlopen"
+
+    @override_settings(SCRAPING_RESPECT_ROBOTS=True)
+    def test_robots_txt_absent_404_autorise_tout(self):
+        # Pas de robots.txt (404) => tout est autorisé (chaîne vide, pas None).
+        err = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+        with patch(self._URLOPEN, side_effect=err):
+            self.assertTrue(self.provider._robots_autorise("https://exemple.test/x"))
+
+    @override_settings(SCRAPING_RESPECT_ROBOTS=True)
+    def test_robots_txt_erreur_reseau_donne_abstention(self):
+        with patch(self._URLOPEN, side_effect=urllib.error.URLError("down")):
+            self.assertFalse(self.provider._robots_autorise("https://exemple.test/x"))
+
+    def test_fetch_erreur_reseau_renvoie_none(self):
+        # _fetch réel (non surchargé) : un échec réseau est un miss silencieux.
+        provider = ScrapingProvider()
+        with patch(self._URLOPEN, side_effect=urllib.error.URLError("down")):
+            self.assertIsNone(provider._fetch("https://exemple.test/x"))
 
 
 class UpsertCuveeTests(TestCase):

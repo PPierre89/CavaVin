@@ -254,3 +254,23 @@ TESSERACT_CMD = os.getenv("TESSERACT_CMD", "tesseract")
 # Budget total de l'OCR en secondes (toutes passes tesseract confondues) —
 # même contrainte que ci-dessus : < timeout worker.
 TESSERACT_TIMEOUT = int(os.getenv("TESSERACT_TIMEOUT", "20"))
+
+# --- Cadre de scraping (canal de dernier recours) — DÉSACTIVÉ par défaut ---
+# Aucun site n'est scrapé par défaut : le scraping viole souvent les CGU, casse à
+# chaque évolution d'un front et pose un risque juridique à la redistribution. La
+# base `enrichment.scraping.ScrapingProvider` impose les garde-fous (robots.txt,
+# débit, provenance « scrape:… » de confiance basse) pour qu'un fournisseur
+# concret ciblant une source *autorisée* s'y branche proprement. À activer en
+# connaissance de cause : SCRAPING_ENABLED=True + un fournisseur ayant un slug.
+SCRAPING_ENABLED = os.getenv("SCRAPING_ENABLED", "False") == "True"
+# User-Agent déclaré au site (identifiant + contact, comme le demande OFF).
+SCRAPING_USER_AGENT = os.getenv(
+    "SCRAPING_USER_AGENT", "CaveAVin/0.1 (+https://github.com/; scraping-poli)"
+)
+# Timeout réseau ; < timeout worker.
+SCRAPING_TIMEOUT = int(os.getenv("SCRAPING_TIMEOUT", "8"))
+# Intervalle minimal (secondes) entre deux requêtes vers un même hôte (politesse).
+SCRAPING_MIN_INTERVAL = int(os.getenv("SCRAPING_MIN_INTERVAL", "5"))
+# Respect du robots.txt du site (fortement recommandé — ne désactiver que pour un
+# hôte que l'on contrôle).
+SCRAPING_RESPECT_ROBOTS = os.getenv("SCRAPING_RESPECT_ROBOTS", "True") == "True"
