@@ -187,18 +187,28 @@ def _facteur_cepage(cepages: list[str] | None) -> float:
     return max(facteurs) if facteurs else 1.0
 
 
-def qualite_millesime(region: str | None, millesime: int | None) -> int:
+def qualite_millesime(
+    region: str | None,
+    millesime: int | None,
+    millesimes: dict[str, dict[int, int]] | None = None,
+) -> int:
     """Note de qualité (1 à 5) du millésime pour la région, 3 par défaut.
 
     La région (texte libre) est rattachée à sa grande région viticole via
     `_ALIAS_REGION`. Région ou année inconnue → note neutre (3).
+
+    `millesimes` permet d'injecter la table de qualité des millésimes (la table
+    sourçable `MillesimeReference`, cf. Phase 4). À défaut, on utilise la table
+    intégrée `MILLESIMES` — repli hors-ligne qui garde ce module *pur* et
+    testable sans base de données.
     """
     if not region or not millesime:
         return QUALITE_NEUTRE
+    table = MILLESIMES if millesimes is None else millesimes
     region_norm = _normaliser(region)
     for alias, cle in _ALIAS_REGION.items():
         if alias in region_norm:
-            return MILLESIMES.get(cle, {}).get(millesime, QUALITE_NEUTRE)
+            return table.get(cle, {}).get(millesime, QUALITE_NEUTRE)
     return QUALITE_NEUTRE
 
 
@@ -207,6 +217,7 @@ def fenetre_apogee(
     millesime: int | None,
     cepages: list[str] | None = None,
     region: str | None = None,
+    millesimes: dict[str, dict[int, int]] | None = None,
 ) -> tuple[int | None, int | None]:
     """Estime (année de début, année de fin) d'apogée.
 
@@ -215,6 +226,9 @@ def fenetre_apogee(
     du millésime (repères régionaux). Sans cépage ni région, on retombe sur la
     seule base couleur (rétro-compatible).
 
+    `millesimes` (facultatif) injecte la table de qualité des millésimes ; sinon
+    la table intégrée `MILLESIMES` s'applique (repli hors-ligne).
+
     Renvoie ``(None, None)`` pour un vin non millésimé : sans année de récolte,
     la fenêtre ne peut pas être datée.
     """
@@ -222,7 +236,7 @@ def fenetre_apogee(
         return (None, None)
     debut_offset, fin_offset = POTENTIEL_GARDE.get(couleur, _DEFAUT)
     facteur = _facteur_cepage(cepages)
-    q_debut, q_fin = AJUSTEMENT_MILLESIME[qualite_millesime(region, millesime)]
+    q_debut, q_fin = AJUSTEMENT_MILLESIME[qualite_millesime(region, millesime, millesimes)]
     debut = millesime + round(debut_offset * facteur * q_debut)
     fin = millesime + round(fin_offset * facteur * q_fin)
     # Un ajustement agressif (petit millésime d'un cépage de plaisir) ne doit pas

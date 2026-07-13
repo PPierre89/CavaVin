@@ -18,6 +18,7 @@ from django.test import (
     TransactionTestCase,
     override_settings,
 )
+from django.utils import timezone
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -27,8 +28,21 @@ from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.wineapi import WineApiProvider
 from . import apogee, sommellerie, wine_profile
-from .ingest import enrich_cuvee_from_wineapi, upsert_cuvee
-from .models import Cepage, Cuvee, Domaine, ReferenceLwin
+from .consolidation import consolider
+from .ingest import (
+    enregistrer_observation,
+    enrich_cuvee_from_wineapi,
+    synchroniser_wineapi,
+    upsert_cuvee,
+)
+from .models import (
+    Cepage,
+    Cuvee,
+    Domaine,
+    MillesimeReference,
+    ReferenceLwin,
+    SourceObservation,
+)
 from .serializers import ScanEtiquetteSerializer
 
 User = get_user_model()
@@ -135,6 +149,13 @@ class ApogeeTests(SimpleTestCase):
         self.assertEqual(apogee.qualite_millesime("Californie", 2016), 3)
         self.assertEqual(apogee.qualite_millesime("Bordeaux", 1789), 3)
         self.assertEqual(apogee.qualite_millesime(None, 2016), 3)
+
+    def test_table_millesimes_injectable(self):
+        # Table injectée (ex: MillesimeReference) : prime sur la table intégrée.
+        injectee = {"bordeaux": {2010: 1}}
+        self.assertEqual(apogee.qualite_millesime("Médoc", 2010, injectee), 1)
+        # Année absente de la table injectée -> note neutre.
+        self.assertEqual(apogee.qualite_millesime("Médoc", 2016, injectee), 3)
         self.assertEqual(apogee.qualite_millesime("Bordeaux", None), 3)
 
     def test_cepage_et_millesime_se_combinent(self):
@@ -283,6 +304,265 @@ class UpsertCuveeTests(TestCase):
         self.assertEqual(
             Cuvee.objects.get(code_barres="900").domaine.region, "Bordeaux"
         )
+
+
+class SourceObservationTests(TestCase):
+    """Phase 1 : chaque hit de canal dépose une observation brute (append-only)."""
+
+    def test_upsert_enregistre_une_observation_du_canal(self):
+        w = NormalizedWine(
+            domaine_nom="Dom", cuvee_nom="C", couleur="ROUGE",
+            code_barres="123", source="openfoodfacts",
+            raw={"brands": "Dom", "categories": "Vins"},
+        )
+        cuvee, _ = upsert_cuvee(w)
+        obs = cuvee.observations.get()
+        self.assertEqual(obs.canal, "openfoodfacts")
+        self.assertEqual(obs.payload_brut, {"brands": "Dom", "categories": "Vins"})
+        self.assertEqual(obs.champs["code_barres"], "123")
+        self.assertEqual(obs.champs["couleur"], "ROUGE")
+        self.assertEqual(float(obs.confiance), 0.90)  # défaut du canal OFF
+
+    def test_observations_s_accumulent_sans_ecraser(self):
+        """Deux hits (canaux différents) sur le même vin = deux observations."""
+        cle = {"reference_externe_id": "wine-7"}
+        upsert_cuvee(NormalizedWine(domaine_nom="Dom", cuvee_nom="C", source="claude", **cle))
+        cuvee, _ = upsert_cuvee(
+            NormalizedWine(domaine_nom="Dom", cuvee_nom="C", source="wineapi", **cle)
+        )
+        self.assertEqual(cuvee.observations.count(), 2)
+        self.assertEqual(
+            set(cuvee.observations.values_list("canal", flat=True)),
+            {"claude", "wineapi"},
+        )
+
+    def test_confiance_par_defaut_du_canal(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="C", couleur="ROUGE")
+        obs_lwin = enregistrer_observation(cuvee, canal="lwin")
+        obs_scrape = enregistrer_observation(cuvee, canal="scrape:exemple")
+        obs_inconnu = enregistrer_observation(cuvee, canal="mystere")
+        self.assertEqual(float(obs_lwin.confiance), 0.95)
+        self.assertEqual(float(obs_scrape.confiance), 0.40)  # scraping arbitre en dernier
+        self.assertEqual(float(obs_inconnu.confiance), 0.50)  # défaut
+
+    def test_synchroniser_wineapi_observe_et_projette(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="C", couleur="ROUGE")
+        detail = {"id": 7, "wine": {"name": "C", "region": "Bordeaux"}}
+        synchroniser_wineapi(cuvee, detail)
+        obs = cuvee.observations.get()
+        self.assertEqual(obs.canal, "wineapi")
+        self.assertEqual(obs.payload_brut, detail)
+        cuvee.refresh_from_db()
+        self.assertIsNotNone(cuvee.enrichi_le)  # projection appliquée
+
+    def test_synchroniser_wineapi_sans_detail_n_observe_rien(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="C", couleur="ROUGE")
+        synchroniser_wineapi(cuvee, None)
+        self.assertEqual(cuvee.observations.count(), 0)
+
+
+class ConsolidationTests(TestCase):
+    """Phase 2 : arbitrage des observations en fiche de vérité + provenance."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Dom")
+        self.cuvee = Cuvee.objects.create(domaine=self.domaine, nom="C", couleur="ROUGE")
+
+    def test_profil_prend_la_source_la_plus_fiable(self):
+        """Pour un champ de profil, la confiance prime (pas la récence)."""
+        # Relevé récent mais peu fiable (scraping) vs relevé plus ancien mais fiable (lwin).
+        enregistrer_observation(
+            self.cuvee, canal="scrape:x", champs={"region": "Faux"}, confiance=0.40
+        )
+        enregistrer_observation(
+            self.cuvee, canal="lwin", champs={"region": "Bordeaux"}, confiance=0.95
+        )
+        consolider(self.cuvee)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.region, "Bordeaux")
+        self.assertEqual(self.cuvee.provenance["region"]["canal"], "lwin")
+
+    def test_marche_prend_le_releve_le_plus_recent(self):
+        """Pour un champ de marché, la récence prime (même si moins fiable)."""
+        ancien = enregistrer_observation(
+            self.cuvee, canal="wineapi", champs={"prix_min": 20}, confiance=0.70
+        )
+        recent = enregistrer_observation(
+            self.cuvee, canal="scrape:x", champs={"prix_min": 35}, confiance=0.40
+        )
+        # Force un ordre temporel déterministe.
+        SourceObservation.objects.filter(pk=ancien.pk).update(
+            releve_le=timezone.now() - timezone.timedelta(days=30)
+        )
+        consolider(self.cuvee)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.prix_min, 35)
+        self.assertEqual(self.cuvee.provenance["prix_min"]["canal"], "scrape:x")
+
+    def test_ne_supprime_pas_une_valeur_qu_aucune_source_ne_contredit(self):
+        """Une valeur héritée reste si aucune observation ne l'affirme/contredit."""
+        self.cuvee.description = "Hérité"
+        self.cuvee.save()
+        enregistrer_observation(self.cuvee, canal="lwin", champs={"region": "Bordeaux"})
+        consolider(self.cuvee)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.description, "Hérité")  # préservée
+
+    def test_sans_observation_cuvee_inchangee(self):
+        avant = self.cuvee.provenance
+        consolider(self.cuvee)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.provenance, avant)
+
+    def test_upsert_consolide_et_renseigne_la_provenance(self):
+        detail = {"id": 7, "region": {"name": "Bordeaux"}, "description": "Un beau vin"}
+        wine = NormalizedWine(
+            domaine_nom="Dom", cuvee_nom="C2", couleur="ROUGE",
+            reference_externe_id="wine-7", source="wineapi",
+            raw={"wineapi_detail": detail},
+        )
+        cuvee, _ = upsert_cuvee(wine)
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.region, "Bordeaux")
+        self.assertEqual(cuvee.provenance["region"]["canal"], "wineapi")
+
+    def test_reconsolider_rejoue_sur_tout_le_referentiel(self):
+        enregistrer_observation(self.cuvee, canal="lwin", champs={"region": "Bordeaux"})
+        # Pas encore consolidée : la commande doit la rattraper.
+        self.assertEqual(self.cuvee.region, "")
+        call_command("reconsolider")
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.region, "Bordeaux")
+
+
+class LwinCanalTests(TestCase):
+    """Phase 3 : le code LWIN comme identité canonique + confiance du relevé."""
+
+    def _wine_lwin(self, lwin, *, producteur="Dom", vin="C", confiance=0.9):
+        detail = {
+            "name": vin, "winery": {"name": producteur},
+            "region": {"name": "Bordeaux", "country": "France"},
+            "lwinCode": lwin,
+        }
+        return NormalizedWine(
+            domaine_nom=producteur, cuvee_nom=vin, couleur="ROUGE",
+            source="lwin", confiance=confiance, raw={"wineapi_detail": detail},
+        )
+
+    def test_reconciliation_par_code_lwin(self):
+        """Deux relevés LWIN du même vin convergent vers une seule cuvée."""
+        _, created1 = upsert_cuvee(self._wine_lwin("1234567890123456"))
+        cuvee, created2 = upsert_cuvee(
+            self._wine_lwin("1234567890123456", vin="Nom OCR différent")
+        )
+        self.assertTrue(created1)
+        self.assertFalse(created2)
+        self.assertEqual(Cuvee.objects.filter(lwin_code="1234567890123456").count(), 1)
+
+    def test_lwin_reconcilie_avec_une_cuvee_wineapi(self):
+        """Une cuvée créée par wineapi (portant un code LWIN) est retrouvée par LWIN."""
+        detail = {"id": 9, "lwinCode": "9999999999999999", "region": {"name": "Bordeaux"}}
+        upsert_cuvee(NormalizedWine(
+            domaine_nom="Dom", cuvee_nom="C", couleur="ROUGE",
+            reference_externe_id="wine-9", source="wineapi",
+            raw={"wineapi_detail": detail},
+        ))
+        _, created = upsert_cuvee(self._wine_lwin("9999999999999999"))
+        self.assertFalse(created)  # réconciliée, pas dupliquée
+        self.assertEqual(Cuvee.objects.filter(lwin_code="9999999999999999").count(), 1)
+
+    def test_contrainte_unicite_lwin_code(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        Cuvee.objects.create(domaine=domaine, nom="A", couleur="ROUGE", lwin_code="1111111111111111")
+        with self.assertRaises(IntegrityError):
+            Cuvee.objects.create(domaine=domaine, nom="B", couleur="ROUGE", lwin_code="1111111111111111")
+
+    def test_confiance_du_releve_lwin_transmise_a_l_observation(self):
+        """Un match LWIN faible pèse moins qu'un canal a priori fiable."""
+        cuvee, _ = upsert_cuvee(self._wine_lwin("2222222222222222", confiance=0.55))
+        obs = cuvee.observations.get(canal="lwin")
+        self.assertEqual(float(obs.confiance), 0.55)  # score réel, pas le défaut 0.95
+
+    def test_code_lwin_partage_par_deux_vins_distincts_ne_plante_pas(self):
+        """Garde-fou : deux id wineapi portant le même code LWIN ne violent pas
+        l'unicité — le second est créé sans code LWIN plutôt que de faire échouer
+        le scan."""
+        def wine(ref):
+            return NormalizedWine(
+                domaine_nom="Dom", cuvee_nom=f"C-{ref}", couleur="ROUGE",
+                reference_externe_id=ref, source="wineapi",
+                raw={"wineapi_detail": {"id": ref, "lwinCode": "5555555555555555"}},
+            )
+        _, c1 = upsert_cuvee(wine("wine-a"))
+        _, c2 = upsert_cuvee(wine("wine-b"))
+        self.assertTrue(c1)
+        self.assertTrue(c2)  # créé (vin distinct), sans code LWIN
+        self.assertEqual(Cuvee.objects.filter(lwin_code="5555555555555555").count(), 1)
+        self.assertEqual(Cuvee.objects.get(reference_externe_id="wine-b").lwin_code, "")
+
+    def test_match_lwin_faible_ne_prime_pas_sur_wineapi(self):
+        """La consolidation profil départage par confiance : wineapi > LWIN faible."""
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="C", couleur="ROUGE")
+        enregistrer_observation(cuvee, canal="lwin", champs={"region": "Faux"}, confiance=0.50)
+        enregistrer_observation(cuvee, canal="wineapi", champs={"region": "Bordeaux"}, confiance=0.70)
+        consolider(cuvee)
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.region, "Bordeaux")
+
+
+class MillesimeReferenceTests(TestCase):
+    """Phase 4 : table des millésimes sourçable, injectée dans la logique pure."""
+
+    def setUp(self):
+        cache.clear()  # la table est mise en cache : on repart propre.
+
+    def test_seed_depuis_la_reference_integree(self):
+        """La migration sème la table depuis apogee.MILLESIMES."""
+        self.assertTrue(
+            MillesimeReference.objects.filter(
+                region_cle="bordeaux", annee=2010, note=5
+            ).exists()
+        )
+
+    def test_table_reflete_la_base(self):
+        MillesimeReference.objects.update_or_create(
+            region_cle="bordeaux", annee=2010, defaults={"note": 2, "source": "manuel"}
+        )
+        self.assertEqual(MillesimeReference.table()["bordeaux"][2010], 2)
+
+    def test_table_repli_sur_la_reference_integree_si_vide(self):
+        MillesimeReference.objects.all().delete()
+        MillesimeReference.vider_cache()
+        self.assertEqual(MillesimeReference.table(), apogee.MILLESIMES)
+
+    def test_correction_admin_invalide_le_cache(self):
+        MillesimeReference.table()  # amorce le cache
+        ref = MillesimeReference.objects.get(region_cle="bordeaux", annee=2010)
+        ref.note = 1
+        ref.save()  # doit vider le cache
+        self.assertEqual(MillesimeReference.table()["bordeaux"][2010], 1)
+
+    def test_bouteille_utilise_la_table_db(self):
+        """La fenêtre d'apogée d'une bouteille suit la table BDD (pas le code)."""
+        domaine = Domaine.objects.create(nom="Ch. Test")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="C", couleur="ROUGE", region="Médoc"
+        )
+        user = User.objects.create_user("bob", password="x")
+        from apps.inventory.models import Bouteille
+
+        bouteille = Bouteille.objects.create(proprietaire=user, cuvee=cuvee, millesime=2010)
+        avant = bouteille.fenetre_apogee()
+        # On abaisse la qualité 2010 du Médoc : la fenêtre doit se resserrer.
+        MillesimeReference.objects.filter(region_cle="bordeaux", annee=2010).update(note=1)
+        MillesimeReference.vider_cache()
+        apres = bouteille.fenetre_apogee()
+        self.assertNotEqual(avant, apres)
+        self.assertLess(apres[1], avant[1])  # grand millésime → petit : fin plus tôt
 
 
 class DedupIdentiteMigrationTests(TransactionTestCase):

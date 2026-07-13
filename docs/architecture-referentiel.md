@@ -274,22 +274,41 @@ respecte les conventions (`makemigrations` commité, tests, commits conventionne
   scindés et les `Cuvee` en double sur une clé forte (en re-pointant le stock
   privé), puis pose les contraintes. → traite D3.
 
-- **Phase 1 — `SourceObservation` (feat).**
-  Créer la table, faire écrire `ingest` dedans pour **tous** les canaux (le
-  payload brut wineapi actuel devient une observation parmi d'autres).
-  `Cuvee.wineapi_detail` conservé en lecture le temps de la bascule. → traite D1.
+- **Phase 1 — `SourceObservation` (feat). ✅ *Faite.***
+  Table `SourceObservation` (append-only : `cuvee`, `canal`, `releve_le`,
+  `confiance`, `payload_brut`, `champs`). `ingest.upsert_cuvee` y dépose une
+  observation pour **tout** canal (via `NormalizedWine.source`/`raw`) et
+  `ingest.synchroniser_wineapi` en dépose une pour la synchro wineapi
+  manuelle/paresseuse des vues. Confiance a priori par canal (`_CONFIANCE_CANAL`,
+  §5). `Cuvee.wineapi_detail` conservé en lecture le temps de la bascule. → traite D1.
 
-- **Phase 2 — Consolidation + provenance (feat).**
-  Introduire `consolidate(cuvee)` + la carte de provenance ; déplacer l'arbitrage
-  hors de `ingest`. Commande `reconsolider`. → traite D2, D5 (partiel).
+- **Phase 2 — Consolidation + provenance (feat). ✅ *Faite.***
+  `consolidation.consolider(cuvee)` arbitre explicitement les observations en
+  fiche de vérité (profil → confiance puis récence ; marché → récence puis
+  confiance) et écrit une carte de provenance `Cuvee.provenance`
+  (`{champ: {canal, date, confiance}}`). Appelée après chaque relevé dans
+  `ingest` ; commande `manage.py reconsolider` pour rejouer en masse. → traite
+  D2, D5 (partiel). *Reste :* la consolidation ne supprime jamais une valeur
+  qu'aucune source ne contredit ; les cépages (M2M) restent gérés par
+  `enrich_cuvee_from_wineapi` (arbitrage inter-canaux à affiner).
 
-- **Phase 3 — LWIN comme canal du référentiel (refactor).**
-  Relier `ReferenceLwin` aux `Cuvee` (clé `lwin`), déverser les identités LWIN en
-  observations lors du matching, réconcilier. → traite D4.
+- **Phase 3 — LWIN comme canal du référentiel (refactor). ✅ *Faite.***
+  Le code LWIN devient une **identité canonique** de la cuvée : clé de
+  déduplication (entre relevés LWIN et avec les cuvées wineapi qui portent un
+  `lwinCode`) et contrainte d'unicité partielle sur `Cuvee.lwin_code` (migration
+  `0011`, avec dédoublonnage préalable). Le provider LWIN transmet son **score de
+  correspondance floue** comme confiance du relevé (`NormalizedWine.confiance`),
+  au lieu du défaut de canal — un match faible ne prime plus à la consolidation.
+  `lwin_code` est posé à la création (garde-fou d'unicité) et sorti des champs
+  enrichis/consolidés (identité, pas attribut). → traite D4.
 
-- **Phase 4 — `MillesimeReference` (feat).**
-  Extraire `apogee.MILLESIMES` en table sourçable ; seed = valeurs actuelles. →
-  traite D6.
+- **Phase 4 — `MillesimeReference` (feat). ✅ *Faite.***
+  Modèle `MillesimeReference` (`region_cle`, `annee`, `note`, `source` ;
+  `unique(region_cle, annee)`), semé depuis `apogee.MILLESIMES` (migration `0012`)
+  et éditable en admin. `apogee` reste **pur** : `qualite_millesime` /
+  `fenetre_apogee` reçoivent la table par injection, avec `apogee.MILLESIMES`
+  comme repli hors-ligne ; `Bouteille.fenetre_apogee` injecte
+  `MillesimeReference.table()` (mise en cache, invalidée à l'édition). → traite D6.
 
 - **Phase 5 — Cadre scraping (feat, optionnel).**
   Provider scraping avec confiance basse, limitation de débit, respect CGU/robots,

@@ -4,16 +4,107 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import wine_profile
+from .consolidation import consolider
 from .enrichment import NormalizedWine
-from .models import Cepage, Cuvee, Domaine
+from .models import Cepage, Cuvee, Domaine, SourceObservation
 
 # Champs de la cuvée alimentés par l'enrichissement wineapi (hors cépages M2M).
+# `lwin_code` en est exclu : c'est une identité canonique (clé de déduplication,
+# contrainte unique), posée une fois à la création par ``upsert_cuvee`` — pas un
+# attribut ré-écrit à chaque enrichissement (au risque de violer l'unicité).
 _ENRICH_FIELDS = (
     "region", "pays", "classification", "description", "elaborate", "corps",
-    "acidite", "degre_alcool", "image_url", "lwin_code", "note_moyenne",
+    "acidite", "degre_alcool", "image_url", "note_moyenne",
     "nb_notes", "prix_min", "prix_max", "devise", "accords", "scores",
     "prix_marchands",
 )
+
+# Confiance a priori par canal (0 à 1), utilisée par la consolidation (Phase 2)
+# pour arbitrer entre relevés. Repères de la revue d'architecture (§5) : LWIN et
+# code-barres = identité forte ; le LLM et wineapi (identité) suivent ; le
+# scraping arbitre en dernier. Ajustables sans migration.
+_CONFIANCE_CANAL = {
+    "lwin": 0.95,
+    "openfoodfacts": 0.90,
+    "claude": 0.75,
+    "wineapi": 0.70,
+}
+_CONFIANCE_DEFAUT = 0.50
+
+
+def _confiance_pour(canal: str) -> float:
+    """Confiance a priori d'un canal. Tout canal de scraping arbitre en dernier."""
+    if canal.startswith("scrape"):
+        return 0.40
+    return _CONFIANCE_CANAL.get(canal, _CONFIANCE_DEFAUT)
+
+
+# Champs d'identité normalisés retenus dans une observation (ce que le relevé
+# affirme du vin, indépendamment du payload brut propre au canal).
+_CHAMPS_IDENTITE = (
+    "domaine_nom", "cuvee_nom", "couleur", "appellation", "cepages",
+    "millesime", "code_barres", "reference_externe_id",
+)
+
+
+def enregistrer_observation(
+    cuvee: Cuvee, *, canal: str, payload_brut: dict | None = None,
+    champs: dict | None = None, confiance: float | None = None,
+) -> SourceObservation:
+    """Dépose un relevé brut d'un canal pour une cuvée (append-only).
+
+    Point d'écriture unique du référentiel côté « sources » : chaque hit de canal
+    y laisse une trace horodatée et pondérée, sans jamais écraser les
+    précédentes. La consolidation (Phase 2) lira ces observations pour arbitrer
+    la fiche.
+    """
+    return SourceObservation.objects.create(
+        cuvee=cuvee,
+        canal=canal or "inconnu",
+        payload_brut=payload_brut or {},
+        champs=champs or {},
+        confiance=confiance if confiance is not None else _confiance_pour(canal),
+    )
+
+
+def _observation_depuis_wine(cuvee: Cuvee, wine: NormalizedWine) -> None:
+    """Enregistre l'observation issue d'un ``NormalizedWine`` (tout canal).
+
+    Les ``champs`` sont rendus auto-descriptifs : identité (couleur, appellation…)
+    complétée, quand le canal porte un détail au format wineapi, par les champs de
+    profil/marché normalisés — de sorte que la consolidation puisse arbitrer cette
+    observation comme n'importe quelle autre.
+    """
+    champs = {c: getattr(wine, c) for c in _CHAMPS_IDENTITE}
+    detail = wine.raw.get("wineapi_detail")
+    if detail:
+        champs.update(wine_profile.normalize_detail(detail))
+    # Confiance propre au relevé si le canal la qualifie (ex: score LWIN), bornée
+    # à 1 ; sinon la confiance a priori du canal s'applique.
+    confiance = None if wine.confiance is None else min(1.0, max(0.0, wine.confiance))
+    enregistrer_observation(
+        cuvee, canal=wine.source, payload_brut=wine.raw, champs=champs,
+        confiance=confiance,
+    )
+
+
+def synchroniser_wineapi(cuvee: Cuvee, detail: dict | None) -> Cuvee:
+    """Projette *et* observe un détail wineapi (synchro manuelle / paresseuse).
+
+    Utilisé par les vues de fiche : contrairement à ``upsert_cuvee`` (qui connaît
+    le vrai canal via ``NormalizedWine.source``), ces chemins re-sollicitent
+    spécifiquement wineapi. On dépose donc une observation « wineapi » en plus de
+    rafraîchir la projection de la cuvée.
+    """
+    if detail:
+        enregistrer_observation(
+            cuvee,
+            canal="wineapi",
+            payload_brut=detail,
+            champs=wine_profile.normalize_detail(detail),
+        )
+    enrich_cuvee_from_wineapi(cuvee, detail)
+    return consolider(cuvee)
 
 
 def enrich_cuvee_from_wineapi(cuvee: Cuvee, detail: dict | None) -> Cuvee:
@@ -112,7 +203,8 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
     Clé de déduplication, par ordre de priorité :
       1. code-barres  (chemin US 01)
       2. référence externe wineapi  (chemin US 04)
-      3. (domaine, nom)  (dernier recours)
+      3. code LWIN  (réconcilie les relevés LWIN entre eux et avec les autres canaux)
+      4. (domaine, nom)  (dernier recours)
 
     Si le vin porte un détail wineapi (``raw["wineapi_detail"]``), la cuvée est
     enrichie et persistée dans la foulée (corps, notes, prix, accords, avis...).
@@ -122,33 +214,55 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
 
     domaine = _domaine_pour(wine.domaine_nom)
 
+    detail = wine.raw.get("wineapi_detail")
+    lwin_code = (detail or {}).get("lwinCode") or ""
+
+    # Garde-fou d'unicité : deux vins distincts (ex: deux id wineapi) peuvent, de
+    # façon exceptionnelle, porter le même code LWIN. Le premier à le revendiquer
+    # le garde ; les suivants restent sans code LWIN plutôt que de violer la
+    # contrainte (et de faire échouer le scan). Ne concerne pas la réconciliation
+    # LWIN pure, qui retrouve la cuvée existante par ce même code.
+    if lwin_code and Cuvee.objects.filter(lwin_code=lwin_code).exists():
+        lwin_code_creation = ""
+    else:
+        lwin_code_creation = lwin_code
+
     if wine.code_barres:
         lookup = {"code_barres": wine.code_barres}
     elif wine.reference_externe_id:
         lookup = {"reference_externe_id": wine.reference_externe_id}
+    elif lwin_code:
+        lookup = {"lwin_code": lwin_code}
     else:
         lookup = {"domaine": domaine, "nom": wine.cuvee_nom}
 
-    # filter().first() plutôt que get_or_create : ces clés n'ont pas de contrainte
-    # unique en base, et get_or_create lèverait MultipleObjectsReturned (donc 500
-    # sur tous les scans suivants) si un doublon existait déjà.
-    detail = wine.raw.get("wineapi_detail")
+    # filter().first() plutôt que get_or_create : la clé de repli (domaine, nom)
+    # n'a pas de contrainte unique, et get_or_create lèverait
+    # MultipleObjectsReturned (donc 500 sur tous les scans suivants) si un doublon
+    # historique subsistait. (Les clés fortes code-barres / référence externe /
+    # code LWIN sont désormais contraintes uniques, cf. Phases 0 et 3.)
     cuvee = Cuvee.objects.filter(**lookup).order_by("pk").first()
-    if cuvee is not None:
-        enrich_cuvee_from_wineapi(cuvee, detail)
-        return cuvee, False
+    created = cuvee is None
+    if created:
+        cuvee = Cuvee.objects.create(
+            domaine=domaine,
+            nom=wine.cuvee_nom,
+            couleur=couleur,
+            appellation=wine.appellation,
+            code_barres=wine.code_barres,
+            reference_externe_id=wine.reference_externe_id,
+            # Renseigné dès la création pour que la réconciliation par code LWIN
+            # fonctionne au relevé suivant, sans attendre la consolidation.
+            lwin_code=lwin_code_creation,
+        )
+        if wine.cepages:
+            cepages = [Cepage.objects.get_or_create(nom=nom)[0] for nom in wine.cepages]
+            cuvee.cepages.set(cepages)
 
-    cuvee = Cuvee.objects.create(
-        domaine=domaine,
-        nom=wine.cuvee_nom,
-        couleur=couleur,
-        appellation=wine.appellation,
-        code_barres=wine.code_barres,
-        reference_externe_id=wine.reference_externe_id,
-    )
-    if wine.cepages:
-        cepages = [Cepage.objects.get_or_create(nom=nom)[0] for nom in wine.cepages]
-        cuvee.cepages.set(cepages)
-
+    # Snapshot wineapi (brut + historique de prix), puis journalisation du relevé
+    # de ce canal, et enfin arbitrage de la fiche consolidée sur l'ensemble des
+    # observations (la consolidation fait autorité sur les champs projetés).
     enrich_cuvee_from_wineapi(cuvee, detail)
-    return cuvee, True
+    _observation_depuis_wine(cuvee, wine)
+    consolider(cuvee)
+    return cuvee, created

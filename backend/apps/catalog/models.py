@@ -1,4 +1,11 @@
+from collections import defaultdict
+from decimal import Decimal
+
+from django.core.cache import cache
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+
+from . import apogee
 
 
 class Domaine(models.Model):
@@ -91,6 +98,13 @@ class Cuvee(models.Model):
         null=True, blank=True, help_text="Réponse brute du dernier GET /wines/{id} wineapi.io."
     )
     enrichi_le = models.DateTimeField(null=True, blank=True, help_text="Dernière synchro wineapi.")
+    # Carte de provenance de la fiche consolidée : pour chaque champ arbitré par
+    # la consolidation (cf. consolidation.py, Phase 2), le canal retenu, sa date
+    # de relevé et sa confiance — {champ: {canal, date, confiance}}. Permet de
+    # savoir d'où vient chaque donnée et de re-arbitrer en cas de conflit.
+    provenance = models.JSONField(
+        default=dict, blank=True, help_text="Provenance par champ {champ: {canal, date, confiance}}."
+    )
 
     class Meta:
         ordering = ["domaine__nom", "nom"]
@@ -110,6 +124,14 @@ class Cuvee(models.Model):
                 fields=["reference_externe_id"],
                 condition=~models.Q(reference_externe_id=""),
                 name="unique_cuvee_reference_externe",
+            ),
+            # Le code LWIN (Liv-ex) est une identité de vin canonique : il
+            # réconcilie les relevés LWIN entre eux et avec les autres canaux
+            # (cf. docs/architecture-referentiel.md, Phase 3 / D4).
+            models.UniqueConstraint(
+                fields=["lwin_code"],
+                condition=~models.Q(lwin_code=""),
+                name="unique_cuvee_lwin_code",
             ),
         ]
 
@@ -145,3 +167,120 @@ class ReferenceLwin(models.Model):
 
     def __str__(self):
         return f"{self.producteur} - {self.vin}" if self.vin else self.producteur
+
+
+class SourceObservation(models.Model):
+    """Relevé brut d'un canal d'enrichissement pour une cuvée (append-only).
+
+    Chaque hit d'un canal (Open Food Facts, Claude, wineapi, LWIN, scraping…)
+    dépose ici une ligne : le payload brut *tel que renvoyé par le canal* et les
+    champs normalisés qu'il affirme, horodatés et pondérés d'une confiance. On
+    n'écrase jamais une observation : l'historique complet reste disponible pour
+    re-consolider la cuvée sans re-solliciter les sources (cf.
+    docs/architecture-referentiel.md, Phase 1). La projection consolidée et
+    l'arbitrage entre observations relèvent de la Phase 2.
+    """
+
+    cuvee = models.ForeignKey(
+        Cuvee, on_delete=models.CASCADE, related_name="observations"
+    )
+    canal = models.CharField(
+        max_length=64,
+        db_index=True,
+        help_text="Canal source (ex: wineapi, claude, lwin, openfoodfacts, scrape:...).",
+    )
+    releve_le = models.DateTimeField(auto_now_add=True)
+    confiance = models.DecimalField(
+        max_digits=3,
+        decimal_places=2,
+        default=Decimal("0.50"),
+        help_text="Confiance a priori dans ce relevé (0 à 1), défaut par canal.",
+    )
+    payload_brut = models.JSONField(
+        default=dict, blank=True, help_text="Réponse brute du canal, telle quelle."
+    )
+    champs = models.JSONField(
+        default=dict, blank=True, help_text="Champs normalisés affirmés par ce relevé."
+    )
+
+    class Meta:
+        ordering = ["-releve_le"]
+        verbose_name = "observation de source"
+        verbose_name_plural = "observations de source"
+        indexes = [
+            models.Index(fields=["cuvee", "canal"]),
+        ]
+
+    def __str__(self):
+        return f"{self.cuvee} ← {self.canal} ({self.releve_le:%Y-%m-%d})"
+
+
+class MillesimeReference(models.Model):
+    """Qualité d'un millésime pour une grande région viticole (note /5).
+
+    Table sourçable extraite de la logique métier (auparavant figée dans
+    ``apogee.MILLESIMES``, cf. docs/architecture-referentiel.md, Phase 4 / D6) :
+    donnée du monde réel qu'un canal (saisie, LLM, scraping de tables de
+    millésimes) peut alimenter et corriger sans redéploiement. La logique
+    d'apogée reste *pure* : elle reçoit la table par injection (``table()``), avec
+    ``apogee.MILLESIMES`` comme repli hors-ligne.
+    """
+
+    # Cache de la table {region_cle: {annee: note}} construite depuis la base.
+    _CACHE_KEY = "millesimes:table"
+    _CACHE_TTL = 60 * 60  # la qualité d'un millésime est quasi statique.
+
+    region_cle = models.CharField(
+        max_length=32,
+        help_text="Grande région viticole normalisée (ex: bordeaux, bourgogne).",
+    )
+    annee = models.PositiveIntegerField()
+    note = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        help_text="Qualité du millésime, de 1 (faible) à 5 (exceptionnel).",
+    )
+    source = models.CharField(
+        max_length=64, default="seed",
+        help_text="Origine de la note (ex: seed, manuel, claude, scrape:...).",
+    )
+
+    class Meta:
+        ordering = ["region_cle", "annee"]
+        verbose_name = "référence millésime"
+        verbose_name_plural = "références millésimes"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["region_cle", "annee"], name="unique_millesime_par_region"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.region_cle} {self.annee} : {self.note}/5"
+
+    @classmethod
+    def table(cls) -> dict[str, dict[int, int]]:
+        """Table `{region_cle: {annee: note}}`, mise en cache.
+
+        Repli sur ``apogee.MILLESIMES`` si la base n'a pas encore été semée, pour
+        rester fonctionnel hors-ligne et sur une installation neuve."""
+        cached = cache.get(cls._CACHE_KEY)
+        if cached is not None:
+            return cached
+        table: dict[str, dict[int, int]] = defaultdict(dict)
+        for ref in cls.objects.all():
+            table[ref.region_cle][ref.annee] = ref.note
+        resultat = dict(table) or apogee.MILLESIMES
+        cache.set(cls._CACHE_KEY, resultat, cls._CACHE_TTL)
+        return resultat
+
+    @classmethod
+    def vider_cache(cls) -> None:
+        cache.delete(cls._CACHE_KEY)
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self.vider_cache()  # une correction est visible sans attendre le TTL.
+
+    def delete(self, *args, **kwargs):
+        super().delete(*args, **kwargs)
+        self.vider_cache()
