@@ -93,6 +93,13 @@ class Cuvee(models.Model):
         null=True, blank=True, help_text="Réponse brute du dernier GET /wines/{id} wineapi.io."
     )
     enrichi_le = models.DateTimeField(null=True, blank=True, help_text="Dernière synchro wineapi.")
+    # Carte de provenance de la fiche consolidée : pour chaque champ arbitré par
+    # la consolidation (cf. consolidation.py, Phase 2), le canal retenu, sa date
+    # de relevé et sa confiance — {champ: {canal, date, confiance}}. Permet de
+    # savoir d'où vient chaque donnée et de re-arbitrer en cas de conflit.
+    provenance = models.JSONField(
+        default=dict, blank=True, help_text="Provenance par champ {champ: {canal, date, confiance}}."
+    )
 
     class Meta:
         ordering = ["domaine__nom", "nom"]

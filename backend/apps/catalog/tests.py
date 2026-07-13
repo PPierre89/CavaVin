@@ -18,6 +18,7 @@ from django.test import (
     TransactionTestCase,
     override_settings,
 )
+from django.utils import timezone
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -27,6 +28,7 @@ from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.wineapi import WineApiProvider
 from . import apogee, sommellerie, wine_profile
+from .consolidation import consolider
 from .ingest import (
     enregistrer_observation,
     enrich_cuvee_from_wineapi,
@@ -346,6 +348,80 @@ class SourceObservationTests(TestCase):
         cuvee = Cuvee.objects.create(domaine=domaine, nom="C", couleur="ROUGE")
         synchroniser_wineapi(cuvee, None)
         self.assertEqual(cuvee.observations.count(), 0)
+
+
+class ConsolidationTests(TestCase):
+    """Phase 2 : arbitrage des observations en fiche de vérité + provenance."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Dom")
+        self.cuvee = Cuvee.objects.create(domaine=self.domaine, nom="C", couleur="ROUGE")
+
+    def test_profil_prend_la_source_la_plus_fiable(self):
+        """Pour un champ de profil, la confiance prime (pas la récence)."""
+        # Relevé récent mais peu fiable (scraping) vs relevé plus ancien mais fiable (lwin).
+        enregistrer_observation(
+            self.cuvee, canal="scrape:x", champs={"region": "Faux"}, confiance=0.40
+        )
+        enregistrer_observation(
+            self.cuvee, canal="lwin", champs={"region": "Bordeaux"}, confiance=0.95
+        )
+        consolider(self.cuvee)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.region, "Bordeaux")
+        self.assertEqual(self.cuvee.provenance["region"]["canal"], "lwin")
+
+    def test_marche_prend_le_releve_le_plus_recent(self):
+        """Pour un champ de marché, la récence prime (même si moins fiable)."""
+        ancien = enregistrer_observation(
+            self.cuvee, canal="wineapi", champs={"prix_min": 20}, confiance=0.70
+        )
+        recent = enregistrer_observation(
+            self.cuvee, canal="scrape:x", champs={"prix_min": 35}, confiance=0.40
+        )
+        # Force un ordre temporel déterministe.
+        SourceObservation.objects.filter(pk=ancien.pk).update(
+            releve_le=timezone.now() - timezone.timedelta(days=30)
+        )
+        consolider(self.cuvee)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.prix_min, 35)
+        self.assertEqual(self.cuvee.provenance["prix_min"]["canal"], "scrape:x")
+
+    def test_ne_supprime_pas_une_valeur_qu_aucune_source_ne_contredit(self):
+        """Une valeur héritée reste si aucune observation ne l'affirme/contredit."""
+        self.cuvee.description = "Hérité"
+        self.cuvee.save()
+        enregistrer_observation(self.cuvee, canal="lwin", champs={"region": "Bordeaux"})
+        consolider(self.cuvee)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.description, "Hérité")  # préservée
+
+    def test_sans_observation_cuvee_inchangee(self):
+        avant = self.cuvee.provenance
+        consolider(self.cuvee)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.provenance, avant)
+
+    def test_upsert_consolide_et_renseigne_la_provenance(self):
+        detail = {"id": 7, "region": {"name": "Bordeaux"}, "description": "Un beau vin"}
+        wine = NormalizedWine(
+            domaine_nom="Dom", cuvee_nom="C2", couleur="ROUGE",
+            reference_externe_id="wine-7", source="wineapi",
+            raw={"wineapi_detail": detail},
+        )
+        cuvee, _ = upsert_cuvee(wine)
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.region, "Bordeaux")
+        self.assertEqual(cuvee.provenance["region"]["canal"], "wineapi")
+
+    def test_reconsolider_rejoue_sur_tout_le_referentiel(self):
+        enregistrer_observation(self.cuvee, canal="lwin", champs={"region": "Bordeaux"})
+        # Pas encore consolidée : la commande doit la rattraper.
+        self.assertEqual(self.cuvee.region, "")
+        call_command("reconsolider")
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.region, "Bordeaux")
 
 
 class DedupIdentiteMigrationTests(TransactionTestCase):

@@ -4,6 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import wine_profile
+from .consolidation import consolider
 from .enrichment import NormalizedWine
 from .models import Cepage, Cuvee, Domaine, SourceObservation
 
@@ -64,8 +65,17 @@ def enregistrer_observation(
 
 
 def _observation_depuis_wine(cuvee: Cuvee, wine: NormalizedWine) -> None:
-    """Enregistre l'observation issue d'un ``NormalizedWine`` (tout canal)."""
+    """Enregistre l'observation issue d'un ``NormalizedWine`` (tout canal).
+
+    Les ``champs`` sont rendus auto-descriptifs : identité (couleur, appellation…)
+    complétée, quand le canal porte un détail au format wineapi, par les champs de
+    profil/marché normalisés — de sorte que la consolidation puisse arbitrer cette
+    observation comme n'importe quelle autre.
+    """
     champs = {c: getattr(wine, c) for c in _CHAMPS_IDENTITE}
+    detail = wine.raw.get("wineapi_detail")
+    if detail:
+        champs.update(wine_profile.normalize_detail(detail))
     enregistrer_observation(
         cuvee, canal=wine.source, payload_brut=wine.raw, champs=champs
     )
@@ -86,7 +96,8 @@ def synchroniser_wineapi(cuvee: Cuvee, detail: dict | None) -> Cuvee:
             payload_brut=detail,
             champs=wine_profile.normalize_detail(detail),
         )
-    return enrich_cuvee_from_wineapi(cuvee, detail)
+    enrich_cuvee_from_wineapi(cuvee, detail)
+    return consolider(cuvee)
 
 
 def enrich_cuvee_from_wineapi(cuvee: Cuvee, detail: dict | None) -> Cuvee:
@@ -209,23 +220,24 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
     # désormais contraintes uniques, cf. Phase 0.)
     detail = wine.raw.get("wineapi_detail")
     cuvee = Cuvee.objects.filter(**lookup).order_by("pk").first()
-    if cuvee is not None:
-        enrich_cuvee_from_wineapi(cuvee, detail)
-        _observation_depuis_wine(cuvee, wine)
-        return cuvee, False
+    created = cuvee is None
+    if created:
+        cuvee = Cuvee.objects.create(
+            domaine=domaine,
+            nom=wine.cuvee_nom,
+            couleur=couleur,
+            appellation=wine.appellation,
+            code_barres=wine.code_barres,
+            reference_externe_id=wine.reference_externe_id,
+        )
+        if wine.cepages:
+            cepages = [Cepage.objects.get_or_create(nom=nom)[0] for nom in wine.cepages]
+            cuvee.cepages.set(cepages)
 
-    cuvee = Cuvee.objects.create(
-        domaine=domaine,
-        nom=wine.cuvee_nom,
-        couleur=couleur,
-        appellation=wine.appellation,
-        code_barres=wine.code_barres,
-        reference_externe_id=wine.reference_externe_id,
-    )
-    if wine.cepages:
-        cepages = [Cepage.objects.get_or_create(nom=nom)[0] for nom in wine.cepages]
-        cuvee.cepages.set(cepages)
-
+    # Snapshot wineapi (brut + historique de prix), puis journalisation du relevé
+    # de ce canal, et enfin arbitrage de la fiche consolidée sur l'ensemble des
+    # observations (la consolidation fait autorité sur les champs projetés).
     enrich_cuvee_from_wineapi(cuvee, detail)
     _observation_depuis_wine(cuvee, wine)
-    return cuvee, True
+    consolider(cuvee)
+    return cuvee, created

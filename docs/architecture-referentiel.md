@@ -282,9 +282,15 @@ respecte les conventions (`makemigrations` commité, tests, commits conventionne
   manuelle/paresseuse des vues. Confiance a priori par canal (`_CONFIANCE_CANAL`,
   §5). `Cuvee.wineapi_detail` conservé en lecture le temps de la bascule. → traite D1.
 
-- **Phase 2 — Consolidation + provenance (feat).**
-  Introduire `consolidate(cuvee)` + la carte de provenance ; déplacer l'arbitrage
-  hors de `ingest`. Commande `reconsolider`. → traite D2, D5 (partiel).
+- **Phase 2 — Consolidation + provenance (feat). ✅ *Faite.***
+  `consolidation.consolider(cuvee)` arbitre explicitement les observations en
+  fiche de vérité (profil → confiance puis récence ; marché → récence puis
+  confiance) et écrit une carte de provenance `Cuvee.provenance`
+  (`{champ: {canal, date, confiance}}`). Appelée après chaque relevé dans
+  `ingest` ; commande `manage.py reconsolider` pour rejouer en masse. → traite
+  D2, D5 (partiel). *Reste :* la consolidation ne supprime jamais une valeur
+  qu'aucune source ne contredit ; les cépages (M2M) restent gérés par
+  `enrich_cuvee_from_wineapi` (arbitrage inter-canaux à affiner).
 
 - **Phase 3 — LWIN comme canal du référentiel (refactor).**
   Relier `ReferenceLwin` aux `Cuvee` (clé `lwin`), déverser les identités LWIN en

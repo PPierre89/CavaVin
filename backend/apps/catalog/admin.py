@@ -21,8 +21,9 @@ class CuveeAdmin(admin.ModelAdmin):
     list_filter = ["couleur"]
     search_fields = ["nom", "domaine__nom", "code_barres"]
     autocomplete_fields = ["domaine", "cepages"]
-    # Snapshot brut wineapi : consultable mais non éditable (alimenté par la synchro).
-    readonly_fields = ["wineapi_detail", "enrichi_le"]
+    # Snapshot brut wineapi + provenance consolidée : consultables mais non
+    # éditables (alimentés par la synchro et la consolidation).
+    readonly_fields = ["wineapi_detail", "enrichi_le", "provenance"]
 
 
 @admin.register(ReferenceLwin)
