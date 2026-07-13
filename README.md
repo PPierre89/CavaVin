@@ -18,7 +18,9 @@ un **conteneur Docker unique** (Django REST + SPA React, SQLite).
   wineapi.io → **OCR local + référentiel LWIN** (repli 100 % gratuit), avec mise en cache.
 - **Fiche vin enrichie** : appellation, cépages, conseil de service (température, carafage),
   profil gustatif, accords mets-vins, prix marché et **historique de prix**.
-- **Fenêtre de dégustation** calculée (à garder / à boire / dépassé) qui pilote un code couleur.
+- **Fenêtre de dégustation** calculée (à garder / à boire / dépassé) qui pilote un code couleur ;
+  estimation affinée par le **cépage** (aptitude à la garde) et la **qualité du millésime** (repères
+  régionaux), la saisie manuelle restant prioritaire.
 - **Cave visuelle** : emplacements en arborescence (armoire → casier → clayette), placement des
   bouteilles case par case en glisser-déposer, jauge de remplissage.
 - **Carnet de dégustation** privé (note /5, commentaire, profil).
@@ -145,5 +147,5 @@ L'image est publiée automatiquement ; le NAS n'a besoin que de `docker-compose.
 
 ## Roadmap
 
-- Recommandation mets-vins enrichie (LLM) et apogée affinée par cépage / qualité du millésime.
+- Recommandation mets-vins enrichie (LLM).
 - Valorisation financière temps réel · partage de cave en lecture seule · mode hors-ligne.

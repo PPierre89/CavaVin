@@ -76,11 +76,17 @@ class Bouteille(models.Model):
 
         La saisie manuelle prime : si au moins une borne est renseignée sur la
         bouteille, on la respecte telle quelle. Sinon on l'estime depuis la
-        couleur de la cuvée et le millésime (base sommelière, cf. apogee.py).
+        couleur de la cuvée et le millésime, affinée par les cépages et la
+        qualité du millésime de la région (base sommelière, cf. apogee.py).
         """
         if self.apogee_debut is not None or self.apogee_fin is not None:
             return (self.apogee_debut, self.apogee_fin)
-        return apogee.fenetre_apogee(self.cuvee.couleur, self.millesime)
+        return apogee.fenetre_apogee(
+            self.cuvee.couleur,
+            self.millesime,
+            cepages=[c.nom for c in self.cuvee.cepages.all()],
+            region=self.cuvee.region,
+        )
 
     @property
     def statut_apogee(self):

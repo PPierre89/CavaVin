@@ -116,6 +116,8 @@ def _build_fiche(cuvee, user):
     # calcule la fenêtre d'apogée effective (saisie manuelle si présente, sinon
     # estimée depuis la couleur) et le statut de dégustation associé.
     annee = date.today().year
+    # Cépages de la cuvée : affinent la fenêtre estimée (aptitude à la garde).
+    cepages = [c.nom for c in cuvee.cepages.all()]
     millesimes = []
     for groupe in (
         bouteilles.filter(quantite__gt=0)
@@ -129,7 +131,9 @@ def _build_fiche(cuvee, user):
     ):
         debut, fin = groupe["apogee_debut"], groupe["apogee_fin"]
         if debut is None and fin is None:
-            debut, fin = apogee.fenetre_apogee(cuvee.couleur, groupe["millesime"])
+            debut, fin = apogee.fenetre_apogee(
+                cuvee.couleur, groupe["millesime"], cepages=cepages, region=cuvee.region
+            )
         groupe["apogee_debut"] = debut
         groupe["apogee_fin"] = fin
         groupe["statut"] = apogee.statut_pour_fenetre(debut, fin, annee)

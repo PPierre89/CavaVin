@@ -201,6 +201,48 @@ class ApogeeStatutTests(APITestCase):
         self.assertEqual(resp.data["apogee_fin_effectif"], 2018)
         self.assertEqual(resp.data["statut"], Bouteille.Statut.DEPASSE)
 
+    def test_cepages_et_region_affinent_la_fenetre_estimee(self):
+        # Cuvée bordelaise à dominante Cabernet Sauvignon, grand millésime 2016 :
+        # la fenêtre estimée est repoussée par rapport à la seule base couleur.
+        from apps.catalog.models import Cepage
+
+        cuvee = Cuvee.objects.create(
+            domaine=self.domaine,
+            nom="Grand Cru",
+            couleur=Cuvee.Couleur.ROUGE,
+            region="Bordeaux",
+        )
+        cuvee.cepages.add(Cepage.objects.create(nom="Cabernet Sauvignon"))
+        bouteille = Bouteille.objects.create(
+            proprietaire=self.user, cuvee=cuvee, millesime=2016, quantite=1
+        )
+        resp = self.client.get(reverse("bouteille-detail", args=[bouteille.pk]))
+        self.assertEqual(resp.data["apogee_debut_effectif"], 2021)
+        self.assertEqual(resp.data["apogee_fin_effectif"], 2038)
+
+    def test_saisie_manuelle_prime_sur_l_affinage(self):
+        # La saisie manuelle continue de primer, même cépage/région renseignés.
+        from apps.catalog.models import Cepage
+
+        cuvee = Cuvee.objects.create(
+            domaine=self.domaine,
+            nom="Manuel",
+            couleur=Cuvee.Couleur.ROUGE,
+            region="Bordeaux",
+        )
+        cuvee.cepages.add(Cepage.objects.create(nom="Nebbiolo"))
+        bouteille = Bouteille.objects.create(
+            proprietaire=self.user,
+            cuvee=cuvee,
+            millesime=2016,
+            quantite=1,
+            apogee_debut=2020,
+            apogee_fin=2025,
+        )
+        resp = self.client.get(reverse("bouteille-detail", args=[bouteille.pk]))
+        self.assertEqual(resp.data["apogee_debut_effectif"], 2020)
+        self.assertEqual(resp.data["apogee_fin_effectif"], 2025)
+
     def test_fiche_millesime_porte_fenetre_et_statut(self):
         annee = timezone.now().year
         Bouteille.objects.create(

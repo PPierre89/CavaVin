@@ -27,8 +27,12 @@ class BouteilleViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if not user.is_authenticated:
             return Bouteille.objects.none()
-        return Bouteille.objects.filter(proprietaire=user).select_related(
-            "cuvee__domaine", "emplacement__parent__parent__parent"
+        return (
+            Bouteille.objects.filter(proprietaire=user)
+            .select_related("cuvee__domaine", "emplacement__parent__parent__parent")
+            # La fenêtre d'apogée est affinée par les cépages : on précharge le
+            # M2M pour éviter une requête par ligne au calcul du statut.
+            .prefetch_related("cuvee__cepages")
         )
 
     @action(detail=True, methods=["post"])
