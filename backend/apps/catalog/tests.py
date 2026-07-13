@@ -79,6 +79,67 @@ class ApogeeTests(SimpleTestCase):
     def test_vin_non_millesime_sans_fenetre(self):
         self.assertEqual(apogee.fenetre_apogee("ROUGE", None), (None, None))
 
+    def test_cepage_de_garde_allonge_la_fenetre(self):
+        # Base rouge 2015 : (2018, 2027). Un Cabernet Sauvignon (facteur 1.4)
+        # repousse ouverture et fin de garde.
+        self.assertEqual(
+            apogee.fenetre_apogee("ROUGE", 2015, cepages=["Cabernet Sauvignon"]),
+            (2019, 2032),
+        )
+
+    def test_cepage_de_plaisir_raccourcit_la_fenetre(self):
+        # Un Gamay (facteur 0.6) se boit bien plus tôt qu'un rouge de garde.
+        self.assertEqual(
+            apogee.fenetre_apogee("ROUGE", 2015, cepages=["Gamay"]), (2017, 2022)
+        )
+
+    def test_assemblage_retient_le_cepage_le_plus_de_garde(self):
+        # Merlot (1.0) + Cabernet Sauvignon (1.4) -> le Cabernet impose le rythme.
+        self.assertEqual(
+            apogee.fenetre_apogee(
+                "ROUGE", 2015, cepages=["Merlot", "Cabernet Sauvignon"]
+            ),
+            (2019, 2032),
+        )
+
+    def test_cepage_inconnu_est_neutre(self):
+        # Cépage hors table -> aucun ajustement, on garde la base couleur.
+        self.assertEqual(
+            apogee.fenetre_apogee("ROUGE", 2015, cepages=["Zibibbo"]), (2018, 2027)
+        )
+        self.assertEqual(apogee.fenetre_apogee("ROUGE", 2015, cepages=[]), (2018, 2027))
+
+    def test_grand_millesime_allonge_la_fenetre(self):
+        # Bordeaux 2016 (millésime exceptionnel) -> garde repoussée.
+        self.assertEqual(
+            apogee.fenetre_apogee("ROUGE", 2016, region="Bordeaux"), (2019, 2032)
+        )
+
+    def test_petit_millesime_avance_la_consommation(self):
+        # Bordeaux 2013 (millésime faible) -> à boire plus tôt que la base.
+        self.assertEqual(
+            apogee.fenetre_apogee("ROUGE", 2013, region="Médoc"), (2016, 2021)
+        )
+
+    def test_qualite_millesime_par_sous_region_et_defauts(self):
+        # Sous-région rattachée à sa grande région.
+        self.assertEqual(apogee.qualite_millesime("Saint-Émilion", 2013), 1)
+        self.assertEqual(apogee.qualite_millesime("Barolo", 2010), 5)
+        # Région ou année inconnue -> note neutre (3), aucun ajustement.
+        self.assertEqual(apogee.qualite_millesime("Californie", 2016), 3)
+        self.assertEqual(apogee.qualite_millesime("Bordeaux", 1789), 3)
+        self.assertEqual(apogee.qualite_millesime(None, 2016), 3)
+        self.assertEqual(apogee.qualite_millesime("Bordeaux", None), 3)
+
+    def test_cepage_et_millesime_se_combinent(self):
+        # Cabernet Sauvignon (1.4) sur un grand Bordeaux 2016 (1.15 / 1.30).
+        self.assertEqual(
+            apogee.fenetre_apogee(
+                "ROUGE", 2016, cepages=["Cabernet Sauvignon"], region="Bordeaux"
+            ),
+            (2021, 2038),
+        )
+
     def test_statut_selon_l_annee(self):
         # Fenêtre 2018-2027.
         self.assertEqual(apogee.statut_pour_fenetre(2018, 2027, 2016), apogee.A_GARDER)
