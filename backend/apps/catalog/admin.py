@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from .models import Cepage, Cuvee, Domaine, ReferenceLwin, SourceObservation
+from .models import (
+    Cepage,
+    Cuvee,
+    Domaine,
+    MillesimeReference,
+    ReferenceLwin,
+    SourceObservation,
+)
 
 
 @admin.register(Domaine)
@@ -44,6 +51,15 @@ class SourceObservationAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+
+@admin.register(MillesimeReference)
+class MillesimeReferenceAdmin(admin.ModelAdmin):
+    # Table sourçable, éditable : corriger une note met à jour le cache d'apogée.
+    list_display = ["region_cle", "annee", "note", "source"]
+    list_filter = ["region_cle", "source"]
+    search_fields = ["region_cle"]
+    list_editable = ["note"]
 
 
 admin.site.site_header = "Cave à Vin - Administration"

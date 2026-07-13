@@ -302,9 +302,13 @@ respecte les conventions (`makemigrations` commité, tests, commits conventionne
   `lwin_code` est posé à la création (garde-fou d'unicité) et sorti des champs
   enrichis/consolidés (identité, pas attribut). → traite D4.
 
-- **Phase 4 — `MillesimeReference` (feat).**
-  Extraire `apogee.MILLESIMES` en table sourçable ; seed = valeurs actuelles. →
-  traite D6.
+- **Phase 4 — `MillesimeReference` (feat). ✅ *Faite.***
+  Modèle `MillesimeReference` (`region_cle`, `annee`, `note`, `source` ;
+  `unique(region_cle, annee)`), semé depuis `apogee.MILLESIMES` (migration `0012`)
+  et éditable en admin. `apogee` reste **pur** : `qualite_millesime` /
+  `fenetre_apogee` reçoivent la table par injection, avec `apogee.MILLESIMES`
+  comme repli hors-ligne ; `Bouteille.fenetre_apogee` injecte
+  `MillesimeReference.table()` (mise en cache, invalidée à l'édition). → traite D6.
 
 - **Phase 5 — Cadre scraping (feat, optionnel).**
   Provider scraping avec confiance basse, limitation de débit, respect CGU/robots,

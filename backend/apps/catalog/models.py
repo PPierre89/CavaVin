@@ -1,6 +1,11 @@
+from collections import defaultdict
 from decimal import Decimal
 
+from django.core.cache import cache
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+
+from . import apogee
 
 
 class Domaine(models.Model):
@@ -208,3 +213,74 @@ class SourceObservation(models.Model):
 
     def __str__(self):
         return f"{self.cuvee} ← {self.canal} ({self.releve_le:%Y-%m-%d})"
+
+
+class MillesimeReference(models.Model):
+    """Qualité d'un millésime pour une grande région viticole (note /5).
+
+    Table sourçable extraite de la logique métier (auparavant figée dans
+    ``apogee.MILLESIMES``, cf. docs/architecture-referentiel.md, Phase 4 / D6) :
+    donnée du monde réel qu'un canal (saisie, LLM, scraping de tables de
+    millésimes) peut alimenter et corriger sans redéploiement. La logique
+    d'apogée reste *pure* : elle reçoit la table par injection (``table()``), avec
+    ``apogee.MILLESIMES`` comme repli hors-ligne.
+    """
+
+    # Cache de la table {region_cle: {annee: note}} construite depuis la base.
+    _CACHE_KEY = "millesimes:table"
+    _CACHE_TTL = 60 * 60  # la qualité d'un millésime est quasi statique.
+
+    region_cle = models.CharField(
+        max_length=32,
+        help_text="Grande région viticole normalisée (ex: bordeaux, bourgogne).",
+    )
+    annee = models.PositiveIntegerField()
+    note = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        help_text="Qualité du millésime, de 1 (faible) à 5 (exceptionnel).",
+    )
+    source = models.CharField(
+        max_length=64, default="seed",
+        help_text="Origine de la note (ex: seed, manuel, claude, scrape:...).",
+    )
+
+    class Meta:
+        ordering = ["region_cle", "annee"]
+        verbose_name = "référence millésime"
+        verbose_name_plural = "références millésimes"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["region_cle", "annee"], name="unique_millesime_par_region"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.region_cle} {self.annee} : {self.note}/5"
+
+    @classmethod
+    def table(cls) -> dict[str, dict[int, int]]:
+        """Table `{region_cle: {annee: note}}`, mise en cache.
+
+        Repli sur ``apogee.MILLESIMES`` si la base n'a pas encore été semée, pour
+        rester fonctionnel hors-ligne et sur une installation neuve."""
+        cached = cache.get(cls._CACHE_KEY)
+        if cached is not None:
+            return cached
+        table: dict[str, dict[int, int]] = defaultdict(dict)
+        for ref in cls.objects.all():
+            table[ref.region_cle][ref.annee] = ref.note
+        resultat = dict(table) or apogee.MILLESIMES
+        cache.set(cls._CACHE_KEY, resultat, cls._CACHE_TTL)
+        return resultat
+
+    @classmethod
+    def vider_cache(cls) -> None:
+        cache.delete(cls._CACHE_KEY)
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self.vider_cache()  # une correction est visible sans attendre le TTL.
+
+    def delete(self, *args, **kwargs):
+        super().delete(*args, **kwargs)
+        self.vider_cache()

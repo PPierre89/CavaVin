@@ -35,7 +35,14 @@ from .ingest import (
     synchroniser_wineapi,
     upsert_cuvee,
 )
-from .models import Cepage, Cuvee, Domaine, ReferenceLwin, SourceObservation
+from .models import (
+    Cepage,
+    Cuvee,
+    Domaine,
+    MillesimeReference,
+    ReferenceLwin,
+    SourceObservation,
+)
 from .serializers import ScanEtiquetteSerializer
 
 User = get_user_model()
@@ -142,6 +149,13 @@ class ApogeeTests(SimpleTestCase):
         self.assertEqual(apogee.qualite_millesime("Californie", 2016), 3)
         self.assertEqual(apogee.qualite_millesime("Bordeaux", 1789), 3)
         self.assertEqual(apogee.qualite_millesime(None, 2016), 3)
+
+    def test_table_millesimes_injectable(self):
+        # Table injectée (ex: MillesimeReference) : prime sur la table intégrée.
+        injectee = {"bordeaux": {2010: 1}}
+        self.assertEqual(apogee.qualite_millesime("Médoc", 2010, injectee), 1)
+        # Année absente de la table injectée -> note neutre.
+        self.assertEqual(apogee.qualite_millesime("Médoc", 2016, injectee), 3)
         self.assertEqual(apogee.qualite_millesime("Bordeaux", None), 3)
 
     def test_cepage_et_millesime_se_combinent(self):
@@ -498,6 +512,57 @@ class LwinCanalTests(TestCase):
         consolider(cuvee)
         cuvee.refresh_from_db()
         self.assertEqual(cuvee.region, "Bordeaux")
+
+
+class MillesimeReferenceTests(TestCase):
+    """Phase 4 : table des millésimes sourçable, injectée dans la logique pure."""
+
+    def setUp(self):
+        cache.clear()  # la table est mise en cache : on repart propre.
+
+    def test_seed_depuis_la_reference_integree(self):
+        """La migration sème la table depuis apogee.MILLESIMES."""
+        self.assertTrue(
+            MillesimeReference.objects.filter(
+                region_cle="bordeaux", annee=2010, note=5
+            ).exists()
+        )
+
+    def test_table_reflete_la_base(self):
+        MillesimeReference.objects.update_or_create(
+            region_cle="bordeaux", annee=2010, defaults={"note": 2, "source": "manuel"}
+        )
+        self.assertEqual(MillesimeReference.table()["bordeaux"][2010], 2)
+
+    def test_table_repli_sur_la_reference_integree_si_vide(self):
+        MillesimeReference.objects.all().delete()
+        MillesimeReference.vider_cache()
+        self.assertEqual(MillesimeReference.table(), apogee.MILLESIMES)
+
+    def test_correction_admin_invalide_le_cache(self):
+        MillesimeReference.table()  # amorce le cache
+        ref = MillesimeReference.objects.get(region_cle="bordeaux", annee=2010)
+        ref.note = 1
+        ref.save()  # doit vider le cache
+        self.assertEqual(MillesimeReference.table()["bordeaux"][2010], 1)
+
+    def test_bouteille_utilise_la_table_db(self):
+        """La fenêtre d'apogée d'une bouteille suit la table BDD (pas le code)."""
+        domaine = Domaine.objects.create(nom="Ch. Test")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="C", couleur="ROUGE", region="Médoc"
+        )
+        user = User.objects.create_user("bob", password="x")
+        from apps.inventory.models import Bouteille
+
+        bouteille = Bouteille.objects.create(proprietaire=user, cuvee=cuvee, millesime=2010)
+        avant = bouteille.fenetre_apogee()
+        # On abaisse la qualité 2010 du Médoc : la fenêtre doit se resserrer.
+        MillesimeReference.objects.filter(region_cle="bordeaux", annee=2010).update(note=1)
+        MillesimeReference.vider_cache()
+        apres = bouteille.fenetre_apogee()
+        self.assertNotEqual(avant, apres)
+        self.assertLess(apres[1], avant[1])  # grand millésime → petit : fin plus tôt
 
 
 class DedupIdentiteMigrationTests(TransactionTestCase):

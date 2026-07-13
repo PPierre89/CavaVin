@@ -81,11 +81,16 @@ class Bouteille(models.Model):
         """
         if self.apogee_debut is not None or self.apogee_fin is not None:
             return (self.apogee_debut, self.apogee_fin)
+        # Table de qualité des millésimes sourçable (mise en cache) ; apogee reste
+        # pur et reçoit la table par injection.
+        from apps.catalog.models import MillesimeReference
+
         return apogee.fenetre_apogee(
             self.cuvee.couleur,
             self.millesime,
             cepages=[c.nom for c in self.cuvee.cepages.all()],
             region=self.cuvee.region,
+            millesimes=MillesimeReference.table(),
         )
 
     @property
