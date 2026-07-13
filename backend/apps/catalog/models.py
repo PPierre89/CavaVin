@@ -94,6 +94,24 @@ class Cuvee(models.Model):
 
     class Meta:
         ordering = ["domaine__nom", "nom"]
+        constraints = [
+            # Clés d'identité canoniques : un code-barres (US 01) et une référence
+            # externe (ex: wineapi.io) désignent un vin et un seul. Contraintes
+            # *partielles* (seulement quand la valeur est renseignée) car ces
+            # champs restent vides pour un vin saisi sans scan ni source externe.
+            # Empêche la ré-accumulation de doublons décrite dans la revue
+            # d'architecture (cf. docs/architecture-referentiel.md, D3).
+            models.UniqueConstraint(
+                fields=["code_barres"],
+                condition=~models.Q(code_barres=""),
+                name="unique_cuvee_code_barres",
+            ),
+            models.UniqueConstraint(
+                fields=["reference_externe_id"],
+                condition=~models.Q(reference_externe_id=""),
+                name="unique_cuvee_reference_externe",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.domaine.nom} - {self.nom}"

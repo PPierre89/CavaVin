@@ -11,7 +11,13 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.db import IntegrityError, connection
+from django.test import (
+    SimpleTestCase,
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+)
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -252,18 +258,83 @@ class UpsertCuveeTests(TestCase):
         cuvee, _ = upsert_cuvee(w)
         self.assertEqual(cuvee.couleur, Cuvee.Couleur.AUTRE)
 
-    def test_robuste_aux_doublons_preexistants(self):
-        """Des doublons en base (ex: scans concurrents passés) ne doivent pas faire
-        planter les scans suivants : on retourne le plus ancien, sans exception."""
+    def test_contrainte_unicite_code_barres(self):
+        """Deux cuvées ne peuvent plus partager un même code-barres non vide."""
         domaine = Domaine.objects.create(nom="Dom")
-        c1 = Cuvee.objects.create(domaine=domaine, nom="A", couleur="ROUGE", code_barres="555")
-        Cuvee.objects.create(domaine=domaine, nom="B", couleur="ROUGE", code_barres="555")
+        Cuvee.objects.create(domaine=domaine, nom="A", couleur="ROUGE", code_barres="777")
+        with self.assertRaises(IntegrityError):
+            Cuvee.objects.create(domaine=domaine, nom="B", couleur="ROUGE", code_barres="777")
 
-        cuvee, created = upsert_cuvee(
-            NormalizedWine(domaine_nom="Dom", cuvee_nom="Peu importe", code_barres="555")
+    def test_contrainte_unicite_tolere_code_barres_vide(self):
+        """La contrainte est partielle : plusieurs cuvées sans code-barres coexistent."""
+        domaine = Domaine.objects.create(nom="Dom")
+        Cuvee.objects.create(domaine=domaine, nom="A", couleur="ROUGE", code_barres="")
+        Cuvee.objects.create(domaine=domaine, nom="B", couleur="BLANC", code_barres="")
+        self.assertEqual(Cuvee.objects.filter(code_barres="").count(), 2)
+
+    def test_domaine_non_scinde_par_region_vide(self):
+        """Un canal qui identifie un producteur déjà connu (avec région) ne doit
+        pas créer une seconde fiche sans région (cf. correction de l'ingest)."""
+        Domaine.objects.create(nom="Château Margaux", region="Bordeaux")
+        upsert_cuvee(
+            NormalizedWine(domaine_nom="Château Margaux", cuvee_nom="Grand Vin", code_barres="900")
         )
-        self.assertFalse(created)
-        self.assertEqual(cuvee.pk, c1.pk)  # le plus ancien gagne
+        self.assertEqual(Domaine.objects.filter(nom="Château Margaux").count(), 1)
+        self.assertEqual(
+            Cuvee.objects.get(code_barres="900").domaine.region, "Bordeaux"
+        )
+
+
+class DedupIdentiteMigrationTests(TransactionTestCase):
+    """Migration 0008 : dédoublonnage des identités avant pose des contraintes.
+
+    On rembobine jusqu'à l'état 0007, on fabrique les doublons que la migration
+    doit résorber (impossibles à créer une fois les contraintes posées), puis on
+    applique 0008 et on vérifie la convergence. La base de test est remise à
+    l'état le plus récent en fin de test.
+    """
+
+    migrate_from = [("catalog", "0007_referencelwin")]
+    migrate_to = [("catalog", "0008_dedup_identite_cuvee")]
+
+    def test_fusionne_domaines_et_cuvees_en_double(self):
+        from django.db.migrations.executor import MigrationExecutor
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_from)
+        old_apps = executor.loader.project_state(self.migrate_from).apps
+        Domaine = old_apps.get_model("catalog", "Domaine")
+        Cuvee = old_apps.get_model("catalog", "Cuvee")
+
+        # Producteur scindé : une fiche régionale + une fiche vide (artefact ingest).
+        d_region = Domaine.objects.create(nom="Dom", region="Bordeaux")
+        d_vide = Domaine.objects.create(nom="Dom", region="")
+        # Deux cuvées d'un même code-barres, rattachées à la fiche vide.
+        Cuvee.objects.create(domaine=d_vide, nom="A", couleur="ROUGE", code_barres="555")
+        Cuvee.objects.create(domaine=d_vide, nom="B", couleur="ROUGE", code_barres="555")
+
+        executor.loader.build_graph()  # recharge le graphe avant d'avancer
+        executor.migrate(self.migrate_to)
+        new_apps = executor.loader.project_state(self.migrate_to).apps
+        Domaine = new_apps.get_model("catalog", "Domaine")
+        Cuvee = new_apps.get_model("catalog", "Cuvee")
+
+        # Le producteur n'a plus qu'une fiche (la régionale), le doublon vide est parti.
+        doms = Domaine.objects.filter(nom="Dom")
+        self.assertEqual(doms.count(), 1)
+        self.assertEqual(doms.first().pk, d_region.pk)
+        # Une seule cuvée subsiste pour le code-barres, re-rattachée au producteur gardé.
+        cuvees = Cuvee.objects.filter(code_barres="555")
+        self.assertEqual(cuvees.count(), 1)
+        self.assertEqual(cuvees.first().domaine.pk, d_region.pk)
+
+    def tearDown(self):
+        # Laisse la base de test à jour pour les tests suivants.
+        from django.db.migrations.executor import MigrationExecutor
+
+        executor = MigrationExecutor(connection)
+        executor.loader.build_graph()
+        executor.migrate(executor.loader.graph.leaf_nodes())
 
 
 class _FakeProvider:
