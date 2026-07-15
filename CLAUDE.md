@@ -141,10 +141,12 @@ The cascade in `registry.py` tries enabled providers in order:
   per-canal observation rather than a raw `wineapi_detail`.
 - **Vinou** (`api.vinou.de`) — supplementary producer catalog (wines registered by Vinou's client
   wineries, mostly German): text search (`POST /wines/search`) and barcode via the `gtin` field.
-  POST-JSON routes wrapped in `{"info","data"}`. **Disabled by default** (`VINOU_ENABLED`): the exact
-  auth handshake is unconfirmed (Authentication page wasn't captured) and coverage is niche. `region`
-  and `grapetypeIds` come back as numeric IDs (no names without extra lookups), so it maps only the
-  directly usable fields (name, winery, colour, country, vintage, barcode, alcohol, description).
+  POST-JSON routes wrapped in `{"info","data"}`. Auth is **JWT**: `POST /service/login` with
+  `VINOU_AUTH_ID` + `VINOU_API_TOKEN` returns a 12 h JWT (cached ~11 h, auto re-login on 401); without
+  credentials the `/wines/*` routes still work in **public mode** (leaner payloads). **Disabled by
+  default** (`VINOU_ENABLED`) — coverage is niche. `region` and `grapetypeIds` come back as numeric IDs
+  (no names without extra lookups), so it maps only the directly usable fields (name, winery, colour,
+  country, vintage, barcode, alcohol, description).
 - **LWIN + local OCR** — last-resort, 100% free & offline fallback: the `tesseract` binary (installed
   in the Docker image, subprocess call) reads the label, then fuzzy matching (rapidfuzz, precision-first:
   every significant token of a reference must be found, IDF-weighted tie-break) against the LWIN

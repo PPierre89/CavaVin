@@ -267,12 +267,18 @@ GRAPEMINDS_SEARCH_LIMIT = int(os.getenv("GRAPEMINDS_SEARCH_LIMIT", "5"))
 # --- Enrichissement Vinou (api.vinou.de) ---
 # Catalogue des vins des domaines inscrits sur Vinou (surtout allemands) :
 # recherche texte (/wines/search) et code-barres (filtre sur gtin). Routes en POST
-# JSON ; jeton optionnel envoyé en Authorization: Bearer s'il est fourni.
+# JSON, réponse enveloppée {"info","data"}.
 VINOU_BASE_URL = os.getenv("VINOU_BASE_URL", "https://api.vinou.de")
+# Authentification JWT (cf. doc.vinou.de/api/authentification) : AuthID + API-Token
+# générés dans l'app Vinou → POST /service/login → JWT (12 h), mis en cache et
+# renouvelé automatiquement. Optionnels : sans eux, le provider reste en mode public
+# (routes /wines/* publiques, données possiblement plus pauvres).
+VINOU_AUTH_ID = os.getenv("VINOU_AUTH_ID", "")
+VINOU_API_TOKEN = os.getenv("VINOU_API_TOKEN", "")
+# JWT déjà obtenu, fourni tel quel (override) — court-circuite le login.
 VINOU_TOKEN = os.getenv("VINOU_TOKEN", "")
-# Slot DÉSACTIVÉ PAR DÉFAUT : opt-in explicite. Le handshake d'authentification
-# exact reste à valider (page « Authentication » non documentée ici) et la
-# couverture est de niche (domaines clients Vinou, pas un référentiel mondial).
+# Slot DÉSACTIVÉ PAR DÉFAUT : opt-in explicite. Couverture de niche (domaines
+# clients Vinou, pas un référentiel mondial).
 VINOU_ENABLED = os.getenv("VINOU_ENABLED", "False") == "True"
 # Timeout sortant (secondes), < timeout worker gunicorn (--timeout 120).
 VINOU_TIMEOUT = int(os.getenv("VINOU_TIMEOUT", "20"))

@@ -111,8 +111,9 @@ persistant (PSL) payante pour conserver durablement ses données, et son quota p
 
 Un provider **Vinou** (`api.vinou.de`) apporte un catalogue producteur complémentaire (vins des
 domaines inscrits sur Vinou, surtout allemands) : recherche par texte et par code-barres (`gtin`).
-Également **désactivé par défaut** (`VINOU_ENABLED`) — couverture de niche et mécanisme
-d'authentification à valider. Cf. `.env.example` pour les variables `VINOU_*`.
+Authentification JWT (login `AuthID` + `API-Token`, jeton de 12 h mis en cache) ou mode public sans
+identifiants. Également **désactivé par défaut** (`VINOU_ENABLED`) — couverture de niche. Cf.
+`.env.example` pour les variables `VINOU_*`.
 
 **Repli 100 % gratuit et hors-ligne** : sans aucune clé, le provider `lwin` prend le relais —
 OCR **Tesseract** (binaire inclus dans l'image Docker) + correspondance floue (rapidfuzz,

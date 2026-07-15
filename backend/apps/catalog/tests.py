@@ -28,6 +28,7 @@ from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.grapeminds import GrapeMindsProvider
 from .enrichment.vinou import VinouProvider
+from .enrichment.vinou import _JWT_CACHE_KEY as VINOU_JWT_KEY
 from .enrichment.wineapi import WineApiProvider
 from . import apogee, sommellerie, wine_profile
 from .consolidation import consolider
@@ -1201,9 +1202,10 @@ class GrapeMindsProviderTests(SimpleTestCase):
     VINOU_SEARCH_LIMIT=5,
 )
 class VinouProviderTests(SimpleTestCase):
-    """Client HTTP Vinou : activation, erreurs remontées, mapping (urlopen mocké)."""
+    """Client HTTP Vinou : activation, auth JWT, erreurs remontées, mapping (urlopen mocké)."""
 
     def setUp(self):
+        cache.clear()  # évite qu'un JWT mis en cache fuite entre tests
         self.provider = VinouProvider()
 
     def test_enabled_suit_le_drapeau(self):
@@ -1290,13 +1292,63 @@ class VinouProviderTests(SimpleTestCase):
         mock_urlopen.return_value = _fake_urlopen(b'{"info": "success", "data": []}')
         self.assertIsNone(self.provider.lookup_by_text("inconnu"))
 
-    @override_settings(VINOU_TOKEN="jeton-secret")
     @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
-    def test_jeton_envoye_en_bearer_si_configure(self, mock_urlopen):
+    def test_mode_public_sans_identifiants_n_envoie_pas_de_bearer(self, mock_urlopen):
+        # Sans AuthID/API-Token ni jeton, les routes /wines/* sont appelées en public.
         mock_urlopen.return_value = _fake_urlopen(b'{"info": "success", "data": []}')
         self.provider.lookup_by_text("x")
         req = mock_urlopen.call_args[0][0]
-        self.assertEqual(req.headers["Authorization"], "Bearer jeton-secret")
+        self.assertNotIn("Authorization", req.headers)
+
+    @override_settings(VINOU_TOKEN="jwt-fourni")
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_jwt_override_envoye_en_bearer_sans_login(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_urlopen(b'{"info": "success", "data": []}')
+        self.provider.lookup_by_text("x")
+        # Un seul appel (pas de login) et le JWT fourni est utilisé tel quel.
+        self.assertEqual(mock_urlopen.call_count, 1)
+        req = mock_urlopen.call_args[0][0]
+        self.assertEqual(req.headers["Authorization"], "Bearer jwt-fourni")
+
+    @override_settings(VINOU_AUTH_ID="auth-42", VINOU_API_TOKEN="api-tok")
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_login_service_puis_recherche_avec_bearer(self, mock_urlopen):
+        login = b'{"info": "success", "data": {"token": "JWT-123"}}'
+        search = b'{"info": "success", "data": [{"id": 7, "name": "Vin", "type": "red"}]}'
+        mock_urlopen.side_effect = [_fake_urlopen(login), _fake_urlopen(search)]
+
+        wine = self.provider.lookup_by_text("Vin")
+
+        self.assertIsNotNone(wine)
+        self.assertEqual(mock_urlopen.call_count, 2)
+        # 1er appel = POST /service/login avec AuthID + API-Token.
+        login_req = mock_urlopen.call_args_list[0][0][0]
+        self.assertTrue(login_req.full_url.endswith("/service/login"))
+        corps = json.loads(login_req.data.decode("utf-8"))
+        self.assertEqual(corps, {"id": "auth-42", "token": "api-tok"})
+        # 2e appel = /wines/search avec le JWT obtenu.
+        search_req = mock_urlopen.call_args_list[1][0][0]
+        self.assertTrue(search_req.full_url.endswith("/wines/search"))
+        self.assertEqual(search_req.headers["Authorization"], "Bearer JWT-123")
+
+    @override_settings(VINOU_AUTH_ID="auth-42", VINOU_API_TOKEN="api-tok")
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_401_purge_le_cache_et_refait_un_login(self, mock_urlopen):
+        # JWT périmé en cache : la recherche renvoie 401, on re-login et on réessaie.
+        cache.set(VINOU_JWT_KEY, "JWT-PERIME", 60)
+        search_ok = b'{"info": "success", "data": [{"id": 9, "name": "Vin", "type": "white"}]}'
+        mock_urlopen.side_effect = [
+            _http_error(401),                       # /wines/search avec JWT périmé
+            _fake_urlopen(b'{"data": {"token": "JWT-NEUF"}}'),  # re-login
+            _fake_urlopen(search_ok),               # /wines/search avec JWT neuf
+        ]
+
+        wine = self.provider.lookup_by_text("Vin")
+
+        self.assertIsNotNone(wine)
+        self.assertEqual(mock_urlopen.call_count, 3)
+        derniere = mock_urlopen.call_args_list[2][0][0]
+        self.assertEqual(derniere.headers["Authorization"], "Bearer JWT-NEUF")
 
 
 def _reponse_claude(payload, stop_reason="end_turn"):
