@@ -9,6 +9,7 @@ import uuid
 from django.conf import settings
 
 from .. import wine_profile
+from ..runtime_config import get_parametre
 from .base import EnrichmentError, EnrichmentProvider, NormalizedWine
 from .normalize import clean, couleur_from_type, named, strip_vintage
 
@@ -40,7 +41,7 @@ class WineApiProvider(EnrichmentProvider):
 
     @property
     def enabled(self) -> bool:  # type: ignore[override]
-        return bool(settings.WINEAPI_KEY)
+        return bool(get_parametre("WINEAPI_KEY"))
 
     def _request(self, method: str, path: str, payload: dict | None = None):
         """Appel JSON simple — renvoie le corps décodé (ou None)."""
@@ -49,7 +50,7 @@ class WineApiProvider(EnrichmentProvider):
     def _request_full(self, method: str, path: str, payload: dict | None = None):
         """Comme ``_request`` mais renvoie ``(corps, headers)`` pour inspecter
         les en-têtes de réponse (ex. ``X-Update-Status``)."""
-        headers = {"X-API-Key": settings.WINEAPI_KEY, "Accept": "application/json"}
+        headers = {"X-API-Key": get_parametre("WINEAPI_KEY"), "Accept": "application/json"}
         data = None
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
@@ -69,7 +70,7 @@ class WineApiProvider(EnrichmentProvider):
             + f"\r\n--{boundary}--\r\n".encode("utf-8")
         )
         headers = {
-            "X-API-Key": settings.WINEAPI_KEY,
+            "X-API-Key": get_parametre("WINEAPI_KEY"),
             "Accept": "application/json",
             "Content-Type": f"multipart/form-data; boundary={boundary}",
         }
@@ -81,7 +82,7 @@ class WineApiProvider(EnrichmentProvider):
 
         Les headers sont toujours renvoyés (dict vide en cas d'erreur) pour que
         l'appelant puisse lire ``X-Update-Status`` sans re-parser la réponse."""
-        url = settings.WINEAPI_BASE_URL.rstrip("/") + path
+        url = get_parametre("WINEAPI_BASE_URL").rstrip("/") + path
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=timeout or settings.WINEAPI_TIMEOUT) as resp:

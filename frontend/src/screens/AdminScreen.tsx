@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, apiAllPages, errMsg } from '../api'
 import { useAuth } from '../auth'
 import { formatDate } from '../dates'
-import { Card, CardTitle, ConfirmSheet, tileCls } from '../ui'
+import { Card, CardTitle, ConfirmSheet, ghostCls, inputCls, primaryCls, tileCls } from '../ui'
 
 /* ------------------------------------------------------------------ *
  *  Panneau d'administration (réservé au staff).
@@ -63,6 +63,182 @@ function Badge({ children, ton }: { children: React.ReactNode; ton: 'gold' | 'wi
   )
 }
 
+interface Parametre {
+  cle: string
+  secret: boolean
+  configure: boolean
+  source: 'base' | 'env' | 'absent'
+  apercu: string
+}
+
+// Libellés lisibles des paramètres pilotables (le reste = nom technique).
+const LIBELLES_PARAM: Record<string, string> = {
+  ANTHROPIC_API_KEY: 'Clé API Claude (Anthropic)',
+  ANTHROPIC_MODEL: 'Modèle Claude',
+  WINEAPI_KEY: 'Clé API wineapi.io',
+  WINEAPI_BASE_URL: 'URL de base wineapi.io',
+}
+
+/* ---------- Configuration des clés d'API (override base > .env) ---------- */
+function ConfigurationApi() {
+  const [params, setParams] = useState<Parametre[]>([])
+  const [saisies, setSaisies] = useState<Record<string, string>>({})
+  const [erreur, setErreur] = useState('')
+  const [enCours, setEnCours] = useState<string | null>(null)
+
+  const charger = useCallback(async () => {
+    try {
+      const data = await api<{ parametres: Parametre[] }>('GET', '/api/admin-panel/configuration/')
+      setParams(data.parametres)
+    } catch (e) {
+      setErreur(errMsg(e, 'Impossible de charger la configuration.'))
+    }
+  }, [])
+
+  useEffect(() => {
+    charger()
+  }, [charger])
+
+  // Enregistre (valeur non vide) ou efface (valeur vide) un override en base.
+  const enregistrer = async (cle: string, valeur: string) => {
+    setEnCours(cle)
+    setErreur('')
+    try {
+      const data = await api<{ parametres: Parametre[] }>('PUT', '/api/admin-panel/configuration/', {
+        cle,
+        valeur,
+      })
+      setParams(data.parametres)
+      setSaisies((s) => ({ ...s, [cle]: '' }))
+    } catch (e) {
+      setErreur(errMsg(e, 'Enregistrement impossible.'))
+    } finally {
+      setEnCours(null)
+    }
+  }
+
+  const badgeSource = (p: Parametre) => {
+    if (p.source === 'base') return <Badge ton="wine">Défini ici</Badge>
+    if (p.source === 'env') return <Badge ton="muted">Via .env</Badge>
+    return <Badge ton="muted">Absent</Badge>
+  }
+
+  return (
+    <Card>
+      <CardTitle>Configuration des API</CardTitle>
+      {erreur && <div className="text-sm text-alerte mb-2">{erreur}</div>}
+      <p className="text-muted/80 text-xs mb-3">
+        Les valeurs saisies ici sont stockées en base et priment sur le fichier <code>.env</code>{' '}
+        (modifiables sans redémarrer). Une valeur vide rétablit le repli <code>.env</code>.
+      </p>
+      {params.map((p) => (
+        <div key={p.cle} className="py-3 border-b border-line/40 last:border-0">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-ink text-sm font-medium">{LIBELLES_PARAM[p.cle] || p.cle}</span>
+            {badgeSource(p)}
+          </div>
+          {p.configure && (
+            <div className="text-muted/70 text-xs mt-0.5 tabular-nums">
+              Actuel : {p.apercu || '(défini)'}
+            </div>
+          )}
+          <div className="flex gap-2 mt-2">
+            <input
+              type={p.secret ? 'password' : 'text'}
+              autoComplete="off"
+              value={saisies[p.cle] ?? ''}
+              onChange={(e) => setSaisies((s) => ({ ...s, [p.cle]: e.target.value }))}
+              placeholder={p.secret ? 'Nouvelle clé…' : 'Nouvelle valeur…'}
+              className={`${inputCls} flex-1`}
+            />
+            <button
+              onClick={() => enregistrer(p.cle, (saisies[p.cle] ?? '').trim())}
+              disabled={enCours === p.cle || !(saisies[p.cle] ?? '').trim()}
+              className={`${ghostCls} shrink-0 disabled:opacity-40`}
+            >
+              Enregistrer
+            </button>
+          </div>
+          {p.source === 'base' && (
+            <button
+              onClick={() => enregistrer(p.cle, '')}
+              disabled={enCours === p.cle}
+              className="mt-2 text-xs text-alerte/90 active:scale-[0.985] transition"
+            >
+              Effacer (revenir au .env)
+            </button>
+          )}
+        </div>
+      ))}
+    </Card>
+  )
+}
+
+/* ---------- Import du référentiel LWIN (upload d'un dump XLSX/CSV) ---------- */
+function ImportLwin({ total, onImported }: { total?: number; onImported: () => void }) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [fichier, setFichier] = useState<File | null>(null)
+  const [enCours, setEnCours] = useState(false)
+  const [message, setMessage] = useState('')
+  const [erreur, setErreur] = useState('')
+
+  const envoyer = async () => {
+    if (!fichier) return
+    setEnCours(true)
+    setErreur('')
+    setMessage('')
+    try {
+      const form = new FormData()
+      form.append('fichier', fichier)
+      const res = await api<{ importes: number; total: number }>(
+        'POST',
+        '/api/admin-panel/import-lwin/',
+        form,
+      )
+      setMessage(`${res.importes} entrées importées — ${res.total} au total en base.`)
+      setFichier(null)
+      if (inputRef.current) inputRef.current.value = ''
+      onImported()
+    } catch (e) {
+      setErreur(errMsg(e, "Échec de l'import du fichier LWIN."))
+    } finally {
+      setEnCours(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardTitle>Référentiel LWIN</CardTitle>
+      <p className="text-muted/80 text-xs mb-3">
+        Dump Liv-ex (<code>.xlsx</code> ou <code>.csv</code>) alimentant le repli d'identification
+        gratuit et hors-ligne. L'import est idempotent (mise à jour par code LWIN).
+        {typeof total === 'number' && (
+          <>
+            {' '}
+            Actuellement <span className="text-ink tabular-nums">{total}</span> références en base.
+          </>
+        )}
+      </p>
+      {erreur && <div className="text-sm text-alerte mb-2">{erreur}</div>}
+      {message && <div className="text-sm text-vigne mb-2">{message}</div>}
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".xlsx,.xlsm,.csv"
+        onChange={(e) => setFichier(e.target.files?.[0] ?? null)}
+        className="block w-full text-sm text-muted file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border file:border-line file:bg-transparent file:text-ink file:text-sm"
+      />
+      <button
+        onClick={envoyer}
+        disabled={!fichier || enCours}
+        className={`${primaryCls} disabled:opacity-40`}
+      >
+        {enCours ? 'Import en cours…' : 'Importer le référentiel'}
+      </button>
+    </Card>
+  )
+}
+
 export default function AdminScreen() {
   const { username } = useAuth()
   const [apercu, setApercu] = useState<Apercu | null>(null)
@@ -91,6 +267,12 @@ export default function AdminScreen() {
   useEffect(() => {
     charger()
   }, [charger])
+
+  // Rafraîchit seulement l'aperçu chiffré (ex. après un import LWIN), sans
+  // recharger toute la liste des comptes.
+  const rafraichirApercu = useCallback(() => {
+    api<Apercu>('GET', '/api/admin-panel/apercu/').then(setApercu).catch(() => {})
+  }, [])
 
   // Bascule un drapeau (is_active / is_staff) et rafraîchit l'aperçu associé.
   const basculer = async (u: Utilisateur, champ: 'is_active' | 'is_staff') => {
@@ -205,6 +387,13 @@ export default function AdminScreen() {
               </Card>
             </>
           )}
+
+          <ConfigurationApi />
+
+          <ImportLwin
+            total={apercu?.catalogue.references_lwin}
+            onImported={rafraichirApercu}
+          />
 
           <Card>
             <CardTitle>Utilisateurs</CardTitle>

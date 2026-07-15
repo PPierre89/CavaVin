@@ -894,7 +894,9 @@ def _http_error(code):
     WINEAPI_BASE_URL="https://api.test",
     WINEAPI_TIMEOUT=5,
 )
-class WineApiProviderTests(SimpleTestCase):
+# TestCase (et non SimpleTestCase) : depuis le paramétrage à chaud, la résolution
+# de la clé passe par un override en base (repli .env) — donc un accès DB.
+class WineApiProviderTests(TestCase):
     """Client HTTP wineapi.io : activation, erreurs remontées, mapping (urlopen mocké)."""
 
     def setUp(self):
@@ -1077,7 +1079,8 @@ _VIN_CLAUDE = {
 
 
 @override_settings(ANTHROPIC_API_KEY="cle-de-test")
-class ClaudeProviderTests(SimpleTestCase):
+# TestCase : la clé Claude est désormais résolue via un override en base (repli .env).
+class ClaudeProviderTests(TestCase):
     """Provider Claude : activation, mapping structuré, erreurs (SDK mocké)."""
 
     def setUp(self):

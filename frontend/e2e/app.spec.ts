@@ -321,6 +321,13 @@ test("le panneau d'administration est réservé au staff et liste les comptes", 
         ],
       },
     },
+    'GET /api/admin-panel/configuration/': {
+      parametres: [
+        { cle: 'ANTHROPIC_API_KEY', secret: true, configure: true, source: 'env', apercu: '••••wxyz' },
+        { cle: 'WINEAPI_KEY', secret: true, configure: false, source: 'absent', apercu: '' },
+        { cle: 'WINEAPI_BASE_URL', secret: false, configure: true, source: 'base', apercu: 'https://api.wineapi.io' },
+      ],
+    },
     'GET /api/admin-panel/utilisateurs/': [
       {
         id: 1,
@@ -359,6 +366,13 @@ test("le panneau d'administration est réservé au staff et liste les comptes", 
   // Aperçu chiffré + état des sources d'enrichissement.
   await expect(page.getByText('Catalogue mutualisé')).toBeVisible()
   await expect(page.getByText('v1.2.3')).toBeVisible()
+  // Configuration des API : les clés sont listées et masquées.
+  await expect(page.getByText('Configuration des API')).toBeVisible()
+  await expect(page.getByText('Clé API Claude (Anthropic)')).toBeVisible()
+  await expect(page.getByText('••••wxyz')).toBeVisible()
+  // Section d'import du référentiel LWIN.
+  await expect(page.getByText('Référentiel LWIN')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Importer le référentiel' })).toBeVisible()
   // Liste des comptes : l'autre utilisateur y figure et est actionnable.
   await expect(page.getByText('bob', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Promouvoir staff' })).toBeVisible()

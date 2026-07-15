@@ -3,10 +3,13 @@ from unittest.mock import patch
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.test import SimpleTestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
+
+from apps.catalog.models import Parametre, ReferenceLwin
 
 User = get_user_model()
 
@@ -221,3 +224,110 @@ class AdminUtilisateurTests(APITestCase):
         self.client.force_authenticate(user=self.staff)
         resp = self.client.post(self.liste, {"username": "nouveau", "password": "x"})
         self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+
+class AdminConfigurationTests(APITestCase):
+    """/api/admin-panel/configuration/ : paramétrage à chaud des clés d'API (staff)."""
+
+    def setUp(self):
+        cache.clear()  # cache des overrides runtime_config
+        self.url = reverse("admin-configuration")
+        self.staff = User.objects.create_user(username="chef", password="x", is_staff=True)
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_non_staff_403(self):
+        lambda_user = User.objects.create_user(username="lambda", password="x")
+        self.client.force_authenticate(user=lambda_user)
+        self.assertEqual(self.client.get(self.url).status_code, status.HTTP_403_FORBIDDEN)
+
+    @override_settings(WINEAPI_KEY="cle-env-secrete-1234")
+    def test_get_masque_les_secrets(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        params = {p["cle"]: p for p in resp.data["parametres"]}
+        wineapi = params["WINEAPI_KEY"]
+        self.assertTrue(wineapi["secret"])
+        self.assertTrue(wineapi["configure"])
+        self.assertEqual(wineapi["source"], "env")
+        # La clé n'est jamais renvoyée en clair : seuls les 4 derniers caractères.
+        self.assertNotIn("cle-env-secrete", wineapi["apercu"])
+        self.assertTrue(wineapi["apercu"].endswith("1234"))
+
+    def test_put_enregistre_un_override(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.put(self.url, {"cle": "WINEAPI_KEY", "valeur": "nouvelle-cle-abcd"})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(Parametre.objects.get(cle="WINEAPI_KEY").valeur, "nouvelle-cle-abcd")
+        params = {p["cle"]: p for p in resp.data["parametres"]}
+        self.assertEqual(params["WINEAPI_KEY"]["source"], "base")
+        self.assertTrue(params["WINEAPI_KEY"]["apercu"].endswith("abcd"))
+
+    def test_put_vide_efface_loverride(self):
+        Parametre.objects.create(cle="WINEAPI_KEY", valeur="ancienne")
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.put(self.url, {"cle": "WINEAPI_KEY", "valeur": ""})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(Parametre.objects.filter(cle="WINEAPI_KEY").exists())
+
+    def test_put_cle_inconnue_400(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.put(self.url, {"cle": "DJANGO_SECRET_KEY", "valeur": "x"})
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Parametre.objects.exists())
+
+    def test_override_change_letat_du_provider(self):
+        """Un override en base active le provider wineapi sans redémarrage."""
+        from apps.catalog.enrichment import get_provider
+
+        with override_settings(WINEAPI_KEY=""):
+            cache.clear()
+            self.assertIsNone(get_provider("wineapi"))  # aucune clé -> désactivé
+            self.client.force_authenticate(user=self.staff)
+            self.client.put(self.url, {"cle": "WINEAPI_KEY", "valeur": "cle-a-chaud"})
+            self.assertIsNotNone(get_provider("wineapi"))  # override -> activé
+
+
+class AdminImportLwinTests(APITestCase):
+    """/api/admin-panel/import-lwin/ : upload du dump LWIN (staff)."""
+
+    _ENTETE = "LWIN,STATUS,PRODUCER_TITLE,PRODUCER_NAME,WINE,COUNTRY,REGION,SUB_REGION,COLOUR,TYPE,SUB_TYPE,CLASSIFICATION\n"
+
+    def setUp(self):
+        self.url = reverse("admin-import-lwin")
+        self.staff = User.objects.create_user(username="chef", password="x", is_staff=True)
+
+    def _fichier(self, corps: str, nom="lwin.csv", content_type="text/csv"):
+        return SimpleUploadedFile(nom, (self._ENTETE + corps).encode("utf-8"), content_type=content_type)
+
+    def test_non_staff_403(self):
+        lambda_user = User.objects.create_user(username="lambda", password="x")
+        self.client.force_authenticate(user=lambda_user)
+        resp = self.client.post(self.url, {"fichier": self._fichier("")}, format="multipart")
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_sans_fichier_400(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.post(self.url, {}, format="multipart")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_format_non_supporte_400(self):
+        self.client.force_authenticate(user=self.staff)
+        fichier = SimpleUploadedFile("dump.pdf", b"%PDF-1.4", content_type="application/pdf")
+        resp = self.client.post(self.url, {"fichier": fichier}, format="multipart")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_upload_csv_ingere_le_referentiel(self):
+        self.client.force_authenticate(user=self.staff)
+        corps = (
+            "1011247,Live,Chateau,Margaux,,France,Bordeaux,Margaux,Red,Wine,Still,1er Cru\n"
+            "1055555,Live,,Bollinger,Grande Annee,France,Champagne,,White,Wine,Sparkling,\n"
+        )
+        resp = self.client.post(self.url, {"fichier": self._fichier(corps)}, format="multipart")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["importes"], 2)
+        self.assertEqual(resp.data["total"], 2)
+        self.assertEqual(ReferenceLwin.objects.count(), 2)
+        self.assertEqual(ReferenceLwin.objects.get(lwin="1055555").couleur, "BULLES")
