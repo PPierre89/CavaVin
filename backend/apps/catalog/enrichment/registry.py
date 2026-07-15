@@ -4,6 +4,7 @@ from django.core.cache import cache
 
 from .base import EnrichmentError, EnrichmentProvider
 from .claude import ClaudeProvider
+from .grapeminds import GrapeMindsProvider
 from .lwin import LwinProvider
 from .openfoodfacts import OpenFoodFactsProvider
 from .stubs import VivinoProvider
@@ -20,6 +21,10 @@ _PROVIDERS: list[EnrichmentProvider] = [
     OpenFoodFactsProvider(),
     ClaudeProvider(),
     WineApiProvider(),
+    # GrapeMinds : repli œnologique supplémentaire, en aval de wineapi. Slot
+    # désactivé par défaut (cf. GrapeMindsProvider : licence PSL + quota serré) :
+    # il n'entre dans la cascade que si GRAPEMINDS_ENABLED est explicitement activé.
+    GrapeMindsProvider(),
     LwinProvider(),
     VivinoProvider(),
 ]
