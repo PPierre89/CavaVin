@@ -284,3 +284,26 @@ class MillesimeReference(models.Model):
     def delete(self, *args, **kwargs):
         super().delete(*args, **kwargs)
         self.vider_cache()
+
+
+class Parametre(models.Model):
+    """Paramètre de configuration modifiable à chaud depuis le panneau d'admin.
+
+    Sert d'override à la variable d'environnement de même nom : la valeur en base
+    (si renseignée) prime sur celle du ``.env`` / des settings, ce qui permet de
+    régler les clés d'API sans redémarrer le conteneur. Une valeur vide en base
+    revient au repli ``.env``. Les valeurs secrètes (clés d'API) ne sont jamais
+    renvoyées en clair par l'API — cf. ``runtime_config`` et le panneau d'admin.
+    """
+
+    cle = models.CharField(max_length=64, unique=True, help_text="Nom du paramètre (ex: WINEAPI_KEY).")
+    valeur = models.TextField(blank=True, default="")
+    maj_le = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["cle"]
+        verbose_name = "paramètre"
+        verbose_name_plural = "paramètres"
+
+    def __str__(self):
+        return self.cle

@@ -5,6 +5,7 @@ from .models import (
     Cuvee,
     Domaine,
     MillesimeReference,
+    Parametre,
     ReferenceLwin,
     SourceObservation,
 )
@@ -60,6 +61,13 @@ class MillesimeReferenceAdmin(admin.ModelAdmin):
     list_filter = ["region_cle", "source"]
     search_fields = ["region_cle"]
     list_editable = ["note"]
+
+
+@admin.register(Parametre)
+class ParametreAdmin(admin.ModelAdmin):
+    # Override à chaud des clés d'API (prime sur le .env). Éditable ici aussi.
+    list_display = ["cle", "maj_le"]
+    search_fields = ["cle"]
 
 
 admin.site.site_header = "Cave à Vin - Administration"

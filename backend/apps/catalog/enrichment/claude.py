@@ -8,6 +8,7 @@ import anthropic
 from django.conf import settings
 
 from .. import wine_profile
+from ..runtime_config import get_parametre
 from .base import EnrichmentError, EnrichmentProvider, NormalizedWine
 from .normalize import clean, couleur_from_type, strip_vintage
 
@@ -142,14 +143,14 @@ class ClaudeProvider(EnrichmentProvider):
 
     @property
     def enabled(self) -> bool:  # type: ignore[override]
-        return bool(settings.ANTHROPIC_API_KEY)
+        return bool(get_parametre("ANTHROPIC_API_KEY"))
 
     def _client(self) -> anthropic.Anthropic:
         # max_retries=1 : le SDK réessaie les 429/5xx ; au-delà on préfère
         # rendre la main à la cascade plutôt que de consommer le budget du
         # worker gunicorn (le timeout total peut atteindre timeout × (retries+1)).
         return anthropic.Anthropic(
-            api_key=settings.ANTHROPIC_API_KEY,
+            api_key=get_parametre("ANTHROPIC_API_KEY"),
             timeout=settings.ANTHROPIC_TIMEOUT,
             max_retries=1,
         )
@@ -181,7 +182,7 @@ class ClaudeProvider(EnrichmentProvider):
         """Appel Claude commun texte/image -> NormalizedWine (ou None si miss)."""
         try:
             response = self._client().messages.create(
-                model=settings.ANTHROPIC_MODEL,
+                model=get_parametre("ANTHROPIC_MODEL"),
                 max_tokens=2048,
                 system=_SYSTEM,
                 # Adaptatif : le modèle dose lui-même sa réflexion (lecture d'une

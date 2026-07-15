@@ -10,17 +10,28 @@ jamais accès aux données *privées* d'un autre utilisateur (bouteilles, notes)
 conformément à la séparation RGPD du projet.
 """
 
+import os
+import tempfile
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Sum
-from rest_framework import serializers, viewsets
+from rest_framework import serializers, status, viewsets
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.catalog.enrichment import get_all_providers
+from apps.catalog.lwin_import import LwinImportError, importer_lwin
 from apps.catalog.models import Cepage, Cuvee, Domaine, ReferenceLwin
+from apps.catalog.runtime_config import (
+    CLES_PILOTABLES,
+    effacer_parametre,
+    etat_parametre,
+    set_parametre,
+)
 from apps.cellars.models import Cave, Emplacement
 from apps.inventory.models import Bouteille, MouvementStock, NoteDegustation
 
@@ -148,3 +159,78 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         self._verifier_cible(instance)
         instance.delete()
+
+
+class ConfigurationView(APIView):
+    """Paramétrage à chaud des clés d'API (staff uniquement).
+
+    ``GET`` liste les paramètres pilotables avec leur état — les secrets ne sont
+    jamais renvoyés en clair, seulement masqués (``••••``+4 derniers). ``PUT``
+    enregistre une valeur (override en base, prioritaire sur le ``.env``) ; une
+    valeur vide efface l'override et fait retomber le paramètre sur le ``.env``.
+    """
+
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        return Response({"parametres": [etat_parametre(cle) for cle in CLES_PILOTABLES]})
+
+    def put(self, request):
+        cle = request.data.get("cle")
+        if cle not in CLES_PILOTABLES:
+            raise ValidationError({"cle": "Paramètre inconnu ou non modifiable."})
+        # On tolère une valeur absente/None comme un effacement de l'override.
+        valeur = request.data.get("valeur")
+        valeur = "" if valeur is None else str(valeur).strip()
+        if valeur:
+            set_parametre(cle, valeur)
+        else:
+            effacer_parametre(cle)
+        return Response({"parametres": [etat_parametre(c) for c in CLES_PILOTABLES]})
+
+
+class ImportLwinView(APIView):
+    """Upload d'un dump LWIN (XLSX/CSV) pour (ré)injecter le référentiel (staff).
+
+    Le fichier est ingéré via la même logique que ``manage.py import_lwin``
+    (idempotent : upsert par code LWIN). Réservé au staff : l'import remplace un
+    accès shell au conteneur pour alimenter le repli d'identification gratuit.
+    """
+
+    permission_classes = [IsAdminUser]
+    parser_classes = [MultiPartParser, FormParser]
+
+    # Garde-fou de taille : le dump Liv-ex complet pèse ~30–40 Mo ; on laisse une
+    # marge confortable sans permettre un upload arbitrairement gros.
+    TAILLE_MAX = 100 * 1024 * 1024
+
+    def post(self, request):
+        fichier = request.FILES.get("fichier")
+        if fichier is None:
+            raise ValidationError({"fichier": "Aucun fichier fourni."})
+        if fichier.size > self.TAILLE_MAX:
+            raise ValidationError({"fichier": "Fichier trop volumineux (max 100 Mo)."})
+
+        nom = fichier.name or ""
+        suffixe = os.path.splitext(nom)[1].lower() or ".csv"
+        if suffixe not in (".xlsx", ".xlsm", ".csv", ".txt"):
+            raise ValidationError({"fichier": "Format non supporté (attendu : .xlsx ou .csv)."})
+        delimiter = request.data.get("delimiter") or ","
+
+        # On écrit l'upload dans un fichier temporaire : l'ingestion XLSX/CSV
+        # travaille sur un chemin (lecture en flux, économe en mémoire).
+        tmp = tempfile.NamedTemporaryFile(suffix=suffixe, delete=False)
+        try:
+            for morceau in fichier.chunks():
+                tmp.write(morceau)
+            tmp.close()
+            importes = importer_lwin(tmp.name, delimiter)
+        except LwinImportError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            os.unlink(tmp.name)
+
+        return Response(
+            {"importes": importes, "total": ReferenceLwin.objects.count()},
+            status=status.HTTP_200_OK,
+        )

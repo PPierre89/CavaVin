@@ -25,8 +25,9 @@ un **conteneur Docker unique** (Django REST + SPA React, SQLite).
   bouteilles case par case en glisser-déposer, jauge de remplissage.
 - **Carnet de dégustation** privé (note /5, commentaire, profil).
 - **Panneau d'administration** (staff) : tableau de bord du déploiement (comptes, catalogue
-  mutualisé, stock, activité), état des sources d'enrichissement et gestion des comptes
-  (activation, rôle staff, suppression).
+  mutualisé, stock, activité), état des sources d'enrichissement, gestion des comptes
+  (activation, rôle staff, suppression), **paramétrage à chaud des clés d'API** (override en base,
+  prioritaire sur le `.env`, sans redémarrage) et **import du référentiel LWIN** par upload de dump.
 - **SPA mobile-first** (thème sombre lie-de-vin/or), authentification JWT.
 
 ## Stack
@@ -94,6 +95,7 @@ carnet) strictement filtrées par propriétaire côté serveur.
 | `/api/notes-degustation/` | Carnet de dégustation (privé) |
 | `GET /api/auth/me/` | Profil du compte connecté (rôle `is_staff`) |
 | `GET /api/admin-panel/apercu/` · `/api/admin-panel/utilisateurs/` | Panneau d'administration (staff) : aperçu + gestion des comptes |
+| `/api/admin-panel/configuration/` · `import-lwin/` | Admin (staff) : clés d'API (override base > .env) + upload du dump LWIN |
 
 L'identification est assurée en premier par **Claude (Anthropic)** : la vision multimodale lit
 l'étiquette et la sortie, **contrainte par un schéma JSON**, remplit la fiche (couleur, appellation,
@@ -109,6 +111,9 @@ orientée précision, pondération par rareté) sur le référentiel **LWIN** de
 ```bash
 docker compose exec app python manage.py import_lwin /chemin/LWINdatabase.xlsx  # idempotent, ~1 min
 ```
+
+Le même import est aussi disponible **par upload** depuis le panneau d'administration (section
+« Référentiel LWIN »), sans accès shell au conteneur.
 
 Le référentiel importé alimente aussi la **recherche dynamique** (`GET /api/recherche-vins/?q=`) :
 suggestions au fil de la frappe (préfixes, tolérance aux fautes, millésime et couleur compris dans
