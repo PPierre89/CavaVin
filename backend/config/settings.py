@@ -237,6 +237,33 @@ WINEAPI_ENRICH_DETAIL = os.getenv("WINEAPI_ENRICH_DETAIL", "True") == "True"
 # rafraîchissements forcés d'un même vin, pour préserver le quota d'appels wineapi.
 WINEAPI_REFRESH_COOLDOWN = int(os.getenv("WINEAPI_REFRESH_COOLDOWN", "3600"))
 
+# --- Enrichissement GrapeMinds (api.grapeminds.eu) ---
+# Base de données œnologique : identification par texte (/wines/search + /wines/{id})
+# et, sur l'offre Enterprise, analyse d'étiquette par photo (/photo/analyze).
+# La clé est chargée depuis l'environnement (.env), jamais codée en dur.
+GRAPEMINDS_BASE_URL = os.getenv("GRAPEMINDS_BASE_URL", "https://api.grapeminds.eu/public/v1")
+GRAPEMINDS_KEY = os.getenv("GRAPEMINDS_KEY", "")
+# Slot DÉSACTIVÉ PAR DÉFAUT même clé renseignée : il faut l'activer explicitement.
+# Deux raisons : (1) les conditions GrapeMinds imposent une licence de stockage
+# persistant (PSL) payante pour conserver durablement leurs données dans le
+# catalogue local — à valider avant activation ; (2) quota serré (~250 appels/mois),
+# ce garde-fou évite de le consommer par inadvertance.
+GRAPEMINDS_ENABLED = os.getenv("GRAPEMINDS_ENABLED", "False") == "True"
+# Langue des libellés négociée via Accept-Language (de, en, es, fr, it, da).
+GRAPEMINDS_LANG = os.getenv("GRAPEMINDS_LANG", "fr")
+# Timeouts sortants. Comme wineapi : STRICTEMENT INFÉRIEURS au timeout worker
+# gunicorn (--timeout 120), et sûrs même sur une conf obsolète (< 30 s).
+GRAPEMINDS_TIMEOUT = int(os.getenv("GRAPEMINDS_TIMEOUT", "20"))
+# L'analyse photo (vision, Enterprise) est plus lente : timeout dédié.
+GRAPEMINDS_IMAGE_TIMEOUT = int(os.getenv("GRAPEMINDS_IMAGE_TIMEOUT", "25"))
+# Appelle /wines/{id} après la recherche pour récupérer cépages/région/descriptions.
+GRAPEMINDS_ENRICH_DETAIL = os.getenv("GRAPEMINDS_ENRICH_DETAIL", "True") == "True"
+# Analyse d'étiquette par photo : désactivée par défaut (offre Enterprise requise ;
+# sinon l'endpoint répond 402/403 et gaspille un appel de quota).
+GRAPEMINDS_PHOTO_ANALYSIS = os.getenv("GRAPEMINDS_PHOTO_ANALYSIS", "False") == "True"
+# Nombre de candidats demandés à la recherche / analyse (on retient le meilleur).
+GRAPEMINDS_SEARCH_LIMIT = int(os.getenv("GRAPEMINDS_SEARCH_LIMIT", "5"))
+
 # --- Enrichissement Claude (Anthropic) ---
 # Identification par photo d'étiquette (vision) et par texte, en tête de cascade
 # devant wineapi. La clé est chargée depuis l'environnement (.env), jamais codée

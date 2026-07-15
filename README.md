@@ -68,7 +68,7 @@ CavaVin/
 │   ├── config/            # settings, urls, auth JWT
 │   └── apps/
 │       ├── catalog/       # Domaine, Cepage, Cuvee — référentiel partagé
-│       │   ├── enrichment/  # providers enfichables (OFF, Claude, wineapi.io, LWIN/OCR local)
+│       │   ├── enrichment/  # providers enfichables (OFF, Claude, wineapi.io, GrapeMinds, LWIN/OCR local)
 │       │   ├── apogee.py     # fenêtre/statut de dégustation (logique pure)
 │       │   └── sommellerie.py # conseil de service (logique pure)
 │       ├── cellars/       # Cave, Emplacement — structure physique (privé)
@@ -102,6 +102,12 @@ l'étiquette et la sortie, **contrainte par un schéma JSON**, remplit la fiche 
 cépages, corps, acidité, description, accords) — sans jamais inventer prix ou notes. wineapi.io
 reste en repli et apporte les données marchandes. Les clés se mettent dans `.env`
 (`ANTHROPIC_API_KEY`, `WINEAPI_KEY`) ; chaque provider se désactive seul sans sa clé.
+
+Un provider **GrapeMinds** (`api.grapeminds.eu`) est disponible en repli supplémentaire (recherche
+texte, et analyse d'étiquette sur l'offre Enterprise). Il est **désactivé par défaut même avec une
+clé** : il faut `GRAPEMINDS_ENABLED=True`, car ses conditions imposent une licence de stockage
+persistant (PSL) payante pour conserver durablement ses données, et son quota public est serré
+(~250 appels/mois). Cf. `.env.example` pour les variables `GRAPEMINDS_*`.
 
 **Repli 100 % gratuit et hors-ligne** : sans aucune clé, le provider `lwin` prend le relais —
 OCR **Tesseract** (binaire inclus dans l'image Docker) + correspondance floue (rapidfuzz,

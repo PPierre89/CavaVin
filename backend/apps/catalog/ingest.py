@@ -28,6 +28,9 @@ _CONFIANCE_CANAL = {
     "openfoodfacts": 0.90,
     "claude": 0.75,
     "wineapi": 0.70,
+    # GrapeMinds : base œnologique structurée, confiance d'identité comparable à
+    # wineapi (légèrement en dessous, provider plus récent et moins éprouvé ici).
+    "grapeminds": 0.68,
 }
 _CONFIANCE_DEFAUT = 0.50
 

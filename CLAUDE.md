@@ -25,7 +25,7 @@ CavaVin/
 │   ├── config/                  # settings, urls, auth (RegisterView), wsgi/asgi, index view
 │   ├── apps/
 │   │   ├── catalog/             # SHARED reference data: Domaine, Cepage, Cuvee
-│   │   │   ├── enrichment/      # pluggable providers (OFF, Claude, wineapi.io, LWIN/OCR local, Vivino stub)
+│   │   │   ├── enrichment/      # pluggable providers (OFF, Claude, wineapi.io, GrapeMinds, LWIN/OCR local, Vivino stub)
 │   │   │   ├── ingest.py        # shared persistence: upsert_cuvee, enrich_cuvee_from_wineapi
 │   │   │   ├── wine_profile.py  # pure mapping of wineapi detail → Cuvee fields (source of truth)
 │   │   │   ├── apogee.py        # pure drink-window / status logic (no DB)
@@ -131,6 +131,14 @@ The cascade in `registry.py` tries enabled providers in order:
   `ANTHROPIC_API_KEY` is unset.
 - **wineapi.io** — text & label image fallback + merchant data (prices, ratings); auto-disabled when
   `WINEAPI_KEY` is unset.
+- **GrapeMinds** (`api.grapeminds.eu`) — extra œnological fallback behind wineapi: text search
+  (`/wines/search` → `/wines/{id}`) and Enterprise-only label photo (`/photo/analyze`). **Disabled by
+  default even with a key** — needs an explicit `GRAPEMINDS_ENABLED=True`, because (a) GrapeMinds
+  requires a paid Persistent Storage License to permanently store its data, which our catalog does, and
+  (b) the public tier's quota is tight (~250/month). Response schema is mapped defensively (the vendor
+  ships no example payloads) — revalidate `grapeminds.py`'s field-name constants against a real
+  `/wines/{id}` response before relying on it. Its payload differs from wineapi's, so it contributes a
+  per-canal observation rather than a raw `wineapi_detail`.
 - **LWIN + local OCR** — last-resort, 100% free & offline fallback: the `tesseract` binary (installed
   in the Docker image, subprocess call) reads the label, then fuzzy matching (rapidfuzz, precision-first:
   every significant token of a reference must be found, IDF-weighted tie-break) against the LWIN

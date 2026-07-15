@@ -26,6 +26,7 @@ from rest_framework.test import APITestCase
 from .enrichment import EnrichmentError, NormalizedWine
 from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
+from .enrichment.grapeminds import GrapeMindsProvider
 from .enrichment.wineapi import WineApiProvider
 from . import apogee, sommellerie, wine_profile
 from .consolidation import consolider
@@ -1044,6 +1045,151 @@ class WineApiProviderTests(TestCase):
         wine = self.provider.lookup_by_text("Cuvée")
         self.assertTrue(wine.raw["pending"])
         self.assertIsNone(wine.raw["wineapi_detail"])
+
+
+@override_settings(
+    GRAPEMINDS_KEY="cle-de-test",
+    GRAPEMINDS_ENABLED=True,
+    GRAPEMINDS_BASE_URL="https://api.test/public/v1",
+    GRAPEMINDS_TIMEOUT=5,
+    GRAPEMINDS_IMAGE_TIMEOUT=9,
+    GRAPEMINDS_SEARCH_LIMIT=5,
+)
+class GrapeMindsProviderTests(SimpleTestCase):
+    """Client HTTP GrapeMinds : activation, erreurs remontées, mapping (urlopen mocké)."""
+
+    def setUp(self):
+        self.provider = GrapeMindsProvider()
+
+    def test_enabled_exige_cle_ET_activation_explicite(self):
+        # Clé + activation => actif.
+        self.assertTrue(self.provider.enabled)
+        # Clé seule (sans le drapeau) => inerte : garde-fou licence PSL / quota.
+        with override_settings(GRAPEMINDS_ENABLED=False):
+            self.assertFalse(self.provider.enabled)
+        # Drapeau sans clé => inerte aussi.
+        with override_settings(GRAPEMINDS_KEY=""):
+            self.assertFalse(self.provider.enabled)
+
+    @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
+    def test_429_leve_une_erreur_remontable(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(429)
+        with self.assertRaises(EnrichmentError) as ctx:
+            self.provider._request("GET", "/wines/search?q=x")
+        self.assertEqual(ctx.exception.status, 429)
+
+    @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
+    def test_401_leve_une_erreur_502(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(401)
+        with self.assertRaises(EnrichmentError) as ctx:
+            self.provider._request("GET", "/wines/1")
+        self.assertEqual(ctx.exception.status, 502)  # clé invalide = erreur serveur
+
+    @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
+    def test_402_403_5xx_sont_des_miss_silencieux(self, mock_urlopen):
+        # 402 (abonnement), 403 (conditions/Enterprise), 500 : la cascade continue.
+        for code in (402, 403, 500):
+            mock_urlopen.side_effect = _http_error(code)
+            self.assertIsNone(self.provider._request("GET", "/wines/1"))
+
+    @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
+    def test_reseau_indisponible_est_un_miss(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("réseau coupé")
+        self.assertIsNone(self.provider._request("GET", "/wines/1"))
+
+    def test_requete_trop_courte_n_appelle_pas_l_api(self):
+        # L'API exige min. 3 caractères : on court-circuite sans consommer de quota.
+        with patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen") as mock_urlopen:
+            self.assertIsNone(self.provider.lookup_by_text("ab"))
+            mock_urlopen.assert_not_called()
+
+    @override_settings(GRAPEMINDS_ENRICH_DETAIL=False)
+    @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
+    def test_lookup_by_text_mappe_le_candidat(self, mock_urlopen):
+        # Réponse de recherche enveloppée dans "data".
+        payload = json.dumps({
+            "data": [{
+                "id": 9146, "name": "Tignanello 2019", "color": "red",
+                "sub_type": "still", "producer": {"name": "Antinori"},
+                "region": {"name": "Toscane", "country": "IT"}, "vintage": 2019,
+            }],
+        }).encode("utf-8")
+        mock_urlopen.return_value = _fake_urlopen(payload)
+
+        wine = self.provider.lookup_by_text("Tignanello")
+
+        self.assertEqual(mock_urlopen.call_count, 1)  # pas d'appel détail
+        self.assertEqual(wine.domaine_nom, "Antinori")
+        self.assertEqual(wine.cuvee_nom, "Tignanello")  # millésime retiré
+        self.assertEqual(wine.couleur, "ROUGE")
+        self.assertEqual(wine.appellation, "Toscane")
+        self.assertEqual(wine.millesime, 2019)
+        self.assertEqual(wine.source, "grapeminds")
+        self.assertEqual(wine.raw["pays"], "IT")
+
+    @override_settings(GRAPEMINDS_ENRICH_DETAIL=True)
+    @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
+    def test_lookup_enrichit_via_appel_detail(self, mock_urlopen):
+        search = json.dumps({"data": [{"id": 9146, "name": "Tignanello"}]}).encode("utf-8")
+        detail = json.dumps({"data": {
+            "id": 9146, "name": "Tignanello 2019", "color": "red", "sub_type": "still",
+            "producer": {"name": "Antinori"},
+            "region": {"name": "Toscane", "country": "IT"},
+            "grapes": [{"name": "Sangiovese"}, {"name": "Cabernet Sauvignon"}],
+            "vintage": 2019, "alcohol": 13.5, "description": "Grand rouge toscan.",
+        }}).encode("utf-8")
+        # 1er appel = recherche, 2e = détail /wines/9146.
+        mock_urlopen.side_effect = [_fake_urlopen(search), _fake_urlopen(detail)]
+
+        wine = self.provider.lookup_by_text("Tignanello")
+
+        self.assertEqual(mock_urlopen.call_count, 2)
+        self.assertEqual(wine.cuvee_nom, "Tignanello")
+        self.assertEqual(wine.cepages, ["Sangiovese", "Cabernet Sauvignon"])
+        self.assertEqual(wine.reference_externe_id, "9146")
+        self.assertEqual(wine.raw["degre_alcool"], 13.5)
+        self.assertEqual(wine.raw["description"], "Grand rouge toscan.")
+
+    @override_settings(GRAPEMINDS_ENRICH_DETAIL=False)
+    @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
+    def test_effervescent_prime_sur_la_couleur(self, mock_urlopen):
+        payload = json.dumps({"data": [{
+            "id": 1, "name": "Franciacorta", "color": "white", "sub_type": "sparkling",
+        }]}).encode("utf-8")
+        mock_urlopen.return_value = _fake_urlopen(payload)
+        wine = self.provider.lookup_by_text("Franciacorta")
+        self.assertEqual(wine.couleur, "BULLES")
+
+    @override_settings(GRAPEMINDS_ENRICH_DETAIL=False)
+    @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
+    def test_recherche_vide_renvoie_none(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_urlopen(b'{"data": []}')
+        self.assertIsNone(self.provider.lookup_by_text("inconnu"))
+
+    @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
+    def test_photo_desactivee_par_defaut_n_appelle_pas_l_api(self, mock_urlopen):
+        # Sans l'offre Enterprise, on n'appelle pas /photo/analyze (402/403 assuré).
+        with override_settings(GRAPEMINDS_PHOTO_ANALYSIS=False):
+            self.assertIsNone(self.provider.lookup_by_image(b"img", "image/jpeg"))
+            mock_urlopen.assert_not_called()
+
+    @override_settings(GRAPEMINDS_PHOTO_ANALYSIS=True, GRAPEMINDS_ENRICH_DETAIL=False)
+    @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
+    def test_photo_activee_envoie_du_json_base64(self, mock_urlopen):
+        payload = json.dumps({"data": [{"id": 5, "name": "Photo Wine", "color": "red"}]}).encode("utf-8")
+        mock_urlopen.return_value = _fake_urlopen(payload)
+
+        wine = self.provider.lookup_by_image(b"fausse-image-jpeg", "image/jpeg")
+
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.couleur, "ROUGE")
+        req = mock_urlopen.call_args[0][0]
+        self.assertTrue(req.full_url.endswith("/photo/analyze"))
+        self.assertEqual(req.method, "POST")
+        corps = json.loads(req.data.decode("utf-8"))
+        self.assertTrue(corps["photo"].startswith("data:image/jpeg;base64,"))
+        # La vision utilise le timeout image dédié.
+        self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 9)
 
 
 def _reponse_claude(payload, stop_reason="end_turn"):
