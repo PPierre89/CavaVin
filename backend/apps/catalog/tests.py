@@ -27,6 +27,7 @@ from .enrichment import EnrichmentError, NormalizedWine
 from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.grapeminds import GrapeMindsProvider
+from .enrichment.vinou import VinouProvider
 from .enrichment.wineapi import WineApiProvider
 from . import apogee, sommellerie, wine_profile
 from .consolidation import consolider
@@ -1190,6 +1191,112 @@ class GrapeMindsProviderTests(SimpleTestCase):
         self.assertTrue(corps["photo"].startswith("data:image/jpeg;base64,"))
         # La vision utilise le timeout image dédié.
         self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 9)
+
+
+@override_settings(
+    VINOU_ENABLED=True,
+    VINOU_TOKEN="",
+    VINOU_BASE_URL="https://api.test",
+    VINOU_TIMEOUT=5,
+    VINOU_SEARCH_LIMIT=5,
+)
+class VinouProviderTests(SimpleTestCase):
+    """Client HTTP Vinou : activation, erreurs remontées, mapping (urlopen mocké)."""
+
+    def setUp(self):
+        self.provider = VinouProvider()
+
+    def test_enabled_suit_le_drapeau(self):
+        self.assertTrue(self.provider.enabled)
+        with override_settings(VINOU_ENABLED=False):
+            self.assertFalse(self.provider.enabled)
+
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_429_leve_une_erreur_remontable(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(429)
+        with self.assertRaises(EnrichmentError) as ctx:
+            self.provider.lookup_by_text("x")
+        self.assertEqual(ctx.exception.status, 429)
+
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_401_403_levent_une_erreur_502(self, mock_urlopen):
+        for code in (401, 403):
+            mock_urlopen.side_effect = _http_error(code)
+            with self.assertRaises(EnrichmentError) as ctx:
+                self.provider.lookup_by_text("x")
+            self.assertEqual(ctx.exception.status, 502)
+
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_5xx_et_reseau_sont_des_miss(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(500)
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+        mock_urlopen.side_effect = urllib.error.URLError("réseau coupé")
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_enveloppe_non_success_renvoie_none(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_urlopen(b'{"info": "error", "data": null}')
+        self.assertIsNone(self.provider.lookup_by_text("x"))
+
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_lookup_by_text_mappe_le_candidat(self, mock_urlopen):
+        payload = json.dumps({
+            "info": "success",
+            "data": [{
+                "id": 4065, "name": "Bianca Cuvee 2019", "type": "white",
+                "vintage": 2019, "alcohol": "12.0", "countrycode": "de",
+                "gtin": "012345678912", "description": "Un blanc sec.",
+                "winery": {"name": "Julia Heimsch", "company": "Musterweingut Vinou"},
+                "prices": [{"gross": "9.52"}, {"gross": "8.33"}],
+            }],
+        }).encode("utf-8")
+        mock_urlopen.return_value = _fake_urlopen(payload)
+
+        wine = self.provider.lookup_by_text("Bianca")
+
+        self.assertEqual(wine.domaine_nom, "Musterweingut Vinou")  # company prioritaire
+        self.assertEqual(wine.cuvee_nom, "Bianca Cuvee")  # millésime retiré
+        self.assertEqual(wine.couleur, "BLANC")
+        self.assertEqual(wine.millesime, 2019)
+        self.assertEqual(wine.code_barres, "012345678912")
+        self.assertEqual(wine.reference_externe_id, "4065")
+        self.assertEqual(wine.source, "vinou")
+        self.assertEqual(wine.raw["pays"], "DE")
+        self.assertEqual(wine.raw["degre_alcool"], 12.0)
+        self.assertEqual(wine.raw["prix"], 8.33)  # gross le plus bas
+
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_lookup_by_barcode_filtre_sur_gtin(self, mock_urlopen):
+        payload = json.dumps({
+            "info": "success",
+            "data": [{"id": 1, "name": "Vin EAN", "type": "red"}],
+        }).encode("utf-8")
+        mock_urlopen.return_value = _fake_urlopen(payload)
+
+        wine = self.provider.lookup_by_barcode("012345678912")
+
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.couleur, "ROUGE")
+        # Le code-barres est conservé même si le vin renvoyé ne le répète pas.
+        self.assertEqual(wine.code_barres, "012345678912")
+        # La requête filtre bien sur gtin.
+        req = mock_urlopen.call_args[0][0]
+        self.assertTrue(req.full_url.endswith("/wines/search"))
+        corps = json.loads(req.data.decode("utf-8"))
+        self.assertEqual(corps["filter"]["gtin"], "012345678912")
+
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_recherche_vide_renvoie_none(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_urlopen(b'{"info": "success", "data": []}')
+        self.assertIsNone(self.provider.lookup_by_text("inconnu"))
+
+    @override_settings(VINOU_TOKEN="jeton-secret")
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_jeton_envoye_en_bearer_si_configure(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_urlopen(b'{"info": "success", "data": []}')
+        self.provider.lookup_by_text("x")
+        req = mock_urlopen.call_args[0][0]
+        self.assertEqual(req.headers["Authorization"], "Bearer jeton-secret")
 
 
 def _reponse_claude(payload, stop_reason="end_turn"):

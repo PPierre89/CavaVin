@@ -8,6 +8,7 @@ from .grapeminds import GrapeMindsProvider
 from .lwin import LwinProvider
 from .openfoodfacts import OpenFoodFactsProvider
 from .stubs import VivinoProvider
+from .vinou import VinouProvider
 from .wineapi import WineApiProvider
 
 # Ordre de la cascade d'enrichissement externe.
@@ -25,6 +26,10 @@ _PROVIDERS: list[EnrichmentProvider] = [
     # désactivé par défaut (cf. GrapeMindsProvider : licence PSL + quota serré) :
     # il n'entre dans la cascade que si GRAPEMINDS_ENABLED est explicitement activé.
     GrapeMindsProvider(),
+    # Vinou : catalogue des domaines inscrits sur Vinou (surtout allemands).
+    # Slot désactivé par défaut (cf. VinouProvider : auth à valider + couverture
+    # de niche) : n'entre dans la cascade que si VINOU_ENABLED est activé.
+    VinouProvider(),
     LwinProvider(),
     VivinoProvider(),
 ]

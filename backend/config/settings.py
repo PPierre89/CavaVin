@@ -264,6 +264,21 @@ GRAPEMINDS_PHOTO_ANALYSIS = os.getenv("GRAPEMINDS_PHOTO_ANALYSIS", "False") == "
 # Nombre de candidats demandés à la recherche / analyse (on retient le meilleur).
 GRAPEMINDS_SEARCH_LIMIT = int(os.getenv("GRAPEMINDS_SEARCH_LIMIT", "5"))
 
+# --- Enrichissement Vinou (api.vinou.de) ---
+# Catalogue des vins des domaines inscrits sur Vinou (surtout allemands) :
+# recherche texte (/wines/search) et code-barres (filtre sur gtin). Routes en POST
+# JSON ; jeton optionnel envoyé en Authorization: Bearer s'il est fourni.
+VINOU_BASE_URL = os.getenv("VINOU_BASE_URL", "https://api.vinou.de")
+VINOU_TOKEN = os.getenv("VINOU_TOKEN", "")
+# Slot DÉSACTIVÉ PAR DÉFAUT : opt-in explicite. Le handshake d'authentification
+# exact reste à valider (page « Authentication » non documentée ici) et la
+# couverture est de niche (domaines clients Vinou, pas un référentiel mondial).
+VINOU_ENABLED = os.getenv("VINOU_ENABLED", "False") == "True"
+# Timeout sortant (secondes), < timeout worker gunicorn (--timeout 120).
+VINOU_TIMEOUT = int(os.getenv("VINOU_TIMEOUT", "20"))
+# Taille de page demandée à la recherche (on retient le meilleur candidat).
+VINOU_SEARCH_LIMIT = int(os.getenv("VINOU_SEARCH_LIMIT", "5"))
+
 # --- Enrichissement Claude (Anthropic) ---
 # Identification par photo d'étiquette (vision) et par texte, en tête de cascade
 # devant wineapi. La clé est chargée depuis l'environnement (.env), jamais codée
