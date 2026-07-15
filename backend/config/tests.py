@@ -45,6 +45,16 @@ class RegisterViewTests(APITestCase):
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_username_deja_pris_casse_differente_400(self):
+        # « Bob » ne doit pas pouvoir être créé si « bob » existe : sinon deux
+        # comptes distincts se forment et l'utilisateur « perd » ses données.
+        User.objects.create_user(username="bob", password="x")
+        resp = self.client.post(
+            self.url, {"username": "Bob", "password": "un-mot-de-passe-costaud"}
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(User.objects.filter(username__iexact="bob").count(), 1)
+
     def test_mot_de_passe_trop_faible_400(self):
         resp = self.client.post(self.url, {"username": "alice", "password": "123"})
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
@@ -72,6 +82,29 @@ class LoginThrottleTests(APITestCase):
         # La tentative suivante est bloquée par le throttle, pas par les identifiants.
         resp = self.client.post(self.url, {"username": "bob", "password": "faux"})
         self.assertEqual(resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+
+class LoginCasseInsensibleTests(APITestCase):
+    """La connexion JWT retrouve le compte quelle que soit la casse de
+    l'identifiant : c'est ce qui permet de se reconnecter au même compte (et
+    donc à ses données) depuis un autre appareil malgré la majuscule
+    automatique des claviers mobiles."""
+
+    def setUp(self):
+        cache.clear()  # compteur de throttle "auth"
+        self.url = reverse("token_obtain_pair")
+        User.objects.create_user(username="pierre", password="un-mot-de-passe-costaud")
+
+    def test_login_casse_differente_reussit(self):
+        resp = self.client.post(
+            self.url, {"username": "Pierre", "password": "un-mot-de-passe-costaud"}
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn("access", resp.data)
+
+    def test_login_mauvais_mot_de_passe_401(self):
+        resp = self.client.post(self.url, {"username": "Pierre", "password": "faux"})
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class MeViewTests(APITestCase):

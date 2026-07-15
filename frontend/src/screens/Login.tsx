@@ -52,6 +52,12 @@ export default function Login() {
           className={inputCls}
           placeholder="Identifiant"
           autoComplete="username"
+          // La majuscule auto du clavier mobile transforme « pierre » en
+          // « Pierre » : on la désactive pour retrouver le même compte
+          // (et donc ses données) depuis n'importe quel appareil.
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           required
