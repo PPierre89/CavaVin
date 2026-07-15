@@ -133,6 +133,11 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
+# Identifiant insensible à la casse : indispensable pour retrouver le même
+# compte depuis plusieurs appareils (la majuscule automatique des claviers
+# mobiles transforme sinon « pierre » en « Pierre » et casse la connexion).
+AUTHENTICATION_BACKENDS = ["config.auth_backends.CaseInsensitiveModelBackend"]
+
 
 LANGUAGE_CODE = "fr-fr"
 TIME_ZONE = "Europe/Paris"

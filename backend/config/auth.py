@@ -51,6 +51,15 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ["username", "email", "password"]
         extra_kwargs = {"email": {"required": False}}
 
+    def validate_username(self, value):
+        # Unicité insensible à la casse : empêche de créer « Pierre » quand
+        # « pierre » existe déjà. Sans ça, un utilisateur qui n'arrive pas à se
+        # connecter (majuscule automatique du clavier mobile) crée un doublon
+        # vide et croit avoir perdu ses données.
+        if User.objects.filter(username__iexact=value).exists():
+            raise serializers.ValidationError("Un compte existe déjà avec cet identifiant.")
+        return value
+
     def create(self, validated_data):
         return User.objects.create_user(
             username=validated_data["username"],
