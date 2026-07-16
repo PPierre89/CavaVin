@@ -372,6 +372,49 @@ class RechercheVinsViewTests(APITestCase):
         self.assertEqual(premier["libelle"], "Château Margaux (Margaux)")
         self.assertEqual(premier["couleur"], "ROUGE")
 
+    def test_evaluation_sure_quand_le_meilleur_domine(self):
+        # « chateau margaux » : une seule référence plausible, score maximal ->
+        # l'appli peut proposer directement la fiche pré-remplie.
+        resp = self.client.get(self.url, {"q": "chateau margaux"})
+        self.assertEqual(resp.data["evaluation"], "sur")
+        premier = resp.data["resultats"][0]
+        self.assertEqual(premier["score"], 1.0)
+        self.assertIsNone(premier["en_base"])  # cuvée pas encore au catalogue
+
+    def test_evaluation_hesitante_entre_plusieurs_candidats(self):
+        # Deux cuvées du même producteur à égalité parfaite : vérification
+        # manuelle sollicitée (liste), pas de fiche imposée. Le grand vin
+        # (nom de cuvée vide) est proposé avant sa déclinaison.
+        ReferenceLwin.objects.create(
+            lwin="1011300", producteur="Château Margaux",
+            vin="Margaux du Château Margaux", pays="France",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+        )
+        resp = self.client.get(self.url, {"q": "chateau margaux"})
+        self.assertEqual(resp.data["evaluation"], "hesitant")
+        libelles = [r["libelle"] for r in resp.data["resultats"]]
+        self.assertEqual(libelles[0], "Château Margaux (Margaux)")
+        self.assertIn("Château Margaux - Margaux du Château Margaux", libelles)
+
+    def test_en_base_expose_l_enrichissement_communautaire(self):
+        # La cuvée existe déjà dans le catalogue partagé (nourri par les autres
+        # utilisateurs) : la suggestion embarque cépages, note et accords pour
+        # étoffer la fiche proposée — sans aucune donnée privée.
+        domaine = Domaine.objects.create(nom="Château Margaux")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="Château Margaux", couleur="ROUGE",
+            lwin_code="1011247", note_moyenne="4.60", nb_notes=128,
+            accords=[{"nom": "Bœuf", "emoji": "🥩", "confiance": 0.9}],
+        )
+        cuvee.cepages.add(Cepage.objects.create(nom="Cabernet Sauvignon"))
+        resp = self.client.get(self.url, {"q": "chateau margaux"})
+        en_base = resp.data["resultats"][0]["en_base"]
+        self.assertEqual(en_base["cuvee_id"], cuvee.id)
+        self.assertEqual(en_base["cepages"], ["Cabernet Sauvignon"])
+        self.assertEqual(en_base["note"], 4.6)
+        self.assertEqual(en_base["nb_notes"], 128)
+        self.assertEqual(en_base["accords"][0]["nom"], "Bœuf")
+
     def test_millesime_extrait_et_couleur_filtree(self):
         resp = self.client.get(self.url, {"q": "palmer rouge 1998"})
         self.assertEqual(resp.data["resultats"][0]["millesime"], 1998)

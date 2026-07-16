@@ -112,6 +112,11 @@ Le référentiel importé alimente aussi la **recherche dynamique** (`GET /api/r
 suggestions au fil de la frappe (préfixes, tolérance aux fautes, millésime et couleur compris dans
 la requête — « palmer rouge 199 »), branchées sur le champ de recherche de l'écran d'ajout ;
 choisir une suggestion identifie le vin directement par son code LWIN, sans repasser par la cascade.
+La saisie est **guidée par un score de similarité** : quand le meilleur candidat domine nettement
+(`evaluation: sur`), l'appli propose directement sa fiche pré-remplie — domaine, cuvée, millésime,
+région, et, si la cuvée est déjà au catalogue partagé, cépages, note de la communauté et accords
+mets-vins ; quand l'algorithme hésite, la liste des correspondances sollicite une vérification
+manuelle.
 
 Tout hit est **mis en cache en base** ; les endpoints d'identification sont protégés par un
 throttle et la re-synchro par un cooldown par vin. Détail complet dans Swagger.

@@ -111,7 +111,7 @@ function defaultRoutes(): Record<string, unknown> {
     'GET /api/notes-degustation/': [],
     'POST /api/identifier-vin/': IDENTIFY,
     // Recherche dynamique (autocomplétion référentiel) : vide par défaut.
-    'GET /api/recherche-vins/': { resultats: [] },
+    'GET /api/recherche-vins/': { evaluation: null, resultats: [] },
   }
 }
 

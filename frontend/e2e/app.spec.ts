@@ -154,11 +154,14 @@ test('recherche dynamique : une cuvée déjà en base est suggérée sans appel 
   await expect(page.getByText(/Déjà en base/)).toBeVisible()
 })
 
-test('recherche dynamique : une suggestion du référentiel identifie le vin', async ({ page }) => {
+test('recherche dynamique : quand l’algorithme hésite, la liste sollicite une vérification', async ({
+  page,
+}) => {
   await seedAuth(page)
   await mockApi(page, {
-    // Le référentiel LWIN local propose un candidat au fil de la frappe.
+    // Deux candidats plausibles : l'appli demande une vérification manuelle.
     'GET /api/recherche-vins/': {
+      evaluation: 'hesitant',
       resultats: [
         {
           lwin: '1011248',
@@ -169,7 +172,22 @@ test('recherche dynamique : une suggestion du référentiel identifie le vin', a
           region: 'Bordeaux',
           pays: 'France',
           couleur: 'ROUGE',
+          score: 0.72,
           millesime: null,
+          en_base: null,
+        },
+        {
+          lwin: '1011249',
+          libelle: 'Château Palmer - Alter Ego',
+          producteur: 'Château Palmer',
+          vin: 'Alter Ego',
+          appellation: 'Margaux',
+          region: 'Bordeaux',
+          pays: 'France',
+          couleur: 'ROUGE',
+          score: 0.65,
+          millesime: null,
+          en_base: null,
         },
       ],
     },
@@ -180,12 +198,60 @@ test('recherche dynamique : une suggestion du référentiel identifie le vin', a
   await page.getByRole('button', { name: /Autre méthode/ }).click()
   await page.getByPlaceholder(/rechercher par nom/).fill('palmer')
 
-  // La section « Référentiel » apparaît (après le debounce) avec la suggestion.
-  await expect(page.getByText('Référentiel', { exact: true })).toBeVisible()
+  // L'hésitation est explicite (après le debounce) et les candidats listés.
+  await expect(page.getByText(/Plusieurs correspondances/)).toBeVisible()
+  await expect(page.getByText('Alter Ego · Margaux')).toBeVisible()
   await page.getByText('Château Palmer · Margaux').click()
 
   // La sélection identifie via le code LWIN (résolution locale côté serveur,
   // sans cascade externe) puis pré-remplit le formulaire.
+  await expect(page.getByText(/Identifié \(référentiel\)/)).toBeVisible()
+})
+
+test('saisie guidée : quand l’algorithme est sûr, la fiche pré-remplie est proposée', async ({
+  page,
+}) => {
+  await seedAuth(page)
+  await mockApi(page, {
+    // Le meilleur candidat domine : fiche proposée directement, étoffée par
+    // l'enrichissement communautaire (cuvée déjà au catalogue partagé).
+    'GET /api/recherche-vins/': {
+      evaluation: 'sur',
+      resultats: [
+        {
+          lwin: '1011250',
+          libelle: 'Petrus (Pomerol)',
+          producteur: 'Petrus',
+          vin: '',
+          appellation: 'Pomerol',
+          region: 'Bordeaux',
+          pays: 'France',
+          couleur: 'ROUGE',
+          score: 1.0,
+          millesime: 2015,
+          en_base: {
+            cuvee_id: 9,
+            cepages: ['Merlot'],
+            note: 4.8,
+            nb_notes: 212,
+            accords: [{ nom: 'Bœuf', emoji: '🥩' }],
+            image_url: '',
+          },
+        },
+      ],
+    },
+  })
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Ajouter une bouteille' }).click()
+  await page.getByRole('button', { name: /Autre méthode/ }).click()
+  await page.getByPlaceholder(/rechercher par nom/).fill('petrus 2015')
+
+  // La fiche proposée affiche millésime, région et données communautaires.
+  await expect(page.getByText('Meilleure correspondance')).toBeVisible()
+  await expect(page.getByText(/Merlot · ★ 4\.8 \(212 avis\) · 🥩 Bœuf/)).toBeVisible()
+  await page.getByText('✓ Utiliser cette fiche').click()
+
   await expect(page.getByText(/Identifié \(référentiel\)/)).toBeVisible()
 })
 

@@ -282,7 +282,7 @@ def _classement(texte: str, ocr: bool = False, prefixe: bool = False) -> list[tu
     # enfin la proximité globale à l'entrée.
     classement: list[tuple] = []
     for i in candidates:
-        pk, requis, bonus, ancres, chaine = refs[i]
+        pk, requis, bonus, ancres, chaine, long_vin = refs[i]
         scores = [scores_vocab.get(t, 0.0) for t in requis]
         ancres_trouvees = [t for t in ancres if ancre_trouvee(t)]
         if ancres and not ancres_trouvees:
@@ -312,6 +312,10 @@ def _classement(texte: str, ocr: bool = False, prefixe: bool = False) -> list[tu
                 fuzz.token_set_ratio(chaine, texte_norm),
                 poids_trouve + poids_ancres,
                 poids_trouve / poids_total,
+                # À égalité parfaite, le nom de cuvée le plus court (le grand
+                # vin plutôt que sa déclinaison : « Riesling » avant
+                # « Riesling Réserve ») est le plus proche de la saisie.
+                -long_vin,
                 -pk,  # départage stable
             ))
             continue
@@ -349,35 +353,72 @@ def rechercher_lwin(texte: str, limite: int = 6, couleur: str | None = None) -> 
     Le dernier token est traité comme un préfixe (recherche au fil de la
     frappe). ``couleur`` filtre les résultats (les références de couleur
     inconnue sont conservées : inconnu n'est pas une contradiction). Renvoie
-    des dictionnaires prêts pour l'API, du meilleur candidat au moins bon."""
+    des dictionnaires prêts pour l'API, du meilleur candidat au moins bon,
+    chacun portant un ``score`` de similarité 0-1 (proximité globale à
+    l'entrée pondérée par la couverture des tokens de la référence) qui sert
+    à ``evaluer_confiance``."""
     classement = _classement(texte, prefixe=True)
     if not classement:
         return []
 
     from ..models import ReferenceLwin
 
-    pks = [-c[-1] for c in classement[: limite * 4]]
-    refs_db = ReferenceLwin.objects.in_bulk(pks)
+    # Tuple préfixe : (ratio 0-100, poids, couverture 0-1, -pk).
+    scores = {-c[-1]: round((c[0] / 100) * (0.6 + 0.4 * c[2]), 2) for c in classement[: limite * 4]}
+    refs_db = ReferenceLwin.objects.in_bulk(scores)
     resultats: list[dict] = []
-    for pk in pks:
+    for pk, score in scores.items():
         ref = refs_db.get(pk)
         if ref is None:
             continue
         if couleur and ref.couleur not in (couleur, "AUTRE"):
             continue
+        libelle = _libelle(ref)
+        # Le dump contient des doublons (même vin sous plusieurs codes LWIN) :
+        # deux suggestions au libellé identique n'aideraient pas l'utilisateur.
+        if any(r["libelle"] == libelle for r in resultats):
+            continue
         resultats.append({
             "lwin": ref.lwin,
-            "libelle": _libelle(ref),
+            "libelle": libelle,
             "producteur": ref.producteur,
             "vin": ref.vin,
             "appellation": ref.sous_region or ref.region,
             "region": ref.region,
             "pays": ref.pays,
             "couleur": ref.couleur,
+            "score": score,
         })
         if len(resultats) >= limite:
             break
     return resultats
+
+
+# Seuils de la décision « sûr / hésitant » : score minimal du meilleur candidat
+# quand il est talonné, marge exigée sur le deuxième, et score minimal quand il
+# est seul en lice (calibrés sur le dump réel : « petrus » ou « opus one »
+# dominent nettement, « dom perignon » laisse P2/P3 à égalité -> hésitation).
+_SEUIL_SUR = 0.85
+_ECART_SUR = 0.10
+_SEUIL_SUR_UNIQUE = 0.75
+
+
+def evaluer_confiance(resultats: list[dict]) -> str | None:
+    """Décision d'affichage pour une liste de résultats de ``rechercher_lwin``.
+
+    - ``"sur"`` : le meilleur candidat domine nettement -> l'appli peut
+      proposer directement sa fiche pré-remplie.
+    - ``"hesitant"`` : plusieurs candidats plausibles -> l'appli présente les
+      suggestions et sollicite une vérification manuelle.
+    - ``None`` : aucun résultat."""
+    if not resultats:
+        return None
+    meilleur = resultats[0]["score"]
+    if len(resultats) == 1:
+        return "sur" if meilleur >= _SEUIL_SUR_UNIQUE else "hesitant"
+    if meilleur >= _SEUIL_SUR and meilleur - resultats[1]["score"] >= _ECART_SUR:
+        return "sur"
+    return "hesitant"
 
 
 # Cache en mémoire du référentiel (rechargé quand le nombre d'entrées change,
@@ -446,6 +487,9 @@ def _referentiel() -> dict:
                 # Chaîne normalisée (traits d'union -> espaces) : le ratio doit
                 # voir « lynch bages » dans « Château Lynch-Bages ».
                 _normaliser(f"{producteur} {vin} {sous_region}"),
+                # Longueur du nom de cuvée : départage les égalités parfaites
+                # en faveur du grand vin (« Yquem » avant « Yquem - Y »).
+                len(_normaliser(vin)),
             ))
             tous = requis | bonus | ancres
             for t in tous:
