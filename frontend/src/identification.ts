@@ -28,6 +28,16 @@ export function identifyByText(query: string, lwin?: string) {
   return api<IdentifiedWine>('POST', '/api/identifier-vin/', lwin ? { query, lwin } : { query })
 }
 
+/** Enrichissement communautaire d'une suggestion déjà au catalogue partagé. */
+export interface CuveeConnue {
+  cuvee_id: number
+  cepages: string[]
+  note: number | null
+  nb_notes: number | null
+  accords: { nom: string; emoji: string }[]
+  image_url: string
+}
+
 /** Suggestion du référentiel LWIN local (recherche dynamique). */
 export interface SuggestionReferentiel {
   lwin: string
@@ -38,7 +48,18 @@ export interface SuggestionReferentiel {
   region: string
   pays: string
   couleur: string
+  score: number
   millesime: number | null
+  en_base: CuveeConnue | null
+}
+
+/** Réponse de la recherche dynamique : suggestions + décision d'affichage.
+ *  `evaluation` « sur » = le meilleur candidat domine, l'appli propose sa
+ *  fiche pré-remplie ; « hesitant » = plusieurs candidats plausibles, la
+ *  liste sollicite une vérification manuelle. */
+export interface RechercheReferentiel {
+  evaluation: 'sur' | 'hesitant' | null
+  resultats: SuggestionReferentiel[]
 }
 
 /**
@@ -46,12 +67,12 @@ export interface SuggestionReferentiel {
  * léger et 100 % local côté serveur (aucun quota externe), pensé pour être
  * déclenché au fil de la frappe avec un debounce.
  */
-export async function searchReferentiel(query: string): Promise<SuggestionReferentiel[]> {
-  const data = await api<{ resultats?: SuggestionReferentiel[] }>(
+export async function searchReferentiel(query: string): Promise<RechercheReferentiel> {
+  const data = await api<Partial<RechercheReferentiel>>(
     'GET',
     `/api/recherche-vins/?q=${encodeURIComponent(query)}`,
   )
-  return data?.resultats ?? []
+  return { evaluation: data?.evaluation ?? null, resultats: data?.resultats ?? [] }
 }
 
 export function identifyByLabel(file: File) {

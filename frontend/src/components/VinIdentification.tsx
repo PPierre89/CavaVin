@@ -12,9 +12,10 @@ import {
   searchLocalCuvees,
   searchReferentiel,
   type IdentifiedWine,
+  type RechercheReferentiel,
   type SuggestionReferentiel,
 } from '../identification'
-import type { Cuvee } from '../types'
+import { COULEUR_VARS, type Couleur, type Cuvee } from '../types'
 
 /* ------------------------------------------------------------------ *
  *  Module d'identification d'un vin.
@@ -206,20 +207,23 @@ export function VinIdentification({
   // Recherche dynamique dans le référentiel LWIN local (côté serveur, aucun
   // quota externe) : déclenchée au fil de la frappe avec un debounce, le
   // dernier mot étant traité comme un préfixe (« marg » -> « Margaux »).
-  const [referentiel, setReferentiel] = useState<SuggestionReferentiel[]>([])
+  const [referentiel, setReferentiel] = useState<RechercheReferentiel>({
+    evaluation: null,
+    resultats: [],
+  })
   useEffect(() => {
     if (q.length < 2) {
-      setReferentiel([])
+      setReferentiel({ evaluation: null, resultats: [] })
       return
     }
     let annule = false
     const timer = setTimeout(async () => {
       try {
-        const resultats = await searchReferentiel(q)
-        if (!annule) setReferentiel(resultats)
+        const recherche = await searchReferentiel(q)
+        if (!annule) setReferentiel(recherche)
       } catch {
         // Référentiel non importé / réseau : la recherche locale reste servie.
-        if (!annule) setReferentiel([])
+        if (!annule) setReferentiel({ evaluation: null, resultats: [] })
       }
     }, 300)
     return () => {
@@ -232,8 +236,20 @@ export function VinIdentification({
   // local affiché au-dessus (même code LWIN).
   const suggestionsRef = useMemo(() => {
     const locaux = new Set(matches.map((c) => c.lwin_code).filter(Boolean))
-    return referentiel.filter((s) => !locaux.has(s.lwin)).slice(0, 4)
+    return referentiel.resultats.filter((s) => !locaux.has(s.lwin)).slice(0, 4)
   }, [referentiel, matches])
+
+  // Saisie guidée : quand l'algorithme est sûr de lui (« evaluation: sur »),
+  // la meilleure correspondance est proposée en fiche pré-remplie — sauf si
+  // elle a été absorbée par le catalogue local affiché au-dessus. Sinon
+  // (hésitation), la liste sollicite une vérification manuelle.
+  const meilleure =
+    referentiel.evaluation === 'sur' &&
+    suggestionsRef.length > 0 &&
+    suggestionsRef[0].lwin === referentiel.resultats[0]?.lwin
+      ? suggestionsRef[0]
+      : null
+  const autresSuggestions = meilleure ? suggestionsRef.slice(1) : suggestionsRef
 
   /** Sélection d'une suggestion du référentiel : résolution locale par code
    *  LWIN côté serveur (cascade externe court-circuitée, aucun quota). */
@@ -262,10 +278,12 @@ export function VinIdentification({
     run('text', () => identifyByText(q), 'Identifié', 'Vin non identifié. Ajoute-le manuellement.')
   }
 
-  // Entrée : on privilégie la première suggestion locale (gratuite) ; à défaut,
-  // seulement, on bascule sur la recherche en ligne.
+  // Entrée : on privilégie la première suggestion locale (gratuite), puis la
+  // fiche proposée par le référentiel quand l'algorithme est sûr (gratuite
+  // aussi) ; à défaut seulement, on bascule sur la recherche en ligne.
   function onSearchEnter() {
     if (matches.length) pickLocal(matches[0])
+    else if (meilleure) pickReferentiel(meilleure)
     else searchOnline()
   }
 
@@ -374,12 +392,70 @@ export function VinIdentification({
                     </div>
                   </button>
                 ))}
-                {suggestionsRef.length > 0 && (
-                  <div className="px-3.5 pt-2 pb-1 text-[0.68rem] uppercase tracking-wider text-muted border-t border-line/40">
-                    Référentiel
+                {/* Saisie guidée — l'algorithme est sûr : fiche pré-remplie
+                    proposée directement (domaine, cuvée, millésime, région, et
+                    l'enrichissement communautaire quand la cuvée est connue). */}
+                {meilleure && (
+                  <div className="border-t border-line/40">
+                    <div className="px-3.5 pt-2 pb-1 text-[0.68rem] uppercase tracking-wider text-gold">
+                      Meilleure correspondance
+                    </div>
+                    <button
+                      onMouseDown={(e) => (e.preventDefault(), pickReferentiel(meilleure))}
+                      disabled={busy}
+                      className="w-full text-left px-3.5 py-2.5 hover:bg-white/5 transition disabled:opacity-60"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          aria-hidden
+                          className="w-2.5 h-2.5 rounded-full shrink-0"
+                          style={{
+                            background:
+                              COULEUR_VARS[meilleure.couleur as Couleur] ?? 'var(--color-autre)',
+                          }}
+                        />
+                        <span className="text-ink text-sm font-medium truncate">
+                          {meilleure.vin || meilleure.producteur}
+                        </span>
+                        {meilleure.millesime != null && (
+                          <span className="text-muted text-xs shrink-0">{meilleure.millesime}</span>
+                        )}
+                      </div>
+                      <div className="text-muted text-[0.78rem] truncate">
+                        {meilleure.producteur}
+                        {meilleure.appellation ? ` · ${meilleure.appellation}` : ''}
+                        {meilleure.pays ? ` · ${meilleure.pays}` : ''}
+                      </div>
+                      {meilleure.en_base && (
+                        <div className="text-muted text-[0.78rem] truncate mt-0.5">
+                          {[
+                            meilleure.en_base.cepages.join(', '),
+                            meilleure.en_base.note != null
+                              ? `★ ${meilleure.en_base.note.toFixed(1)} (${meilleure.en_base.nb_notes ?? 0} avis)`
+                              : '',
+                            meilleure.en_base.accords
+                              .slice(0, 3)
+                              .map((a) => `${a.emoji} ${a.nom}`)
+                              .join('  '),
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </div>
+                      )}
+                      <div className="text-gold text-xs mt-1">✓ Utiliser cette fiche</div>
+                    </button>
                   </div>
                 )}
-                {suggestionsRef.map((s) => (
+                {autresSuggestions.length > 0 && (
+                  <div className="px-3.5 pt-2 pb-1 text-[0.68rem] uppercase tracking-wider text-muted border-t border-line/40">
+                    {meilleure
+                      ? 'Autres propositions'
+                      : referentiel.evaluation === 'hesitant'
+                        ? 'Plusieurs correspondances — vérifie la bonne'
+                        : 'Référentiel'}
+                  </div>
+                )}
+                {autresSuggestions.map((s) => (
                   <button
                     key={s.lwin}
                     onMouseDown={(e) => (e.preventDefault(), pickReferentiel(s))}
@@ -393,6 +469,7 @@ export function VinIdentification({
                     <div className="text-ink text-sm truncate">
                       {s.vin || s.producteur}
                       {s.appellation ? ` · ${s.appellation}` : ''}
+                      {s.en_base ? ' · déjà enrichi' : ''}
                     </div>
                   </button>
                 ))}

@@ -20,7 +20,7 @@ from .enrichment import (
     refresh_wineapi_detail,
     wineapi_detail,
 )
-from .enrichment.lwin import LwinProvider, rechercher_lwin
+from .enrichment.lwin import LwinProvider, evaluer_confiance, rechercher_lwin
 from .enrichment.normalize import guess_couleur, parse_vintage, strip_vintage
 from .ingest import synchroniser_wineapi, upsert_cuvee
 from .models import Cepage, Cuvee, Domaine, ReferenceLwin
@@ -387,9 +387,16 @@ class RechercheVinsView(APIView):
     appliquée en filtre : « palmer rouge 2015 »), et la tolérance aux fautes
     de frappe est celle de la correspondance LWIN.
 
-    Réponse : `{"resultats": [{lwin, libelle, producteur, vin, appellation,
-    region, pays, couleur, millesime}]}` — sélectionner un résultat côté
-    client revient à appeler `identifier-vin` avec son code `lwin`.
+    Réponse : `{"evaluation", "resultats": [{lwin, libelle, producteur, vin,
+    appellation, region, pays, couleur, score, millesime, en_base}]}`.
+    ``evaluation`` guide l'affichage : « sur » (le meilleur candidat domine,
+    l'appli peut proposer sa fiche pré-remplie), « hesitant » (plusieurs
+    candidats plausibles, vérification manuelle) ou null. ``en_base`` porte,
+    quand la cuvée existe déjà dans le catalogue partagé (mutualisé, nourri
+    par les autres utilisateurs), de quoi étoffer la fiche proposée : cépages,
+    note de la communauté, accords mets-vins — jamais de donnée privée.
+    Sélectionner un résultat côté client revient à appeler `identifier-vin`
+    avec son code `lwin`.
     """
 
     serializer_class = RechercheVinsSerializer
@@ -399,16 +406,37 @@ class RechercheVinsView(APIView):
     def get(self, request):
         q = (request.query_params.get("q") or "").strip()
         if len(q) < 2:
-            return Response({"resultats": []})
+            return Response({"evaluation": None, "resultats": []})
 
         # Compréhension de la requête : millésime et couleur sont extraits et
         # appliqués (filtre couleur, millésime renvoyé pour pré-remplir).
         millesime = parse_vintage(q)
         couleur = guess_couleur(q)
         resultats = rechercher_lwin(q, limite=6, couleur=couleur if couleur != "AUTRE" else None)
+
+        # Étoffe les suggestions déjà présentes dans le catalogue partagé :
+        # ces cuvées ont été enrichies par la communauté (cépages, note,
+        # accords), la fiche proposée les affiche sans aucun appel externe.
+        cuvees = {
+            c.lwin_code: c
+            for c in Cuvee.objects.filter(
+                lwin_code__in=[r["lwin"] for r in resultats]
+            ).prefetch_related("cepages")
+        }
         for r in resultats:
             r["millesime"] = millesime
-        return Response({"resultats": resultats})
+            cuvee = cuvees.get(r["lwin"])
+            r["en_base"] = None
+            if cuvee is not None:
+                r["en_base"] = {
+                    "cuvee_id": cuvee.id,
+                    "cepages": [c.nom for c in cuvee.cepages.all()],
+                    "note": float(cuvee.note_moyenne) if cuvee.note_moyenne is not None else None,
+                    "nb_notes": cuvee.nb_notes,
+                    "accords": (cuvee.accords or [])[:4],
+                    "image_url": cuvee.image_url,
+                }
+        return Response({"evaluation": evaluer_confiance(resultats), "resultats": resultats})
 
 
 class ScanEtiquetteView(APIView):
