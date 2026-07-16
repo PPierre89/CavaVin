@@ -89,7 +89,13 @@ class VinouProvider(EnrichmentProvider):
     def _raw_post(self, path: str, payload: dict, jwt: str) -> dict | None:
         """POST JSON brut — renvoie le corps décodé (dict/str) ou None. Ne déballe
         pas l'enveloppe (utilisé aussi par le login, dont la réponse porte le JWT)."""
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            # Certains hôtes refusent le User-Agent par défaut d'urllib : on
+            # s'identifie explicitement comme l'application.
+            "User-Agent": "CavaVin/1.0 (+https://github.com/ppierre89/cavavin)",
+        }
         if jwt:
             headers["Authorization"] = f"Bearer {jwt}"
         url = settings.VINOU_BASE_URL.rstrip("/") + path
@@ -134,13 +140,14 @@ class VinouProvider(EnrichmentProvider):
         return self._premier(data)
 
     def lookup_by_barcode(self, ean: str) -> NormalizedWine | None:
-        # Le champ `gtin` porte le code-barres : filtre exact sur ce champ.
+        # Le champ `gtin` porte le code-barres. Vinou n'accepte pas `filter` sur ce
+        # champ (400) mais bien la recherche par champ via `query` objet.
         code = clean(ean)
         if not code:
             return None
         data = self._post(
             "/wines/search",
-            {"filter": {"gtin": code}, "pageSize": settings.VINOU_SEARCH_LIMIT},
+            {"query": {"gtin": code}, "pageSize": settings.VINOU_SEARCH_LIMIT},
         )
         return self._premier(data, code_barres=code)
 
@@ -183,7 +190,7 @@ class VinouProvider(EnrichmentProvider):
                 "pays": pays,
                 "description": clean(wine.get("description")),
                 "degre_alcool": _nombre(wine.get("alcohol")),
-                "prix": _prix_min(wine.get("prices")),
+                "prix": _prix(wine),
             },
         )
 
@@ -229,6 +236,16 @@ def _nombre(valeur):
         return float(valeur) if valeur not in (None, "") else None
     except (TypeError, ValueError):
         return None
+
+
+def _prix(wine: dict) -> float | None:
+    """Prix TTC du vin. Au niveau *Service*, Vinou renvoie un tableau ``prices`` de
+    fourchettes tarifaires (on prend le plus bas ``gross``) ; en mode public, le prix
+    est porté par les champs plats ``gross`` / ``price``."""
+    p = _prix_min(wine.get("prices"))
+    if p is not None:
+        return p
+    return _nombre(wine.get("gross") or wine.get("price"))
 
 
 def _prix_min(prices) -> float | None:

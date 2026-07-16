@@ -1151,10 +1151,10 @@ class GrapeMindsProviderTests(SimpleTestCase):
     @override_settings(GRAPEMINDS_ENRICH_DETAIL=False)
     @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
     def test_lookup_by_text_mappe_le_candidat(self, mock_urlopen):
-        # Réponse de recherche enveloppée dans "data".
+        # Schéma réel : nom porté par `display_name`, enveloppe "data".
         payload = json.dumps({
             "data": [{
-                "id": 9146, "name": "Tignanello 2019", "color": "red",
+                "id": 9146, "display_name": "Tignanello 2019", "color": "red",
                 "sub_type": "still", "producer": {"name": "Antinori"},
                 "region": {"name": "Toscane", "country": "IT"}, "vintage": 2019,
             }],
@@ -1171,17 +1171,23 @@ class GrapeMindsProviderTests(SimpleTestCase):
         self.assertEqual(wine.millesime, 2019)
         self.assertEqual(wine.source, "grapeminds")
         self.assertEqual(wine.raw["pays"], "IT")
+        # User-Agent applicatif explicite (GrapeMinds refuse celui d'urllib -> 403).
+        req = mock_urlopen.call_args[0][0]
+        self.assertIn("CavaVin", req.headers.get("User-agent", ""))
 
     @override_settings(GRAPEMINDS_ENRICH_DETAIL=True)
     @patch("apps.catalog.enrichment.grapeminds.urllib.request.urlopen")
     def test_lookup_enrichit_via_appel_detail(self, mock_urlopen):
-        search = json.dumps({"data": [{"id": 9146, "name": "Tignanello"}]}).encode("utf-8")
+        search = json.dumps({"data": [{"id": 9146, "display_name": "Tignanello"}]}).encode("utf-8")
+        # Détail au schéma réel : `display_name`, `producer` objet, `description`
+        # objet {text, text_long}.
         detail = json.dumps({"data": {
-            "id": 9146, "name": "Tignanello 2019", "color": "red", "sub_type": "still",
+            "id": 9146, "display_name": "Tignanello 2019", "color": "red", "sub_type": "still",
             "producer": {"name": "Antinori"},
             "region": {"name": "Toscane", "country": "IT"},
             "grapes": [{"name": "Sangiovese"}, {"name": "Cabernet Sauvignon"}],
-            "vintage": 2019, "alcohol": 13.5, "description": "Grand rouge toscan.",
+            "vintage": 2019, "alcohol": 13.5,
+            "description": {"text": "Grand rouge toscan.", "text_long": "…", "language": "fr"},
         }}).encode("utf-8")
         # 1er appel = recherche, 2e = détail /wines/9146.
         mock_urlopen.side_effect = [_fake_urlopen(search), _fake_urlopen(detail)]
@@ -1324,11 +1330,12 @@ class VinouProviderTests(SimpleTestCase):
         self.assertEqual(wine.couleur, "ROUGE")
         # Le code-barres est conservé même si le vin renvoyé ne le répète pas.
         self.assertEqual(wine.code_barres, "012345678912")
-        # La requête filtre bien sur gtin.
+        # La recherche par code-barres passe par `query` objet sur `gtin`
+        # (Vinou rejette `filter` sur ce champ avec un 400).
         req = mock_urlopen.call_args[0][0]
         self.assertTrue(req.full_url.endswith("/wines/search"))
         corps = json.loads(req.data.decode("utf-8"))
-        self.assertEqual(corps["filter"]["gtin"], "012345678912")
+        self.assertEqual(corps["query"]["gtin"], "012345678912")
 
     @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
     def test_recherche_vide_renvoie_none(self, mock_urlopen):
@@ -1392,6 +1399,19 @@ class VinouProviderTests(SimpleTestCase):
         self.assertEqual(mock_urlopen.call_count, 3)
         derniere = mock_urlopen.call_args_list[2][0][0]
         self.assertEqual(derniere.headers["Authorization"], "Bearer JWT-NEUF")
+
+    @patch("apps.catalog.enrichment.vinou.urllib.request.urlopen")
+    def test_prix_repli_sur_gross_plat_en_mode_public(self, mock_urlopen):
+        # En mode public, le prix n'est pas un tableau `prices` mais le champ plat
+        # `gross` (le record complet est renvoyé quand même).
+        payload = json.dumps({"info": "success", "data": [{
+            "id": 6439, "name": "BIO Riesling trocken", "type": "white",
+            "gross": "5.80", "price": "5.80", "countrycode": "de",
+        }]}).encode("utf-8")
+        mock_urlopen.return_value = _fake_urlopen(payload)
+
+        wine = self.provider.lookup_by_text("Riesling")
+        self.assertEqual(wine.raw["prix"], 5.80)
 
 
 class StubsProviderTests(TestCase):

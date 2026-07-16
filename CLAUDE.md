@@ -135,10 +135,11 @@ The cascade in `registry.py` tries enabled providers in order:
   (`/wines/search` → `/wines/{id}`) and Enterprise-only label photo (`/photo/analyze`). **Disabled by
   default even with a key** — needs an explicit `GRAPEMINDS_ENABLED=True`, because (a) GrapeMinds
   requires a paid Persistent Storage License to permanently store its data, which our catalog does, and
-  (b) the public tier's quota is tight (~250/month). Response schema is mapped defensively (the vendor
-  ships no example payloads) — revalidate `grapeminds.py`'s field-name constants against a real
-  `/wines/{id}` response before relying on it. Its payload differs from wineapi's, so it contributes a
-  per-canal observation rather than a raw `wineapi_detail`.
+  (b) the public tier's quota is tight (~250/month; 5 req/s, 60 req/min). Schema validated live: name is
+  `display_name`, `description`/`tasting_notes` are `{text, text_long}` objects, producer/region are
+  nested objects. **Sends an explicit `User-Agent`** — GrapeMinds returns 403 to urllib's default UA.
+  Its payload differs from wineapi's, so it contributes a per-canal observation rather than a raw
+  `wineapi_detail`.
 - **Vinou** (`api.vinou.de`) — supplementary producer catalog (wines registered by Vinou's client
   wineries, mostly German): text search (`POST /wines/search`) and barcode via the `gtin` field.
   POST-JSON routes wrapped in `{"info","data"}`. Auth is **JWT**: `POST /service/login` with

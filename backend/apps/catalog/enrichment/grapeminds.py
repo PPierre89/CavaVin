@@ -14,6 +14,10 @@ from .normalize import clean, couleur_from_type, named, parse_vintage, strip_vin
 
 logger = logging.getLogger(__name__)
 
+# GrapeMinds (et d'autres) refusent le User-Agent par défaut d'urllib : on
+# s'identifie comme l'application.
+_USER_AGENT = "CavaVin/1.0 (+https://github.com/ppierre89/cavavin)"
+
 
 class GrapeMindsProvider(EnrichmentProvider):
     """
@@ -38,24 +42,28 @@ class GrapeMindsProvider(EnrichmentProvider):
       2. **Quota serré** (offre publique : ~250 appels/mois) : le garde-fou
          explicite évite de le consommer par inadvertance.
 
-    ⚠️ **Schéma de réponse à confirmer.** La collection Postman fournie ne contient
-    aucun exemple de réponse : le mapping ci-dessous lit défensivement plusieurs
-    noms de champs plausibles (cf. ``_WINE_*`` et ``_pick``). À revalider contre une
-    vraie réponse ``/wines/{id}`` dès que l'API est joignable ; l'ajustement se fait
-    en un seul endroit (les constantes de clés en tête de module).
+    Schéma de réponse **validé** contre l'API réelle (``/wines/search`` et
+    ``/wines/{id}``) : ``{id, display_name, color, sub_type, producer{name} |
+    producer_name, region{name, country}, grapes[{name}], description{text,
+    text_long}, ...}``. Les constantes de clés en tête de module restent tolérantes
+    aux variantes ; l'ajustement se fait en un seul endroit si le schéma évolue.
     """
 
     name = "grapeminds"
 
-    # --- Noms de champs candidats (à confirmer contre une vraie réponse) ---
-    # GrapeMinds n'ayant pas documenté ses réponses, on tolère plusieurs variantes.
-    _KEYS_PRODUCTEUR = ("producer", "producer_name", "winery", "domaine")
+    # --- Noms de champs (validés contre une vraie réponse /wines/search et
+    # /wines/{id}) ---. On tolère plusieurs variantes par prudence. Réponse réelle :
+    # {id, display_name, color, sub_type, producer|producer_name, region{name,country},
+    #  grapes[{name}], description{text,text_long}, ...}.
+    _KEYS_NOM = ("display_name", "name", "wine_name", "title")
+    _KEYS_PRODUCTEUR = ("producer", "producer_display_name", "producer_name", "winery", "domaine")
     _KEYS_REGION = ("region", "region_name", "appellation")
     _KEYS_PAYS = ("country", "country_code", "country_name")
-    _KEYS_COULEUR = ("color", "colour", "wine_color", "type")
+    _KEYS_COULEUR = ("color", "colour", "wine_color")
     _KEYS_SOUS_TYPE = ("sub_type", "subtype", "style")
     _KEYS_CEPAGES = ("grapes", "grape_varieties", "grapes_list", "cepages")
     _KEYS_ALCOOL = ("alcohol", "alcohol_content", "alcohol_percentage", "abv")
+    # description/pairing/tasting_notes sont des objets {text, text_long, language}.
     _KEYS_DESCRIPTION = ("description", "tasting_notes", "notes")
     _KEYS_MILLESIME = ("vintage", "year")
 
@@ -71,6 +79,9 @@ class GrapeMindsProvider(EnrichmentProvider):
             "Authorization": f"Bearer {settings.GRAPEMINDS_KEY}",
             "Accept": "application/json",
             "Accept-Language": settings.GRAPEMINDS_LANG,
+            # GrapeMinds renvoie 403 sur le User-Agent par défaut d'urllib
+            # (Python-urllib/x) : on s'identifie explicitement comme l'app.
+            "User-Agent": _USER_AGENT,
         }
 
     def _request(self, method: str, path: str, payload: dict | None = None, timeout: int | None = None):
@@ -148,7 +159,7 @@ class GrapeMindsProvider(EnrichmentProvider):
     # ----------------------------------------------------------- normalisation
 
     def _to_normalized(self, wine: dict) -> NormalizedWine:
-        nom = clean(_pick(wine, "name", "wine_name", "title"))
+        nom = clean(_pick(wine, *self._KEYS_NOM))
         base = strip_vintage(nom)
         producteur = named(_pick(wine, *self._KEYS_PRODUCTEUR))
         region = named(_pick(wine, *self._KEYS_REGION))
@@ -175,7 +186,7 @@ class GrapeMindsProvider(EnrichmentProvider):
             raw={
                 "region": region,
                 "pays": pays,
-                "description": clean(_pick(wine, *self._KEYS_DESCRIPTION)),
+                "description": _texte_riche(_pick(wine, *self._KEYS_DESCRIPTION)),
                 "degre_alcool": _pick(wine, *self._KEYS_ALCOOL) or None,
             },
         )
@@ -183,6 +194,15 @@ class GrapeMindsProvider(EnrichmentProvider):
 
 # --------------------------------------------------------------------- helpers
 # Fonctions pures et défensives face à un schéma de réponse encore non figé.
+
+
+def _texte_riche(valeur) -> str:
+    """Texte d'un champ descriptif : GrapeMinds renvoie ``description`` /
+    ``tasting_notes`` sous forme d'objet ``{text, text_long, language}`` — on prend
+    le texte court. Tolère aussi une chaîne directe."""
+    if isinstance(valeur, dict):
+        return clean(valeur.get("text") or valeur.get("text_long"))
+    return clean(valeur)
 
 
 def _pick(objet, *keys, default=""):
