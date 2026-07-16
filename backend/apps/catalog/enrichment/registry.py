@@ -7,7 +7,7 @@ from .claude import ClaudeProvider
 from .grapeminds import GrapeMindsProvider
 from .lwin import LwinProvider
 from .openfoodfacts import OpenFoodFactsProvider
-from .stubs import VivinoProvider
+from .stubs import CellarTrackerProvider, VivinoProvider
 from .vinou import VinouProvider
 from .wineapi import WineApiProvider
 
@@ -32,6 +32,9 @@ _PROVIDERS: list[EnrichmentProvider] = [
     VinouProvider(),
     LwinProvider(),
     VivinoProvider(),
+    # CellarTracker : pas d'API publique de référentiel (wines.asp = page HTML
+    # communautaire) ; scraping contraire aux CGU. Stub désactivé en permanence.
+    CellarTrackerProvider(),
 ]
 
 # Durée de mise en cache du détail wineapi (le profil d'un vin bouge lentement ;

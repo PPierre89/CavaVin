@@ -25,7 +25,7 @@ CavaVin/
 │   ├── config/                  # settings, urls, auth (RegisterView), wsgi/asgi, index view
 │   ├── apps/
 │   │   ├── catalog/             # SHARED reference data: Domaine, Cepage, Cuvee
-│   │   │   ├── enrichment/      # pluggable providers (OFF, Claude, wineapi.io, GrapeMinds, Vinou, LWIN/OCR local, Vivino stub)
+│   │   │   ├── enrichment/      # pluggable providers (OFF, Claude, wineapi.io, GrapeMinds, Vinou, LWIN/OCR local, Vivino/CellarTracker stubs)
 │   │   │   ├── ingest.py        # shared persistence: upsert_cuvee, enrich_cuvee_from_wineapi
 │   │   │   ├── wine_profile.py  # pure mapping of wineapi detail → Cuvee fields (source of truth)
 │   │   │   ├── apogee.py        # pure drink-window / status logic (no DB)
@@ -153,6 +153,11 @@ The cascade in `registry.py` tries enabled providers in order:
   (Liv-ex) reference table imported via `manage.py import_lwin`. Never raises `EnrichmentError`;
   inert without the imported dump or the binary. Keeps identification working with zero API keys.
 - **Vivino** — permanently disabled stub (no public API; scraping violates ToS — do not implement).
+- **CellarTracker** — permanently disabled stub, same rationale: no public reference API; `/wines.asp` is
+  an HTML community page and scraping it violates their ToS. Their only official programmatic access
+  (`xlquery.asp`) returns the *authenticated user's own* cellar/notes — a personal export, not a
+  searchable catalog — so importing one's own CellarTracker cellar would belong to the private tier,
+  not this enrichment cascade. Do not implement scraping.
 Every hit is normalised and **cached into the local DB** via `ingest.upsert_cuvee`. `EnrichmentError`
 (quota 429 / bad key 401) is surfaced to the user; network/other errors are treated as a plain miss.
 The **raw** wineapi payload is persisted verbatim on `Cuvee.wineapi_detail` so no upstream field is
