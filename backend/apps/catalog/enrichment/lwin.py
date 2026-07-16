@@ -47,6 +47,10 @@ _STOPWORDS = {
     "bouteille", "bouteilles", "propriete", "proprietaire", "recolte",
     "product", "produce", "produit", "france", "les", "des", "the", "and",
     "vieilles", "vignes", "reserve", "cuvee", "selection", "millesime",
+    # Mobilier d'étiquette anglophone, symétrique de château/domaine/cave :
+    # omniprésent sur les vins du Nouveau Monde, il n'identifie personne.
+    "winery", "vineyard", "vineyards", "estate", "estates", "cellars",
+    "county", "wines", "bottled",
 }
 
 # Noms de cépages et de styles : présents sur d'innombrables étiquettes, ils
@@ -574,7 +578,6 @@ def _referentiel() -> dict:
             requis = _tokens(vin) or _tokens(producteur)
             if not requis:
                 continue
-            bonus = _tokens(sous_region) - requis
             ancres: set[str] = set()
             if requis <= _GENERIQUES:
                 ancres = _tokens(producteur) - requis
@@ -583,6 +586,9 @@ def _referentiel() -> dict:
                     # token significatif (« te Pa ») : référence inidentifiable,
                     # elle ne doit jamais correspondre.
                     continue
+            # Un token déjà compté en ancre ne compte pas aussi en bonus :
+            # « Santa Barbara Winery » (Santa Barbara) pesait double.
+            bonus = _tokens(sous_region) - requis - ancres
             index = len(refs)
             # Tokens internés + tuples : le dump réel fait ~200 000 lignes, on
             # partage les chaînes récurrentes (« margaux », « pinot »…) en mémoire.
