@@ -255,6 +255,34 @@ test('saisie guidée : quand l’algorithme est sûr, la fiche pré-remplie est 
   await expect(page.getByText(/Identifié \(référentiel\)/)).toBeVisible()
 })
 
+test('ajout simplifié : vin identifié, récapitulatif, puis bouteille ajoutée', async ({
+  page,
+}) => {
+  await seedAuth(page)
+  await mockApi(page)
+  // Filet anti-quota : l'ajout simplifié ne doit déclencher aucun appel
+  // d'identification externe une fois la cuvée locale choisie.
+  await page.route('**/api/identifier-vin/', (route) => route.abort())
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Ajouter une bouteille' }).click()
+  await page.getByRole('button', { name: /Autre méthode/ }).click()
+  await page.getByPlaceholder(/rechercher par nom/).fill('cantemerle')
+  await page.getByText('Grand Cru Classé · Haut-Médoc').click()
+
+  // Étape 2 : récapitulatif du vin retenu (sans re-saisie), essentiel seul —
+  // les champs secondaires sont repliés sous « Plus de détails ».
+  await expect(page.getByText('Château Cantemerle', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'changer' })).toBeVisible()
+  await expect(page.getByText('Quantité')).toBeVisible()
+  await expect(page.getByPlaceholder('24.90')).toBeHidden()
+  await page.getByRole('button', { name: /Plus de détails/ }).click()
+  await expect(page.getByPlaceholder('24.90')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Ajouter à la cave' }).click()
+  await expect(page.getByText(/Bouteille ajoutée à la cave/)).toBeVisible()
+})
+
 test('ajout par recherche texte en ligne pré-remplit le vin identifié', async ({ page }) => {
   await seedAuth(page)
   await mockApi(page)
