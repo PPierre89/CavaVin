@@ -7,6 +7,7 @@ import { RackGrid, Slot } from '../components/bottle'
 import { VinIdentification } from '../components/VinIdentification'
 import type { IdentifiedWine } from '../identification'
 import {
+  COULEUR_VARS,
   DISPOSITION_LABELS,
   TYPE_LABELS,
   type Couleur,
@@ -49,23 +50,39 @@ export default function AjouterScreen({
 }
 
 /* ================= Bouteille ================= */
+
+/** Vin retenu pour la bouteille : une cuvée identifiée (photo, recherche,
+ *  code-barres, catalogue) ou une saisie manuelle (repli). */
+type VinChoisi = { mode: 'cuvee'; cuvee: Cuvee } | { mode: 'manuel' }
+
 function BottleForm({ onDone }: { onDone: () => void }) {
   const { cuvees, emplacements, caveId, refresh } = useData()
   const toast = useToast()
   const formRef = useRef<HTMLFormElement>(null)
-  const millesimeRef = useRef<HTMLInputElement>(null)
 
-  const [cuveeId, setCuveeId] = useState('')
+  // L'ajout se fait en deux temps : 1. LE VIN (identification — photo,
+  // recherche guidée, code-barres — ou saisie manuelle) ; 2. LA BOUTEILLE,
+  // réduite à l'essentiel (quantité, millésime, emplacement), les champs
+  // secondaires étant repliés sous « Plus de détails ».
+  const [vin, setVin] = useState<VinChoisi | null>(null)
   const [couleur, setCouleur] = useState<Couleur>('ROUGE')
+  const [quantite, setQuantite] = useState(1)
+  const [millesime, setMillesime] = useState('')
+  const [detailsOuverts, setDetailsOuverts] = useState(false)
 
-  const isNew = !cuveeId
+  function resetAll() {
+    setVin(null)
+    setCouleur('ROUGE')
+    setQuantite(1)
+    setMillesime('')
+    setDetailsOuverts(false)
+  }
 
-  // Pré-remplit le formulaire à partir d'un vin identifié (scan, étiquette, nom).
+  // Passe à l'étape bouteille à partir d'un vin identifié (scan, étiquette, nom).
   function applyIdentified(res: IdentifiedWine, srcLabel: string) {
     refresh()
-    setCuveeId(String(res.cuvee.id))
-    if (res.cuvee.couleur) setCouleur(res.cuvee.couleur)
-    if (res.millesime && millesimeRef.current) millesimeRef.current.value = String(res.millesime)
+    setVin({ mode: 'cuvee', cuvee: res.cuvee })
+    if (res.millesime) setMillesime(String(res.millesime))
     const conf = res.confidence != null ? ` · ${Math.round(res.confidence * 100)}%` : ''
     const reg = res.infos?.region ? ` (${res.infos.region})` : ''
     toast(`${srcLabel}${conf} : ${res.cuvee.domaine_nom} — ${res.cuvee.nom}${reg}`, 'ok')
@@ -81,6 +98,7 @@ function BottleForm({ onDone }: { onDone: () => void }) {
 
   async function submit(e: FormEvent) {
     e.preventDefault()
+    if (!vin) return
     const fd = new FormData(formRef.current!)
     const g = (k: string) => String(fd.get(k) || '').trim()
     const apogeeDebut = g('apogee_debut')
@@ -89,12 +107,14 @@ function BottleForm({ onDone }: { onDone: () => void }) {
       return toast("L'apogée de début doit précéder celle de fin.", 'err')
     }
     try {
-      let finalCuvee = cuveeId ? parseInt(cuveeId, 10) : null
-      if (!finalCuvee) {
+      let finalCuvee: number
+      if (vin.mode === 'cuvee') {
+        finalCuvee = vin.cuvee.id
+      } else {
         const domaineNom = g('domaine_nom')
         const cuveeNom = g('cuvee_nom')
         if (!domaineNom || !cuveeNom) {
-          return toast('Choisis une cuvée, ou renseigne domaine + nom de cuvée.', 'err')
+          return toast('Renseigne le domaine et le nom de cuvée.', 'err')
         }
         const domaineId = await findOrCreateDomaine(domaineNom)
         const cuvee = await api<Cuvee>('POST', '/api/cuvees/', {
@@ -107,8 +127,8 @@ function BottleForm({ onDone }: { onDone: () => void }) {
       }
       await api('POST', '/api/bouteilles/', {
         cuvee: finalCuvee,
-        millesime: g('millesime') ? parseInt(g('millesime'), 10) : null,
-        quantite: parseInt(g('quantite') || '1', 10),
+        millesime: millesime ? parseInt(millesime, 10) : null,
+        quantite,
         emplacement: g('emplacement') ? parseInt(g('emplacement'), 10) : null,
         prix_achat: g('prix') ? parseFloat(g('prix')) : null,
         date_achat: g('date_achat') || null,
@@ -116,9 +136,7 @@ function BottleForm({ onDone }: { onDone: () => void }) {
         apogee_fin: apogeeFin ? parseInt(apogeeFin, 10) : null,
         notes: g('notes'),
       })
-      formRef.current!.reset()
-      setCuveeId('')
-      setCouleur('ROUGE')
+      resetAll()
       toast('Bouteille ajoutée à la cave. 🍷', 'ok')
       await refresh()
       onDone()
@@ -127,32 +145,58 @@ function BottleForm({ onDone }: { onDone: () => void }) {
     }
   }
 
+  // --- Étape 1 : le vin ---
+  if (!vin) {
+    return (
+      <Card>
+        <CardTitle>Ajouter une bouteille</CardTitle>
+        <VinIdentification onIdentified={applyIdentified} cuvees={cuvees} />
+        <button
+          onClick={() => setVin({ mode: 'manuel' })}
+          className="w-full mt-3 text-xs text-muted underline"
+        >
+          ✍️ Saisir le vin à la main
+        </button>
+      </Card>
+    )
+  }
+
+  // --- Étape 2 : la bouteille ---
   return (
     <Card>
       <CardTitle>Ajouter une bouteille</CardTitle>
-      <VinIdentification onIdentified={applyIdentified} cuvees={cuvees} />
 
-      <form ref={formRef} onSubmit={submit} className="mt-4">
-        <div className="text-[0.7rem] uppercase tracking-[0.1em] text-muted border-b border-line/60 pb-1.5 mb-1">
-          Le vin
+      {vin.mode === 'cuvee' ? (
+        // Récapitulatif du vin retenu : l'étape 1 a fait le travail, on ne
+        // redemande rien — « changer » ramène à l'identification.
+        <div className="glass rounded-2xl px-3.5 py-3 flex items-center gap-3">
+          <span
+            aria-hidden
+            className="w-2.5 h-2.5 rounded-full shrink-0"
+            style={{ background: COULEUR_VARS[vin.cuvee.couleur] ?? 'var(--color-autre)' }}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="text-muted text-[0.78rem] truncate">{vin.cuvee.domaine_nom}</div>
+            <div className="text-ink text-sm font-medium truncate">
+              {vin.cuvee.nom}
+              {vin.cuvee.appellation ? ` · ${vin.cuvee.appellation}` : ''}
+            </div>
+          </div>
+          <button type="button" onClick={resetAll} className="text-xs text-gold underline shrink-0">
+            changer
+          </button>
         </div>
-        <Field label="Cuvée">
-          <select
-            name="cuvee"
-            className={inputCls}
-            value={cuveeId}
-            onChange={(e) => setCuveeId(e.target.value)}
-          >
-            <option value="">— nouvelle cuvée —</option>
-            {cuvees.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.domaine_nom} — {c.nom}
-              </option>
-            ))}
-          </select>
-        </Field>
+      ) : (
+        <div className="flex items-center justify-between">
+          <div className="text-[0.7rem] uppercase tracking-[0.1em] text-muted">Saisie manuelle</div>
+          <button type="button" onClick={resetAll} className="text-xs text-gold underline">
+            changer
+          </button>
+        </div>
+      )}
 
-        {isNew && (
+      <form ref={formRef} onSubmit={submit} className="mt-2">
+        {vin.mode === 'manuel' && (
           <>
             <div className="grid grid-cols-2 gap-2.5">
               <Field label="Domaine">
@@ -184,50 +228,75 @@ function BottleForm({ onDone }: { onDone: () => void }) {
           </>
         )}
 
-        <div className="text-[0.7rem] uppercase tracking-[0.1em] text-muted border-b border-line/60 pb-1.5 mb-1 mt-4">
-          La bouteille
+        {/* L'essentiel — tout le reste est replié sous « Plus de détails ». */}
+        <div className="flex items-center justify-between mt-2">
+          <div>
+            <div className="text-[0.92rem] font-semibold">Quantité</div>
+            <div className="text-muted text-xs">Bouteilles à ajouter</div>
+          </div>
+          <Stepper value={quantite} onChange={setQuantite} max={99} />
         </div>
-        <div className="grid grid-cols-2 gap-2.5">
-          <Field label="Quantité">
-            <input name="quantite" type="number" inputMode="numeric" min={1} defaultValue={1} className={inputCls} />
-          </Field>
+        <div className="grid grid-cols-2 gap-2.5 mt-2">
           <Field label="Millésime" hint="facultatif">
-            <input ref={millesimeRef} name="millesime" type="number" inputMode="numeric" placeholder="2018" className={inputCls} />
+            <input
+              name="millesime"
+              type="number"
+              inputMode="numeric"
+              placeholder="2018"
+              className={inputCls}
+              value={millesime}
+              onChange={(e) => setMillesime(e.target.value)}
+            />
+          </Field>
+          <Field label="Emplacement" hint="facultatif">
+            <select name="emplacement" className={inputCls} defaultValue="">
+              <option value="">— non placée —</option>
+              {emplacements.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.chemin}
+                </option>
+              ))}
+            </select>
           </Field>
         </div>
-        <Field label="Emplacement" hint="facultatif">
-          <select name="emplacement" className={inputCls} defaultValue="">
-            <option value="">— non placée —</option>
-            {emplacements.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.chemin}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <div className="grid grid-cols-2 gap-2.5">
-          <Field label="Prix (€)" hint="facultatif">
-            <input name="prix" type="number" inputMode="decimal" step="0.01" placeholder="24.90" className={inputCls} />
-          </Field>
-          <Field label="Date d'achat" hint="facultatif">
-            <input name="date_achat" type="date" className={inputCls} />
-          </Field>
-        </div>
-        <div className="grid grid-cols-2 gap-2.5">
-          <Field label="Apogée dès" hint="facultatif">
-            <input name="apogee_debut" type="number" inputMode="numeric" placeholder="2024" className={inputCls} />
-          </Field>
-          <Field label="Apogée jusqu'à" hint="facultatif">
-            <input name="apogee_fin" type="number" inputMode="numeric" placeholder="2030" className={inputCls} />
-          </Field>
-        </div>
-        <p className="text-muted text-xs mt-1">
-          Le statut (à garder / à boire / dépassé) est calculé automatiquement à partir du millésime et
-          de la couleur. Renseigne l'apogée pour l'affiner.
-        </p>
-        <Field label="Notes" hint="facultatif">
-          <textarea name="notes" rows={2} className={inputCls} placeholder="Occasion, cadeau, coup de cœur…" />
-        </Field>
+
+        <button
+          type="button"
+          onClick={() => setDetailsOuverts((v) => !v)}
+          className="w-full mt-3 text-xs text-muted flex items-center justify-center gap-1"
+        >
+          <span className="underline">Plus de détails : prix, apogée, notes</span>
+          <span className={`transition-transform ${detailsOuverts ? 'rotate-180' : ''}`}>▾</span>
+        </button>
+
+        {detailsOuverts && (
+          <>
+            <div className="grid grid-cols-2 gap-2.5">
+              <Field label="Prix (€)" hint="facultatif">
+                <input name="prix" type="number" inputMode="decimal" step="0.01" placeholder="24.90" className={inputCls} />
+              </Field>
+              <Field label="Date d'achat" hint="facultatif">
+                <input name="date_achat" type="date" className={inputCls} />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
+              <Field label="Apogée dès" hint="facultatif">
+                <input name="apogee_debut" type="number" inputMode="numeric" placeholder="2024" className={inputCls} />
+              </Field>
+              <Field label="Apogée jusqu'à" hint="facultatif">
+                <input name="apogee_fin" type="number" inputMode="numeric" placeholder="2030" className={inputCls} />
+              </Field>
+            </div>
+            <p className="text-muted text-xs mt-1">
+              Le statut (à garder / à boire / dépassé) est calculé automatiquement à partir du millésime et
+              de la couleur. Renseigne l'apogée pour l'affiner.
+            </p>
+            <Field label="Notes" hint="facultatif">
+              <textarea name="notes" rows={2} className={inputCls} placeholder="Occasion, cadeau, coup de cœur…" />
+            </Field>
+          </>
+        )}
+
         {!caveId && (
           <p className="text-muted text-xs mt-3">Astuce : crée une cave et des emplacements pour ranger tes bouteilles.</p>
         )}
