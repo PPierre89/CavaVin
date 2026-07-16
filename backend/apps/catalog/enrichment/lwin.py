@@ -321,6 +321,10 @@ def _classement(texte: str, ocr: bool = False, prefixe: bool = False) -> list[tu
         if t in postings:
             scores_vocab[t] = 100.0
     for t in tokens_entree:
+        if len(t) <= 3:
+            # Trop court pour le flou : « vol » (mention « BY VOL ») accroche
+            # « vola »/« vole » à 86 — l'exact reste permis, pas l'à-peu-près.
+            continue
         generique = t in _GENERIQUES
         for trouve, score, _ in process.extract(
             t, index["vocab"], scorer=fuzz.ratio, score_cutoff=_TOKEN_RATIO, limit=None
@@ -376,8 +380,17 @@ def _classement(texte: str, ocr: bool = False, prefixe: bool = False) -> list[tu
         bonus_trouves = [t for t in bonus if scores_vocab.get(t, 0.0) >= _TOKEN_RATIO]
         poids_ancres = sum(
             idf.get(t, 1.0) * (scores_vocab.get(t, _TOKEN_RATIO) / 100) ** 2
-            for t in bonus_trouves + ancres_trouvees
+            for t in bonus_trouves
         )
+        if ancres:
+            # Pondéré par la couverture du producteur : un producteur reconnu
+            # en entier (« Mayacamas Vineyards », 2/2) doit peser plus que
+            # deux mots géographiques sur sept (« Premiere Napa Valley
+            # (Hewitt…) » accroché par « napa » + « valley », 2/7).
+            poids_ancres += (len(ancres_trouvees) / len(ancres)) * sum(
+                idf.get(t, 1.0) * (scores_vocab.get(t, _TOKEN_RATIO) / 100) ** 2
+                for t in ancres_trouvees
+            )
 
         if prefixe:
             # Autocomplétion : couverture pondérée partielle admise, mais au
