@@ -1351,6 +1351,27 @@ class VinouProviderTests(SimpleTestCase):
         self.assertEqual(derniere.headers["Authorization"], "Bearer JWT-NEUF")
 
 
+class StubsProviderTests(TestCase):
+    """Fournisseurs stubs (Vivino, CellarTracker) : enfichés mais inertes."""
+
+    def test_stubs_desactives_et_inertes(self):
+        from .enrichment import get_all_providers, get_enabled_providers
+        from .enrichment.stubs import CellarTrackerProvider, VivinoProvider
+
+        for provider in (VivinoProvider(), CellarTrackerProvider()):
+            self.assertFalse(provider.enabled)
+            self.assertIsNone(provider.lookup_by_barcode("3760012345678"))
+            self.assertIsNone(provider.lookup_by_text("Château X"))
+            self.assertIsNone(provider.lookup_by_image(b"img", "image/jpeg"))
+
+        # Enregistrés dans la cascade (visibles pour l'admin) mais jamais actifs.
+        noms_tous = {p.name for p in get_all_providers()}
+        self.assertIn("cellartracker", noms_tous)
+        noms_actifs = {p.name for p in get_enabled_providers()}
+        self.assertNotIn("cellartracker", noms_actifs)
+        self.assertNotIn("vivino", noms_actifs)
+
+
 def _reponse_claude(payload, stop_reason="end_turn"):
     """Fabrique une réponse Messages API minimale (un bloc texte JSON)."""
     bloc = MagicMock()
