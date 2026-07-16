@@ -150,7 +150,10 @@ The cascade in `registry.py` tries enabled providers in order:
 - **LWIN + local OCR** — last-resort, 100% free & offline fallback: the `tesseract` binary (installed
   in the Docker image, subprocess call) reads the label, then fuzzy matching (rapidfuzz, precision-first:
   every significant token of a reference must be found, IDF-weighted tie-break) against the LWIN
-  (Liv-ex) reference table imported via `manage.py import_lwin`. Never raises `EnrichmentError`;
+  (Liv-ex) reference table imported via `manage.py import_lwin`. The OCR locates the label before
+  reading it (WineNot-inspired, no neural network): full-photo passes, OSD orientation fix (rotated
+  photos without EXIF), then a crop on the TSV word-box region re-read at full resolution (small
+  label in frame), all under the `TESSERACT_TIMEOUT` total budget. Never raises `EnrichmentError`;
   inert without the imported dump or the binary. Keeps identification working with zero API keys.
 - **Vivino** — permanently disabled stub (no public API; scraping violates ToS — do not implement).
 - **CellarTracker** — permanently disabled stub, same rationale: no public reference API; `/wines.asp` is

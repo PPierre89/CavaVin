@@ -118,7 +118,11 @@ identifiants. Également **désactivé par défaut** (`VINOU_ENABLED`) — couve
 **Repli 100 % gratuit et hors-ligne** : sans aucune clé, le provider `lwin` prend le relais —
 OCR **Tesseract** (binaire inclus dans l'image Docker) + correspondance floue (rapidfuzz,
 orientée précision, pondération par rareté) sur le référentiel **LWIN** de Liv-ex
-(~200 000 vins, dump gratuit sur <https://www.liv-ex.com/lwin/>) :
+(~200 000 vins, dump gratuit sur <https://www.liv-ex.com/lwin/>). L'OCR localise l'étiquette
+avant de la lire (esprit [WineNot](https://github.com/qanastek/WineNot), sans réseau de
+neurones) : passes photo entière, correction d'orientation OSD (photos tournées sans EXIF),
+puis recadrage sur la zone de texte relu en pleine résolution — une bouteille loin dans le
+cadre ou une photo pivotée restent identifiables.
 
 ```bash
 docker compose exec app python manage.py import_lwin /chemin/LWINdatabase.xlsx  # idempotent, ~1 min

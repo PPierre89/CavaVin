@@ -98,21 +98,39 @@ _OCR_TOKENS_SUFFISANTS = 4
 _langues_ok = True
 
 
-def _variantes(data: bytes) -> list[bytes]:
+def _variantes(data: bytes, rotation: int = 0, zone: tuple | None = None) -> list[bytes]:
     """Variantes PNG pré-traitées d'une photo d'étiquette pour l'OCR.
 
-    Pré-traitement Pillow : orientation EXIF (photos de téléphone), niveaux de
-    gris, redimensionnement vers ``_OCR_TAILLE_CIBLE``, autocontraste. Si
-    l'étiquette est sombre (texte clair sur fond foncé, cas fréquent), une
-    seconde variante inversée est produite. En cas d'image illisible ou de
-    Pillow indisponible, on retombe sur les octets bruts (comportement
-    d'origine, Tesseract se débrouille)."""
+    Pré-traitement Pillow : orientation EXIF (photos de téléphone), rotation
+    corrective (OSD, photos tournées sans EXIF), recadrage optionnel sur la
+    ``zone`` de texte (coordonnées dans l'image déjà redimensionnée : le
+    recadrage est fait en pleine résolution PUIS remis à la taille cible, ce
+    qui rend à Tesseract les détails d'une étiquette petite dans le cadre),
+    niveaux de gris, redimensionnement vers ``_OCR_TAILLE_CIBLE``,
+    autocontraste. Si l'étiquette est sombre (texte clair sur fond foncé, cas
+    fréquent), une seconde variante inversée est produite. En cas d'image
+    illisible ou de Pillow indisponible, on retombe sur les octets bruts
+    (comportement d'origine, Tesseract se débrouille)."""
     try:
         from PIL import Image, ImageOps, ImageStat
 
         image = Image.open(BytesIO(data))
         image = ImageOps.exif_transpose(image)
+        if rotation:
+            # « Rotate » OSD = rotation horaire à appliquer ; PIL tourne en
+            # anti-horaire, d'où le signe.
+            image = image.rotate(-rotation, expand=True)
         image = image.convert("L")
+        if zone:
+            # La zone est exprimée dans l'image redimensionnée de la passe
+            # précédente : on la ramène à la pleine résolution avant recadrage.
+            facteur_prec = _OCR_TAILLE_CIBLE / max(image.size)
+            gauche, haut, droite, bas = (round(v / facteur_prec) for v in zone)
+            image = image.crop((
+                max(0, gauche), max(0, haut),
+                min(image.width, max(gauche + 1, droite)),
+                min(image.height, max(haut + 1, bas)),
+            ))
         grand_cote = max(image.size)
         if grand_cote and grand_cote != _OCR_TAILLE_CIBLE:
             facteur = _OCR_TAILLE_CIBLE / grand_cote
@@ -135,6 +153,20 @@ def _variantes(data: bytes) -> list[bytes]:
     except Exception as exc:  # image corrompue, format exotique...
         logger.warning("pré-traitement OCR impossible (%s), image brute utilisée", exc)
         return [data]
+
+
+def _pivoter(image: bytes, degres: int) -> bytes:
+    """Pivote une variante PNG (sens horaire) — force brute d'orientation sur
+    un recadrage quand l'OSD n'a rien détecté. Octets illisibles : inchangés."""
+    try:
+        from PIL import Image
+
+        pivotee = Image.open(BytesIO(image)).rotate(-degres, expand=True)
+        tampon = BytesIO()
+        pivotee.save(tampon, "PNG")
+        return tampon.getvalue()
+    except Exception:
+        return image
 
 
 def _texte_tsv(tsv: str) -> str:
@@ -162,6 +194,60 @@ def _texte_tsv(tsv: str) -> str:
     if not mots or sum(confs) / len(confs) < _OCR_CONF_MOYENNE:
         return ""
     return " ".join(mots)
+
+
+# Part maximale de l'image couverte par la zone de texte au-delà de laquelle
+# le recadrage n'apporte rien (l'étiquette occupe déjà le cadre).
+_ZONE_COUVERTURE_MAX = 0.5
+# Marge ajoutée autour de la zone de texte détectée (part de chaque dimension).
+_ZONE_MARGE = 0.08
+
+
+def _zone_texte(tsvs: list[str]) -> tuple[int, int, int, int] | None:
+    """Boîte englobante (gauche, haut, droite, bas) des mots confiants des
+    sorties TSV, marge comprise — le « détecteur d'étiquette » du pipeline
+    (l'esprit de WineNot, sans réseau de neurones) : quand la bouteille est
+    loin dans le cadre, l'union des boîtes de mots localise l'étiquette, que
+    l'on recadre puis re-OCRise en pleine résolution.
+
+    Renvoie None si aucun mot confiant n'est localisé ou si la zone couvre
+    déjà l'essentiel de l'image (rien à gagner). Les dimensions de la page
+    sont lues dans le TSV lui-même (ligne level 1)."""
+    page: tuple[int, int] | None = None
+    gauche, haut, droite, bas = None, None, None, None
+    for tsv in tsvs:
+        for ligne in tsv.splitlines()[1:]:
+            champs = ligne.split("\t")
+            if len(champs) < 12:
+                continue
+            try:
+                niveau = int(champs[0])
+                l, t, w, h = (int(champs[i]) for i in range(6, 10))
+                conf = float(champs[10])
+            except ValueError:
+                continue
+            if niveau == 1:
+                page = (w, h)
+            elif niveau == 5 and conf >= _OCR_CONF_MIN and champs[11].strip():
+                gauche = l if gauche is None else min(gauche, l)
+                haut = t if haut is None else min(haut, t)
+                droite = l + w if droite is None else max(droite, l + w)
+                bas = t + h if bas is None else max(bas, t + h)
+    if page is None or gauche is None:
+        return None
+    largeur_page, hauteur_page = page
+    if not largeur_page or not hauteur_page:
+        return None
+    couverture = ((droite - gauche) * (bas - haut)) / (largeur_page * hauteur_page)
+    if couverture >= _ZONE_COUVERTURE_MAX:
+        return None  # l'étiquette occupe déjà le cadre, inutile de recadrer
+    marge_l, marge_h = round(largeur_page * _ZONE_MARGE), round(hauteur_page * _ZONE_MARGE)
+    return (
+        max(0, gauche - marge_l),
+        max(0, haut - marge_h),
+        min(largeur_page, droite + marge_l),
+        min(hauteur_page, bas + marge_h),
+    )
 
 
 def _normaliser(texte: str) -> str:
@@ -328,7 +414,12 @@ def _classement(texte: str, ocr: bool = False, prefixe: bool = False) -> list[tu
             continue  # sortie OCR : préférer un miss à un vin douteux
         poids = sum(idf.get(t, 1.0) * (s / 100) ** 2 for t, s in zip(requis, scores))
         classement.append((
-            min(scores) == 100.0,
+            # « Exact avant flou » vaut pour une saisie humaine (« La Tâche »
+            # exact bat « Taches » flou) mais pas pour l'OCR, où les
+            # troncatures sont normales : « Lynch-Bage » lu sur l'étiquette ne
+            # doit pas perdre contre un « Pauillac » exact mais moins
+            # spécifique — en mode OCR, le poids IDF départage.
+            not ocr and min(scores) == 100.0,
             poids + poids_ancres,
             fuzz.token_set_ratio(chaine, texte_norm),
             sum(scores) / len(scores),
@@ -539,13 +630,23 @@ class LwinProvider(EnrichmentProvider):
     def _ocr(self, data: bytes) -> str:
         """Texte de l'étiquette, fusion de plusieurs passes Tesseract.
 
-        Chaque variante d'image (pré-traitée, et inversée si l'étiquette est
-        sombre) est lue avec deux modes de segmentation : mise en page
-        automatique (PSM 3) et texte épars (PSM 11, bien adapté aux mentions
-        dispersées d'une étiquette). Les sorties sont concaténées : la
-        correspondance en aval n'exige que la présence des tokens du
-        référentiel, le surplus ne coûte rien. Arrêt anticipé dès qu'une
-        variante a livré assez de tokens significatifs."""
+        Pipeline en trois phases (inspiré de WineNot : localiser l'étiquette
+        avant de la lire), chacune n'étant payée que si la précédente n'a pas
+        livré assez de tokens significatifs :
+
+        1. **Photo entière** — chaque variante (pré-traitée, et inversée si
+           l'étiquette est sombre) est lue avec deux modes de segmentation :
+           mise en page automatique (PSM 3) et texte épars (PSM 11).
+        2. **Orientation (OSD)** — photo tournée sans EXIF (téléchargement,
+           capture d'écran) : détection --psm 0, puis re-OCR sur l'image
+           redressée.
+        3. **Recadrage sur l'étiquette** — bouteille loin dans le cadre : les
+           boîtes de mots des passes précédentes localisent la zone de texte,
+           recadrée en pleine résolution puis re-OCRisée (le texte minuscule
+           redevient lisible).
+
+        Les sorties sont concaténées : la correspondance en aval n'exige que
+        la présence des tokens du référentiel, le surplus ne coûte rien."""
         import time
 
         # TESSERACT_TIMEOUT est le budget TOTAL de l'OCR : les passes se
@@ -553,25 +654,88 @@ class LwinProvider(EnrichmentProvider):
         # épars peut s'enliser sur du bruit) ne bloque jamais plus longtemps.
         echeance = time.monotonic() + settings.TESSERACT_TIMEOUT
         morceaux: list[str] = []
-        for image in _variantes(data):
-            for psm in _PSM_PASSES:
-                restant = echeance - time.monotonic()
-                if restant <= 0:
-                    return "\n".join(morceaux)
-                texte = self._tesseract(image, psm, timeout=restant)
-                if texte:
-                    morceaux.append(texte)
-                if len(_tokens(" ".join(morceaux))) >= _OCR_TOKENS_SUFFISANTS:
-                    return "\n".join(morceaux)  # inutile de payer les passes suivantes
+        tsvs: list[str] = []
+
+        def restant() -> float:
+            return echeance - time.monotonic()
+
+        def assez() -> bool:
+            return len(_tokens(" ".join(morceaux))) >= _OCR_TOKENS_SUFFISANTS
+
+        def passes(images: list[bytes]) -> bool:
+            """Passes PSM sur des variantes ; True si assez de tokens ou budget épuisé."""
+            for image in images:
+                for psm in _PSM_PASSES:
+                    if restant() <= 0:
+                        return True
+                    tsv = self._tesseract(image, psm, timeout=restant())
+                    if tsv:
+                        tsvs.append(tsv)
+                        texte = _texte_tsv(tsv)
+                        if texte:
+                            morceaux.append(texte)
+                    if assez():
+                        return True  # inutile de payer les passes suivantes
+            return False
+
+        # --- Phase 1 : photo entière ---
+        variantes = _variantes(data)
+        if passes(variantes) or restant() <= 0:
+            return "\n".join(morceaux)
+
+        # --- Phase 2 : orientation (photos tournées sans EXIF) ---
+        rotation = self._osd_rotation(variantes[0], timeout=restant())
+        if rotation and restant() > 0:
+            # Les boîtes des passes non redressées ne valent plus rien.
+            morceaux.clear()
+            tsvs.clear()
+            if passes(_variantes(data, rotation=rotation)) or restant() <= 0:
+                return "\n".join(morceaux)
+
+        # --- Phase 3 : recadrage sur la zone de texte (étiquette petite) ---
+        # Même une étiquette pivotée est localisée : Tesseract lit du charabia
+        # (« OVTTINVd » pour « PAUILLAC ») mais les boîtes de mots y sont.
+        zone = _zone_texte(tsvs)
+        if zone and restant() > 0:
+            recadrees = _variantes(data, rotation=rotation, zone=zone)
+            avant = len(morceaux)
+            if passes(recadrees) or restant() <= 0:
+                return "\n".join(morceaux)
+            if not rotation and len(morceaux) == avant:
+                # Le recadrage n'a rien lu de propre : étiquette probablement
+                # pivotée mais trop petite/floue pour l'OSD — orientation en
+                # force brute, le recadrage pivoté à 90°/270° se lit.
+                for degres in (90, 270):
+                    if restant() <= 0 or passes([_pivoter(recadrees[0], degres)]):
+                        break
         return "\n".join(morceaux)
 
-    def _tesseract(self, image: bytes, psm: int, timeout: float | None = None) -> str:
-        """Une passe tesseract (stdin -> TSV), filtrée par confiance par mot.
+    def _osd_rotation(self, image: bytes, timeout: float | None = None) -> int:
+        """Rotation corrective (0/90/180/270, sens horaire) détectée par
+        Tesseract OSD (--psm 0). Tout échec (pack osd absent, image trop
+        pauvre, timeout) vaut 0 : on ne redresse pas."""
+        commande = [settings.TESSERACT_CMD, "stdin", "stdout", "--dpi", "300", "--psm", "0"]
+        try:
+            resultat = subprocess.run(
+                commande,
+                input=image,
+                capture_output=True,
+                timeout=timeout if timeout is not None else settings.TESSERACT_TIMEOUT,
+            )
+            if resultat.returncode != 0:
+                return 0
+            m = re.search(r"Rotate:\s*(\d+)", resultat.stdout.decode("utf-8", errors="replace"))
+            return int(m.group(1)) % 360 if m else 0
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return 0
 
-        La sortie TSV donne une confiance 0-100 par mot : écarter les mots
-        douteux évite que du bruit d'OCR aille fuzzy-matcher une mauvaise
-        référence. ``--dpi 300`` lève l'avertissement des images sans
-        métadonnées (photos recadrées)."""
+    def _tesseract(self, image: bytes, psm: int, timeout: float | None = None) -> str:
+        """Une passe tesseract (stdin -> TSV) ; renvoie la sortie TSV brute.
+
+        Le TSV donne une confiance 0-100 et une boîte par mot : le texte en
+        est extrait par ``_texte_tsv`` (mots douteux écartés) et la zone
+        d'étiquette par ``_zone_texte``. ``--dpi 300`` lève l'avertissement
+        des images sans métadonnées (photos recadrées)."""
         global _langues_ok
         commande = [settings.TESSERACT_CMD, "stdin", "stdout"]
         if _langues_ok:
@@ -592,7 +756,7 @@ class LwinProvider(EnrichmentProvider):
             if resultat.returncode != 0:
                 logger.warning("tesseract a échoué: %s", resultat.stderr[:200])
                 return ""
-            return _texte_tsv(resultat.stdout.decode("utf-8", errors="replace"))
+            return resultat.stdout.decode("utf-8", errors="replace")
         except FileNotFoundError:
             logger.info("tesseract introuvable (%s) : OCR local inactif", settings.TESSERACT_CMD)
             return ""

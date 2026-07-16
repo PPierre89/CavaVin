@@ -1769,8 +1769,9 @@ class LwinProviderTests(TestCase):
         self.assertEqual(wine.domaine_nom, "Château Palmer")
         self.assertEqual(wine.millesime, 1998)
         # Octets illisibles par Pillow : repli sur l'image brute, passée sur stdin.
-        self.assertEqual(mock_run.call_args.kwargs["input"], b"fausse-image")
-        args = mock_run.call_args.args[0]
+        premier = mock_run.call_args_list[0]
+        self.assertEqual(premier.kwargs["input"], b"fausse-image")
+        args = premier.args[0]
         self.assertIn("tesseract", args[0])
         self.assertIn("--psm", args)
         self.assertIn("tsv", args)
@@ -1848,14 +1849,83 @@ class LwinProviderTests(TestCase):
         # Pack fra absent : 1er essai en échec, puis toutes les passes suivantes
         # repartent sans -l (mémo module), sans nouvel essai voué à l'échec.
         ok = MagicMock(returncode=0, stdout=self._tsv(("Chateau", 90), ("Palmer", 90), ("1998", 95)))
+        osd = MagicMock(returncode=0, stdout=b"Rotate: 0\n")
         mock_run.side_effect = [
             MagicMock(returncode=1, stderr=b"Error opening data file fra"),
-            ok, ok,
+            ok, ok, osd,
         ]
         wine = self.provider.lookup_by_image(b"img", "image/jpeg")
         self.assertIsNotNone(wine)
         for appel in mock_run.call_args_list[1:]:
             self.assertNotIn("-l", appel.args[0])
+
+    def test_zone_texte_localise_l_etiquette(self):
+        from .enrichment.lwin import _zone_texte
+
+        tsv = "\n".join([
+            "level\tpage\tblock\tpar\tline\tword\tleft\ttop\twidth\theight\tconf\ttext",
+            "1\t1\t0\t0\t0\t0\t0\t0\t1000\t1000\t-1\t",
+            "5\t1\t1\t1\t1\t1\t400\t450\t80\t30\t90\tPalmer",
+            "5\t1\t1\t1\t1\t2\t500\t450\t90\t30\t88\tMargaux",
+            "5\t1\t1\t1\t1\t3\t100\t100\t60\t25\t20\tjunk",  # conf < 40 : ignoré
+        ])
+        # Union des mots confiants + marge de 8 % de la page.
+        self.assertEqual(_zone_texte([tsv]), (320, 370, 670, 560))
+        # Texte couvrant déjà le cadre : rien à gagner au recadrage.
+        plein = tsv.replace("400\t450\t80\t30", "0\t0\t900\t900")
+        self.assertIsNone(_zone_texte([plein]))
+        # Aucun TSV, ou aucun mot confiant : pas de zone.
+        self.assertIsNone(_zone_texte([]))
+        self.assertIsNone(_zone_texte([tsv.splitlines()[0]]))
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_osd_detecte_la_rotation(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout=b"Page number: 0\nOrientation in degrees: 270\nRotate: 90\n"
+        )
+        self.assertEqual(self.provider._osd_rotation(b"img"), 90)
+        appel = mock_run.call_args.args[0]
+        self.assertIn("0", appel)  # --psm 0
+        self.assertNotIn("-l", appel)  # l'OSD utilise osd.traineddata, pas fra+eng
+        # Échec OSD (image trop pauvre, pack absent) : on ne redresse pas.
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"Too few characters")
+        self.assertEqual(self.provider._osd_rotation(b"img"), 0)
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_photo_tournee_sans_exif_redressee_par_osd(self, mock_run):
+        """Photo pivotée sans EXIF : la phase 1 ne lit rien, l'OSD détecte la
+        rotation et les passes sur l'image redressée identifient le vin."""
+        vide = MagicMock(returncode=0, stdout=self._tsv())
+        osd = MagicMock(returncode=0, stdout=b"Rotate: 90\n")
+        ok = MagicMock(
+            returncode=0,
+            stdout=self._tsv(("Chateau", 91), ("Palmer", 90), ("Margaux", 89), ("1998", 95)),
+        )
+        mock_run.side_effect = [vide, vide, osd, ok, ok]
+        wine = self.provider.lookup_by_image(b"img", "image/jpeg")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Palmer")
+
+    @patch("apps.catalog.enrichment.lwin.subprocess.run")
+    def test_etiquette_petite_recadree_puis_relue(self, mock_run):
+        """Bouteille loin dans le cadre : la phase 1 ne lit qu'un mot minuscule,
+        mais sa boîte localise l'étiquette — le recadrage en pleine résolution
+        la relit et l'identification aboutit (l'esprit WineNot)."""
+        loin = MagicMock(returncode=0, stdout="\n".join([
+            "level\tpage\tblock\tpar\tline\tword\tleft\ttop\twidth\theight\tconf\ttext",
+            "1\t1\t0\t0\t0\t0\t0\t0\t1000\t1000\t-1\t",
+            "5\t1\t1\t1\t1\t1\t450\t480\t70\t22\t85\tPalmer",
+        ]).encode())
+        osd = MagicMock(returncode=0, stdout=b"Rotate: 0\n")
+        ok = MagicMock(
+            returncode=0,
+            stdout=self._tsv(("Chateau", 91), ("Palmer", 90), ("Margaux", 89), ("1998", 95)),
+        )
+        mock_run.side_effect = [loin, loin, osd, ok, ok]
+        wine = self.provider.lookup_by_image(b"img", "image/jpeg")
+        self.assertIsNotNone(wine)
+        self.assertEqual(wine.domaine_nom, "Château Palmer")
+        self.assertEqual(wine.millesime, 1998)
 
 
 class ImportLwinCommandTests(TestCase):
