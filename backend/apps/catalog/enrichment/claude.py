@@ -8,7 +8,8 @@ import anthropic
 from django.conf import settings
 
 from .. import wine_profile
-from ..runtime_config import get_parametre
+from .. import quotas
+from ..runtime_config import get_parametre, source_activee
 from .base import EnrichmentError, EnrichmentProvider, NormalizedWine
 from .normalize import clean, couleur_from_type, strip_vintage
 
@@ -143,7 +144,8 @@ class ClaudeProvider(EnrichmentProvider):
 
     @property
     def enabled(self) -> bool:  # type: ignore[override]
-        return bool(get_parametre("ANTHROPIC_API_KEY"))
+        # Clé présente ET source activée (surchargeable depuis l'admin).
+        return bool(get_parametre("ANTHROPIC_API_KEY")) and source_activee("claude", True)
 
     def _client(self) -> anthropic.Anthropic:
         # max_retries=1 : le SDK réessaie les 429/5xx ; au-delà on préfère
@@ -180,6 +182,7 @@ class ClaudeProvider(EnrichmentProvider):
 
     def _identifier(self, blocs: list[dict]) -> NormalizedWine | None:
         """Appel Claude commun texte/image -> NormalizedWine (ou None si miss)."""
+        quotas.compter(self.name)  # appel API réel : décompte l'usage mensuel
         try:
             response = self._client().messages.create(
                 model=get_parametre("ANTHROPIC_MODEL"),

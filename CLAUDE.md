@@ -168,6 +168,20 @@ The **raw** wineapi payload is persisted verbatim on `Cuvee.wineapi_detail` so n
 ever lost. Quota is protected by caching (registry TTLs) and a per-wine refresh cooldown
 (`WINEAPI_REFRESH_COOLDOWN`, default 1h).
 
+**Multi-source fusion.** Identification (`scan-code-barres`, `identifier-vin`, `scan-etiquette`) does
+**not** stop at the first hit: `views._cascade_multi` queries *every* enabled source and
+`ingest.upsert_multi` merges them — the first hit anchors the canonical cuvée, the rest are recorded as
+per-canal `SourceObservation`s and `consolidation.consolider` arbitrates each field by channel
+confidence (best of each: identity from one, prices from another, description from a third).
+
+**Runtime source control (admin, `runtime_config` + `quotas`).** Each provider's `enabled` combines its
+prerequisites (key present…) with a runtime toggle `source_activee(name, default_env)` (DB override
+`SOURCE_ENABLED_<name>` > `.env`). Every real outbound call increments a monthly counter
+(`quotas.compter`, model `AppelSource`); `quotas.reste` skips a source once its **settable monthly cap**
+is reached (`Parametre QUOTA_<SOURCE>`; default 250 for GrapeMinds, unlimited otherwise; `0` = unlimited).
+Counting/enforcement is best-effort — it never breaks an identification. The staff panel drives all this
+via `GET/PUT /api/admin-panel/sources/` (on/off + cap + usage), alongside the existing API-key overrides.
+
 ### Secrets & config
 Secrets come from `.env` (loaded via python-dotenv in `settings.py`); `.env` is gitignored. Never
 hardcode keys — `ANTHROPIC_API_KEY`, `WINEAPI_KEY`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`,

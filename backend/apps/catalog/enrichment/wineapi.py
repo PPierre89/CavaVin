@@ -9,7 +9,8 @@ import uuid
 from django.conf import settings
 
 from .. import wine_profile
-from ..runtime_config import get_parametre
+from .. import quotas
+from ..runtime_config import get_parametre, source_activee
 from .base import EnrichmentError, EnrichmentProvider, NormalizedWine
 from .normalize import clean, couleur_from_type, named, strip_vintage
 
@@ -41,7 +42,8 @@ class WineApiProvider(EnrichmentProvider):
 
     @property
     def enabled(self) -> bool:  # type: ignore[override]
-        return bool(get_parametre("WINEAPI_KEY"))
+        # Clé présente ET source activée (surchargeable depuis l'admin).
+        return bool(get_parametre("WINEAPI_KEY")) and source_activee("wineapi", True)
 
     def _request(self, method: str, path: str, payload: dict | None = None):
         """Appel JSON simple — renvoie le corps décodé (ou None)."""
@@ -84,6 +86,7 @@ class WineApiProvider(EnrichmentProvider):
         l'appelant puisse lire ``X-Update-Status`` sans re-parser la réponse."""
         url = get_parametre("WINEAPI_BASE_URL").rstrip("/") + path
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        quotas.compter(self.name)  # appel réseau réel : décompte l'usage mensuel
         try:
             with urllib.request.urlopen(req, timeout=timeout or settings.WINEAPI_TIMEOUT) as resp:
                 body = json.loads(resp.read().decode("utf-8"))

@@ -8,6 +8,8 @@ import urllib.request
 from django.conf import settings
 from django.core.cache import cache
 
+from .. import quotas
+from ..runtime_config import source_activee
 from .base import EnrichmentError, EnrichmentProvider, NormalizedWine
 from .normalize import clean, couleur_from_type, parse_vintage, strip_vintage
 
@@ -55,9 +57,9 @@ class VinouProvider(EnrichmentProvider):
 
     @property
     def enabled(self) -> bool:  # type: ignore[override]
-        # Opt-in explicite. Les identifiants sont optionnels : les routes
-        # /wines/search sont publiques (mode public sans jeton).
-        return bool(settings.VINOU_ENABLED)
+        # Opt-in (drapeau .env, surchargeable depuis l'admin). Les identifiants sont
+        # optionnels : les routes /wines/search sont publiques (mode public sans jeton).
+        return source_activee("vinou", settings.VINOU_ENABLED)
 
     # ---------------------------------------------------------------- auth JWT
 
@@ -101,6 +103,7 @@ class VinouProvider(EnrichmentProvider):
         url = settings.VINOU_BASE_URL.rstrip("/") + path
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        quotas.compter(self.name)  # appel réseau réel : décompte le quota mensuel
         with urllib.request.urlopen(req, timeout=settings.VINOU_TIMEOUT) as resp:
             return json.loads(resp.read().decode("utf-8"))
 

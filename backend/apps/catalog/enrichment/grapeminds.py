@@ -9,6 +9,8 @@ import urllib.request
 
 from django.conf import settings
 
+from .. import quotas
+from ..runtime_config import source_activee
 from .base import EnrichmentError, EnrichmentProvider, NormalizedWine
 from .normalize import clean, couleur_from_type, named, parse_vintage, strip_vintage
 
@@ -69,8 +71,8 @@ class GrapeMindsProvider(EnrichmentProvider):
 
     @property
     def enabled(self) -> bool:  # type: ignore[override]
-        # Clé présente ET activation explicite (cf. docstring : licence PSL + quota).
-        return bool(settings.GRAPEMINDS_KEY) and settings.GRAPEMINDS_ENABLED
+        # Clé présente ET activation (drapeau .env, surchargeable depuis l'admin).
+        return bool(settings.GRAPEMINDS_KEY) and source_activee("grapeminds", settings.GRAPEMINDS_ENABLED)
 
     # ------------------------------------------------------------------ HTTP
 
@@ -93,6 +95,7 @@ class GrapeMindsProvider(EnrichmentProvider):
             headers["Content-Type"] = "application/json"
         url = settings.GRAPEMINDS_BASE_URL.rstrip("/") + path
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        quotas.compter(self.name)  # appel réseau réel : décompte le quota mensuel
         try:
             with urllib.request.urlopen(req, timeout=timeout or settings.GRAPEMINDS_TIMEOUT) as resp:
                 return json.loads(resp.read().decode("utf-8"))

@@ -26,11 +26,15 @@ from rest_framework.views import APIView
 from apps.catalog.enrichment import get_all_providers
 from apps.catalog.lwin_import import LwinImportError, importer_lwin
 from apps.catalog.models import Cepage, Cuvee, Domaine, ReferenceLwin
+from apps.catalog import quotas
 from apps.catalog.runtime_config import (
     CLES_PILOTABLES,
+    SOURCES_PILOTABLES,
+    definir_source_activee,
     effacer_parametre,
     etat_parametre,
     set_parametre,
+    source_override,
 )
 from apps.cellars.models import Cave, Emplacement
 from apps.inventory.models import Bouteille, MouvementStock, NoteDegustation
@@ -234,3 +238,64 @@ class ImportLwinView(APIView):
             {"importes": importes, "total": ReferenceLwin.objects.count()},
             status=status.HTTP_200_OK,
         )
+
+
+def _etat_source(provider) -> dict:
+    """État complet d'une source d'identification pour le panneau d'admin :
+    activation effective, intention admin, et quota (usage / plafond)."""
+    etat = {
+        "source": provider.name,
+        # ``actif`` = état effectif (combine l'intention et les prérequis : clé
+        # d'API présente…). Un toggle « on » sans clé restera donc inactif.
+        "actif": bool(provider.enabled),
+        # ``voulu`` = intention admin brute (None = on suit le défaut .env).
+        "voulu": source_override(provider.name),
+    }
+    etat.update(quotas.etat(provider.name))
+    return etat
+
+
+def _sources_pilotables() -> list[dict]:
+    par_nom = {p.name: p for p in get_all_providers()}
+    return [_etat_source(par_nom[n]) for n in SOURCES_PILOTABLES if n in par_nom]
+
+
+class SourcesView(APIView):
+    """Sources d'identification : activation (on/off) et quota mensuel (staff).
+
+    ``GET`` liste les sources pilotables avec leur état effectif, l'intention admin
+    et la consommation du mois face au plafond. ``PUT`` accepte ``{source, actif}``
+    (toggle on/off, override en base prioritaire sur le ``.env``) et/ou
+    ``{source, plafond}`` (plafond mensuel : entier > 0 pour limiter, ``0`` pour
+    illimité, ``null`` pour revenir au défaut). Le comptage d'usage n'expose aucune
+    donnée privée — seulement des agrégats par source.
+    """
+
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        return Response({"sources": _sources_pilotables()})
+
+    def put(self, request):
+        source = request.data.get("source")
+        if source not in SOURCES_PILOTABLES:
+            raise ValidationError({"source": "Source inconnue ou non pilotable."})
+
+        if "actif" in request.data:
+            definir_source_activee(source, bool(request.data.get("actif")))
+
+        if "plafond" in request.data:
+            plafond = request.data.get("plafond")
+            if plafond is None:
+                # Retour au plafond par défaut de la source.
+                effacer_parametre(quotas.cle_plafond(source))
+            else:
+                try:
+                    valeur = int(plafond)
+                except (TypeError, ValueError):
+                    raise ValidationError({"plafond": "Entier attendu (0 = illimité)."})
+                if valeur < 0:
+                    raise ValidationError({"plafond": "Le plafond ne peut pas être négatif."})
+                set_parametre(quotas.cle_plafond(source), str(valeur))
+
+        return Response({"sources": _sources_pilotables()})
