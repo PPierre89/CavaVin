@@ -68,7 +68,7 @@ CavaVin/
 │   ├── config/            # settings, urls, auth JWT
 │   └── apps/
 │       ├── catalog/       # Domaine, Cepage, Cuvee — référentiel partagé
-│       │   ├── enrichment/  # providers enfichables (OFF, Claude, wineapi.io, GrapeMinds, LWIN/OCR local)
+│       │   ├── enrichment/  # providers enfichables (OFF, Claude, wineapi.io, GrapeMinds, Vinou, LWIN/OCR local)
 │       │   ├── apogee.py     # fenêtre/statut de dégustation (logique pure)
 │       │   └── sommellerie.py # conseil de service (logique pure)
 │       ├── cellars/       # Cave, Emplacement — structure physique (privé)
@@ -108,6 +108,12 @@ texte, et analyse d'étiquette sur l'offre Enterprise). Il est **désactivé par
 clé** : il faut `GRAPEMINDS_ENABLED=True`, car ses conditions imposent une licence de stockage
 persistant (PSL) payante pour conserver durablement ses données, et son quota public est serré
 (~250 appels/mois). Cf. `.env.example` pour les variables `GRAPEMINDS_*`.
+
+Un provider **Vinou** (`api.vinou.de`) apporte un catalogue producteur complémentaire (vins des
+domaines inscrits sur Vinou, surtout allemands) : recherche par texte et par code-barres (`gtin`).
+Authentification JWT (login `AuthID` + `API-Token`, jeton de 12 h mis en cache) ou mode public sans
+identifiants. Également **désactivé par défaut** (`VINOU_ENABLED`) — couverture de niche. Cf.
+`.env.example` pour les variables `VINOU_*`.
 
 **Repli 100 % gratuit et hors-ligne** : sans aucune clé, le provider `lwin` prend le relais —
 OCR **Tesseract** (binaire inclus dans l'image Docker) + correspondance floue (rapidfuzz,

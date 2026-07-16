@@ -25,7 +25,7 @@ CavaVin/
 │   ├── config/                  # settings, urls, auth (RegisterView), wsgi/asgi, index view
 │   ├── apps/
 │   │   ├── catalog/             # SHARED reference data: Domaine, Cepage, Cuvee
-│   │   │   ├── enrichment/      # pluggable providers (OFF, Claude, wineapi.io, GrapeMinds, LWIN/OCR local, Vivino stub)
+│   │   │   ├── enrichment/      # pluggable providers (OFF, Claude, wineapi.io, GrapeMinds, Vinou, LWIN/OCR local, Vivino stub)
 │   │   │   ├── ingest.py        # shared persistence: upsert_cuvee, enrich_cuvee_from_wineapi
 │   │   │   ├── wine_profile.py  # pure mapping of wineapi detail → Cuvee fields (source of truth)
 │   │   │   ├── apogee.py        # pure drink-window / status logic (no DB)
@@ -139,6 +139,14 @@ The cascade in `registry.py` tries enabled providers in order:
   ships no example payloads) — revalidate `grapeminds.py`'s field-name constants against a real
   `/wines/{id}` response before relying on it. Its payload differs from wineapi's, so it contributes a
   per-canal observation rather than a raw `wineapi_detail`.
+- **Vinou** (`api.vinou.de`) — supplementary producer catalog (wines registered by Vinou's client
+  wineries, mostly German): text search (`POST /wines/search`) and barcode via the `gtin` field.
+  POST-JSON routes wrapped in `{"info","data"}`. Auth is **JWT**: `POST /service/login` with
+  `VINOU_AUTH_ID` + `VINOU_API_TOKEN` returns a 12 h JWT (cached ~11 h, auto re-login on 401); without
+  credentials the `/wines/*` routes still work in **public mode** (leaner payloads). **Disabled by
+  default** (`VINOU_ENABLED`) — coverage is niche. `region` and `grapetypeIds` come back as numeric IDs
+  (no names without extra lookups), so it maps only the directly usable fields (name, winery, colour,
+  country, vintage, barcode, alcohol, description).
 - **LWIN + local OCR** — last-resort, 100% free & offline fallback: the `tesseract` binary (installed
   in the Docker image, subprocess call) reads the label, then fuzzy matching (rapidfuzz, precision-first:
   every significant token of a reference must be found, IDF-weighted tie-break) against the LWIN

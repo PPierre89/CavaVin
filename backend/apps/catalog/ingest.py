@@ -31,6 +31,9 @@ _CONFIANCE_CANAL = {
     # GrapeMinds : base œnologique structurée, confiance d'identité comparable à
     # wineapi (légèrement en dessous, provider plus récent et moins éprouvé ici).
     "grapeminds": 0.68,
+    # Vinou : catalogue producteur (données saisies par les domaines), couverture
+    # de niche mais identité directe (nom, domaine, gtin) — confiance modérée.
+    "vinou": 0.65,
 }
 _CONFIANCE_DEFAUT = 0.50
 
