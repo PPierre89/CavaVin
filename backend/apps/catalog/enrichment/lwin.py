@@ -409,9 +409,12 @@ def _classement(texte: str, ocr: bool = False, prefixe: bool = False) -> list[tu
         if min(scores) < _TOKEN_RATIO:
             continue  # au moins un token requis est absent : trop risqué
         if ocr and len(requis) + len(bonus_trouves) + len(ancres_trouvees) < 2 and not (
-            len(requis[0]) >= 5 and scores[0] == 100.0
+            len(requis[0]) >= 6 and scores[0] == 100.0
         ):
-            continue  # sortie OCR : préférer un miss à un vin douteux
+            # Sortie OCR : préférer un miss à un vin douteux. L'exception du
+            # token unique exige ≥ 6 caractères : sur photos réelles, un junk
+            # de 5 lettres (« rossa ») suffisait à accrocher une référence.
+            continue
         poids = sum(idf.get(t, 1.0) * (s / 100) ** 2 for t, s in zip(requis, scores))
         classement.append((
             # « Exact avant flou » vaut pour une saisie humaine (« La Tâche »
@@ -686,8 +689,11 @@ class LwinProvider(EnrichmentProvider):
         # --- Phase 2 : orientation (photos tournées sans EXIF) ---
         rotation = self._osd_rotation(variantes[0], timeout=restant())
         if rotation and restant() > 0:
-            # Les boîtes des passes non redressées ne valent plus rien.
-            morceaux.clear()
+            # Les boîtes des passes non redressées ne valent plus rien — mais
+            # le TEXTE reste : l'OSD se trompe parfois (reflet inversé sous la
+            # bouteille des photos catalogue) et jeter la lecture initiale
+            # transformerait un vin identifié en miss. Le surplus est inoffensif,
+            # la correspondance n'exige que la présence des tokens de référence.
             tsvs.clear()
             if passes(_variantes(data, rotation=rotation)) or restant() <= 0:
                 return "\n".join(morceaux)
