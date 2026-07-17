@@ -272,3 +272,24 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
     _observation_depuis_wine(cuvee, wine)
     consolider(cuvee)
     return cuvee, created
+
+
+@transaction.atomic
+def upsert_multi(hits: list[NormalizedWine]) -> tuple[Cuvee, bool]:
+    """Fusion multi-sources d'une identification.
+
+    La **première** source identifie (ou crée) la cuvée via ``upsert_cuvee`` — elle
+    fixe l'identité canonique (clés de déduplication : code-barres, référence
+    externe, LWIN, (domaine, nom)). Les sources **suivantes** déposent chacune leur
+    observation sur *cette même* cuvée (sans re-dédupliquer ni créer de doublon),
+    puis la fiche est consolidée sur l'ensemble : chaque champ retient la valeur du
+    canal le plus fiable (cf. ``consolidation.consolider``). On récupère ainsi le
+    meilleur de chaque source (identité + cépages d'un canal, prix d'un autre,
+    description d'un troisième…). ``hits`` doit être non vide.
+    """
+    cuvee, created = upsert_cuvee(hits[0])
+    if len(hits) > 1:
+        for wine in hits[1:]:
+            _observation_depuis_wine(cuvee, wine)
+        consolider(cuvee)
+    return cuvee, created

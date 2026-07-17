@@ -422,6 +422,12 @@ test("le panneau d'administration est réservé au staff et liste les comptes", 
         { cle: 'WINEAPI_BASE_URL', secret: false, configure: true, source: 'base', apercu: 'https://api.wineapi.io' },
       ],
     },
+    'GET /api/admin-panel/sources/': {
+      sources: [
+        { source: 'openfoodfacts', actif: true, voulu: null, usage_mois: 3, plafond: null, epuise: false, limite_debit: 'usage raisonnable' },
+        { source: 'grapeminds', actif: false, voulu: '0', usage_mois: 0, plafond: 250, epuise: false, limite_debit: '5 req/s · 60 req/min' },
+      ],
+    },
     'GET /api/admin-panel/utilisateurs/': [
       {
         id: 1,
@@ -460,6 +466,9 @@ test("le panneau d'administration est réservé au staff et liste les comptes", 
   // Aperçu chiffré + état des sources d'enrichissement.
   await expect(page.getByText('Catalogue mutualisé')).toBeVisible()
   await expect(page.getByText('v1.2.3')).toBeVisible()
+  // Sources d'identification : on/off + quota mensuel.
+  await expect(page.getByText("Sources d'identification")).toBeVisible()
+  await expect(page.getByText('GrapeMinds')).toBeVisible()
   // Configuration des API : les clés sont listées et masquées.
   await expect(page.getByText('Configuration des API')).toBeVisible()
   await expect(page.getByText('Clé API Claude (Anthropic)')).toBeVisible()

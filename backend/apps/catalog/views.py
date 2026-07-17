@@ -13,7 +13,7 @@ from rest_framework.views import APIView
 
 from apps.inventory.models import Bouteille, NoteDegustation
 
-from . import apogee, sommellerie, wine_profile
+from . import apogee, quotas, sommellerie, wine_profile
 from .enrichment import (
     EnrichmentError,
     get_enabled_providers,
@@ -22,7 +22,7 @@ from .enrichment import (
 )
 from .enrichment.lwin import LwinProvider, evaluer_confiance, rechercher_lwin
 from .enrichment.normalize import guess_couleur, parse_vintage, strip_vintage
-from .ingest import synchroniser_wineapi, upsert_cuvee
+from .ingest import synchroniser_wineapi, upsert_cuvee, upsert_multi
 from .models import Cepage, Cuvee, Domaine, ReferenceLwin
 from .permissions import LectureOuEcritureSansSuppression
 from .serializers import (
@@ -64,6 +64,35 @@ def _enriched_response(wine, cuvee, created):
             "suggestions": wine.raw.get("suggestions") or [],
         }
     )
+
+
+def _cascade_multi(appel):
+    """Interroge **toutes** les sources activées (fusion multi-sources) et collecte
+    leurs résultats, au lieu de s'arrêter au premier hit.
+
+    ``appel(provider)`` renvoie un ``NormalizedWine`` ou ``None`` (le lookup adapté :
+    code-barres / texte / image). Chaque source dont le **plafond mensuel** est
+    atteint est ignorée (``quotas.reste``). Les erreurs remontables (quota 429 / clé
+    invalide) d'une source n'interrompent pas les autres : on les mémorise pour ne
+    les renvoyer qu'en dernier recours (aucun hit du tout).
+
+    Renvoie ``(hits, erreur)`` : la liste des résultats dans l'ordre de la cascade
+    (le 1er sert d'ancre d'identité, cf. ``upsert_multi``) et la dernière erreur
+    éventuelle.
+    """
+    hits = []
+    erreur = None
+    for provider in get_enabled_providers():
+        if not quotas.reste(provider.name):
+            continue  # plafond mensuel atteint : on préserve le quota
+        try:
+            wine = appel(provider)
+        except EnrichmentError as exc:
+            erreur = exc
+            continue
+        if wine:
+            hits.append(wine)
+    return hits, erreur
 
 
 class DomaineViewSet(viewsets.ModelViewSet):
@@ -291,22 +320,23 @@ class ScanCodeBarresView(APIView):
         if cuvee:
             return _local_response(cuvee)
 
-        # --- Scénario 2 : cascade des fournisseurs externes ---
-        for provider in get_enabled_providers():
-            wine = provider.lookup_by_barcode(ean)
-            if not wine:
-                continue
-            cuvee, _ = upsert_cuvee(wine)
+        # --- Scénario 2 : fusion multi-sources (toutes les sources activées) ---
+        hits, erreur = _cascade_multi(lambda p: p.lookup_by_barcode(ean))
+        if hits:
+            primary = hits[0]
+            cuvee, created = upsert_multi(hits)
             return Response(
                 {
-                    "source": wine.source,
-                    "created": True,
-                    "millesime": wine.millesime,
+                    "source": primary.source,
+                    "created": created,
+                    "millesime": primary.millesime,
                     "cuvee": CuveeSerializer(cuvee).data,
                 }
             )
 
-        # --- Scénario 3 : échec total ---
+        # --- Scénario 3 : erreur remontable (quota/clé) ou échec total ---
+        if erreur is not None:
+            return Response({"detail": erreur.message}, status=erreur.status)
         return Response(
             {"source": None, "detail": "Vin non reconnu par son code-barres"},
             status=status.HTTP_404_NOT_FOUND,
@@ -358,18 +388,16 @@ class IdentifierVinView(APIView):
         if cuvee:
             return _local_response(cuvee)
 
-        # --- Cascade des fournisseurs texte (wineapi.io) ---
-        for provider in get_enabled_providers():
-            try:
-                wine = provider.lookup_by_text(query)
-            except EnrichmentError as exc:
-                return Response({"detail": exc.message}, status=exc.status)
-            if not wine:
-                continue
-            cuvee, created = upsert_cuvee(wine)
-            return _enriched_response(wine, cuvee, created)
+        # --- Fusion multi-sources (toutes les sources texte activées) ---
+        hits, erreur = _cascade_multi(lambda p: p.lookup_by_text(query))
+        if hits:
+            primary = hits[0]
+            cuvee, created = upsert_multi(hits)
+            return _enriched_response(primary, cuvee, created)
 
-        # --- Échec total ---
+        # --- Erreur remontable (quota/clé) ou échec total ---
+        if erreur is not None:
+            return Response({"detail": erreur.message}, status=erreur.status)
         return Response(
             {"source": None, "detail": "Vin non identifié"},
             status=status.HTTP_404_NOT_FOUND,
@@ -460,16 +488,14 @@ class ScanEtiquetteView(APIView):
         image = serializer.validated_data["image"]
         data = image.read()
 
-        for provider in get_enabled_providers():
-            try:
-                wine = provider.lookup_by_image(data, image.content_type)
-            except EnrichmentError as exc:
-                return Response({"detail": exc.message}, status=exc.status)
-            if not wine:
-                continue
-            cuvee, created = upsert_cuvee(wine)
-            return _enriched_response(wine, cuvee, created)
+        hits, erreur = _cascade_multi(lambda p: p.lookup_by_image(data, image.content_type))
+        if hits:
+            primary = hits[0]
+            cuvee, created = upsert_multi(hits)
+            return _enriched_response(primary, cuvee, created)
 
+        if erreur is not None:
+            return Response({"detail": erreur.message}, status=erreur.status)
         return Response(
             {"source": None, "detail": "Vin non identifié sur l'étiquette"},
             status=status.HTTP_404_NOT_FOUND,

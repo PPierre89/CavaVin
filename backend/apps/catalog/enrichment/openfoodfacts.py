@@ -5,6 +5,8 @@ import logging
 import urllib.error
 import urllib.request
 
+from .. import quotas
+from ..runtime_config import source_activee
 from .base import EnrichmentProvider, NormalizedWine
 from .normalize import clean, guess_couleur, parse_vintage
 
@@ -23,12 +25,17 @@ class OpenFoodFactsProvider(EnrichmentProvider):
     """
 
     name = "openfoodfacts"
-    enabled = True
+
+    @property
+    def enabled(self) -> bool:  # type: ignore[override]
+        # Actif par défaut, désactivable depuis le panneau d'admin.
+        return source_activee("openfoodfacts", True)
 
     def lookup_by_barcode(self, ean: str) -> NormalizedWine | None:
         req = urllib.request.Request(
             OFF_URL.format(ean=ean), headers={"User-Agent": USER_AGENT}
         )
+        quotas.compter(self.name)  # appel réseau réel : décompte l'usage mensuel
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))

@@ -32,6 +32,7 @@ from io import BytesIO
 from django.conf import settings
 from rapidfuzz import fuzz, process
 
+from ..runtime_config import source_activee
 from .base import EnrichmentProvider, NormalizedWine
 from .normalize import parse_vintage
 
@@ -636,7 +637,8 @@ class LwinProvider(EnrichmentProvider):
 
     @property
     def enabled(self) -> bool:  # type: ignore[override]
-        return settings.LWIN_ENABLED
+        # Repli local, désactivable depuis le panneau d'admin.
+        return source_activee("lwin", settings.LWIN_ENABLED)
 
     def lookup_by_text(self, query: str) -> NormalizedWine | None:
         return self._correspondre(query)

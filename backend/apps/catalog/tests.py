@@ -30,7 +30,8 @@ from .enrichment.grapeminds import GrapeMindsProvider
 from .enrichment.vinou import VinouProvider
 from .enrichment.vinou import _JWT_CACHE_KEY as VINOU_JWT_KEY
 from .enrichment.wineapi import WineApiProvider
-from . import apogee, sommellerie, wine_profile
+from . import apogee, quotas, sommellerie, wine_profile
+from .runtime_config import definir_source_activee, set_parametre, source_activee
 from .consolidation import consolider
 from .ingest import (
     enregistrer_observation,
@@ -623,11 +624,14 @@ class DedupIdentiteMigrationTests(TransactionTestCase):
 class _FakeProvider:
     """Provider factice pour piloter la cascade des vues sans réseau."""
 
-    def __init__(self, wine=None, error=None):
+    def __init__(self, wine=None, error=None, name="fake"):
         self._wine = wine
         self._error = error
+        self.name = name
 
     def lookup_by_barcode(self, ean):
+        if self._error:
+            raise self._error
         return self._wine
 
     def lookup_by_text(self, query):
@@ -1433,6 +1437,140 @@ class StubsProviderTests(TestCase):
         noms_actifs = {p.name for p in get_enabled_providers()}
         self.assertNotIn("cellartracker", noms_actifs)
         self.assertNotIn("vivino", noms_actifs)
+
+
+class QuotasTests(TestCase):
+    """Comptage d'usage et plafonds mensuels des sources."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_compter_incremente_usage_du_mois(self):
+        self.assertEqual(quotas.usage_mensuel("grapeminds"), 0)
+        quotas.compter("grapeminds")
+        quotas.compter("grapeminds")
+        self.assertEqual(quotas.usage_mensuel("grapeminds"), 2)
+        # Une autre source a son propre compteur.
+        self.assertEqual(quotas.usage_mensuel("vinou"), 0)
+
+    def test_plafond_defaut_et_override(self):
+        self.assertEqual(quotas.plafond("grapeminds"), 250)  # défaut connu
+        self.assertIsNone(quotas.plafond("vinou"))  # illimité par défaut
+        set_parametre(quotas.cle_plafond("vinou"), "10")
+        self.assertEqual(quotas.plafond("vinou"), 10)
+        # "0" = illimité explicite, même quand un défaut existe.
+        set_parametre(quotas.cle_plafond("grapeminds"), "0")
+        self.assertIsNone(quotas.plafond("grapeminds"))
+
+    def test_reste_bloque_au_plafond(self):
+        set_parametre(quotas.cle_plafond("vinou"), "2")
+        self.assertTrue(quotas.reste("vinou"))
+        quotas.compter("vinou")
+        quotas.compter("vinou")
+        self.assertFalse(quotas.reste("vinou"))  # plafond atteint
+
+
+class SourceToggleTests(TestCase):
+    """On/off d'une source piloté depuis l'admin (override base > .env)."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_source_activee_suit_l_override(self):
+        # Sans override, on suit le défaut fourni.
+        self.assertTrue(source_activee("grapeminds", True))
+        self.assertFalse(source_activee("grapeminds", False))
+        # L'override force l'état, quel que soit le défaut.
+        definir_source_activee("grapeminds", False)
+        self.assertFalse(source_activee("grapeminds", True))
+        definir_source_activee("grapeminds", True)
+        self.assertTrue(source_activee("grapeminds", False))
+
+
+class SourcesViewTests(APITestCase):
+    """API admin des sources d'identification (on/off + quota)."""
+
+    def setUp(self):
+        cache.clear()
+        self.url = reverse("admin-sources")
+        self.staff = User.objects.create_user("boss", password="x", is_staff=True)
+        self.client.force_authenticate(self.staff)
+
+    def test_get_liste_les_sources_avec_quota(self):
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        par_nom = {s["source"]: s for s in resp.data["sources"]}
+        self.assertIn("grapeminds", par_nom)
+        self.assertIn("claude", par_nom)
+        self.assertEqual(par_nom["grapeminds"]["plafond"], 250)
+        self.assertEqual(par_nom["grapeminds"]["usage_mois"], 0)
+
+    def test_put_toggle_active_une_source(self):
+        resp = self.client.put(self.url, {"source": "vinou", "actif": True}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        vinou = next(s for s in resp.data["sources"] if s["source"] == "vinou")
+        self.assertTrue(vinou["actif"])
+        self.assertEqual(vinou["voulu"], "1")
+
+    def test_put_regle_le_plafond(self):
+        self.client.put(self.url, {"source": "grapeminds", "plafond": 100}, format="json")
+        self.assertEqual(quotas.plafond("grapeminds"), 100)
+        # null -> retour au défaut.
+        self.client.put(self.url, {"source": "grapeminds", "plafond": None}, format="json")
+        self.assertEqual(quotas.plafond("grapeminds"), 250)
+
+    def test_source_inconnue_rejetee(self):
+        resp = self.client.put(self.url, {"source": "vivino", "actif": True}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_reserve_au_staff(self):
+        self.client.force_authenticate(User.objects.create_user("lambda", password="x"))
+        self.assertEqual(self.client.get(self.url).status_code, status.HTTP_403_FORBIDDEN)
+
+
+class FusionMultiSourceTests(APITestCase):
+    """La cascade interroge toutes les sources activées et fusionne les relevés."""
+
+    def setUp(self):
+        cache.clear()
+        self.client.force_authenticate(User.objects.create_user("alice", password="x"))
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_toutes_les_sources_sont_interrogees_et_observees(self, mock_providers):
+        w1 = NormalizedWine(domaine_nom="Château Test", cuvee_nom="Grand Vin", couleur="ROUGE", source="claude")
+        w2 = NormalizedWine(domaine_nom="Château Test", cuvee_nom="Grand Vin", appellation="Pomerol", source="wineapi")
+        mock_providers.return_value = [
+            _FakeProvider(wine=w1, name="claude"),
+            _FakeProvider(wine=w2, name="wineapi"),
+        ]
+        resp = self.client.post(reverse("identifier-vin"), {"query": "Château Test Grand Vin"})
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["source"], "claude")  # 1re source = ancre d'identité
+        cuvee = Cuvee.objects.get(nom="Grand Vin")
+        canaux = set(SourceObservation.objects.filter(cuvee=cuvee).values_list("canal", flat=True))
+        self.assertEqual(canaux, {"claude", "wineapi"})  # les deux sources ont laissé un relevé
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_source_au_plafond_est_sautee(self, mock_providers):
+        set_parametre(quotas.cle_plafond("grapeminds"), "1")
+        quotas.compter("grapeminds")  # usage 1 == plafond 1 -> épuisé
+        appelees = []
+
+        class Traceur(_FakeProvider):
+            def lookup_by_text(self, query):
+                appelees.append(self.name)
+                return super().lookup_by_text(query)
+
+        w = NormalizedWine(domaine_nom="D", cuvee_nom="C", source="claude")
+        mock_providers.return_value = [
+            Traceur(wine=None, name="grapeminds"),
+            Traceur(wine=w, name="claude"),
+        ]
+        self.client.post(reverse("identifier-vin"), {"query": "abcdef"})
+
+        self.assertNotIn("grapeminds", appelees)  # plafond atteint : non interrogée
+        self.assertIn("claude", appelees)
 
 
 def _reponse_claude(payload, stop_reason="end_turn"):

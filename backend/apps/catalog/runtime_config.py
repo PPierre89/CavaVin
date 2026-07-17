@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db.utils import DatabaseError
 
 # Clés pilotables depuis l'admin, avec repli sur ``settings``/.env.
 CLES_PILOTABLES: list[str] = [
@@ -53,7 +52,9 @@ def _override_en_base(cle: str) -> str:
     try:
         obj = Parametre.objects.filter(cle=cle).first()
         valeur = obj.valeur if obj else ""
-    except DatabaseError:
+    except Exception:
+        # Tolérant : base indisponible (migrations) ou contexte sans base -> on
+        # retombe proprement sur le repli ``settings``/.env.
         return ""
     cache.set(_cle_cache(cle), valeur, _TTL)
     return valeur
@@ -81,6 +82,46 @@ def effacer_parametre(cle: str) -> None:
 
     Parametre.objects.filter(cle=cle).delete()
     cache.delete(_cle_cache(cle))
+
+
+_PREFIXE_SOURCE = "SOURCE_ENABLED_"  # clé Parametre : SOURCE_ENABLED_<nom>
+
+# Sources d'identification pilotables (on/off + quota) depuis le panneau d'admin.
+# Les stubs désactivés en permanence (vivino, cellartracker) en sont exclus.
+SOURCES_PILOTABLES: list[str] = [
+    "openfoodfacts",
+    "claude",
+    "wineapi",
+    "grapeminds",
+    "vinou",
+    "lwin",
+]
+
+
+def source_override(nom: str) -> str | None:
+    """Intention admin brute pour une source : ``"1"``, ``"0"`` ou ``None`` (défaut)."""
+    brut = _override_en_base(_PREFIXE_SOURCE + nom)
+    return brut if brut in ("0", "1") else None
+
+
+def source_activee(nom: str, defaut: bool) -> bool:
+    """État on/off *piloté depuis l'admin* d'une source d'enrichissement.
+
+    Override en base (``SOURCE_ENABLED_<nom>`` = ``"1"``/``"0"``) prioritaire sur le
+    défaut issu du ``.env``/settings. Ne préjuge pas des prérequis techniques (clé
+    d'API présente…) : le fournisseur combine ce drapeau avec ses propres conditions
+    dans sa propriété ``enabled``."""
+    brut = _override_en_base(_PREFIXE_SOURCE + nom)
+    if brut == "1":
+        return True
+    if brut == "0":
+        return False
+    return defaut
+
+
+def definir_source_activee(nom: str, actif: bool) -> None:
+    """Fixe l'override on/off d'une source (piloté depuis le panneau d'admin)."""
+    set_parametre(_PREFIXE_SOURCE + nom, "1" if actif else "0")
 
 
 def masquer(valeur: str) -> str:

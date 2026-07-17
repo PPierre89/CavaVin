@@ -307,3 +307,27 @@ class Parametre(models.Model):
 
     def __str__(self):
         return self.cle
+
+
+class AppelSource(models.Model):
+    """Compteur mensuel d'appels d'une source d'enrichissement.
+
+    Une ligne par (source, mois « YYYY-MM ») : ``nombre`` est incrémenté à chaque
+    appel réseau réel d'un fournisseur (cf. ``quotas.compter``). Sert à afficher la
+    consommation dans le panneau d'admin et à faire respecter un plafond mensuel
+    (au-delà, la source est ignorée dans la cascade). Purement de l'agrégat : aucune
+    donnée privée, aucun contenu de requête n'est journalisé.
+    """
+
+    source = models.CharField(max_length=32, help_text="Nom du fournisseur (ex: grapeminds).")
+    mois = models.CharField(max_length=7, help_text="Période « YYYY-MM ».")
+    nombre = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        unique_together = ("source", "mois")
+        ordering = ["-mois", "source"]
+        verbose_name = "appel de source"
+        verbose_name_plural = "appels de source"
+
+    def __str__(self):
+        return f"{self.source} {self.mois}: {self.nombre}"

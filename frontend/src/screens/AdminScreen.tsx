@@ -174,6 +174,139 @@ function ConfigurationApi() {
   )
 }
 
+interface SourceIdentif {
+  source: string
+  actif: boolean
+  voulu: '0' | '1' | null
+  usage_mois: number
+  plafond: number | null
+  epuise: boolean
+  limite_debit: string
+}
+
+// Libellés lisibles des sources d'identification.
+const LIBELLES_SOURCE: Record<string, string> = {
+  openfoodfacts: 'Open Food Facts (code-barres)',
+  claude: 'Claude (vision + IA)',
+  wineapi: 'wineapi.io',
+  grapeminds: 'GrapeMinds',
+  vinou: 'Vinou',
+  lwin: 'LWIN (OCR local)',
+}
+
+/* ---------- Sources d'identification (on/off + quota mensuel) ---------- */
+function SourcesIdentification() {
+  const [sources, setSources] = useState<SourceIdentif[]>([])
+  const [caps, setCaps] = useState<Record<string, string>>({})
+  const [erreur, setErreur] = useState('')
+  const [enCours, setEnCours] = useState<string | null>(null)
+
+  const charger = useCallback(async () => {
+    try {
+      const data = await api<{ sources: SourceIdentif[] }>('GET', '/api/admin-panel/sources/')
+      setSources(data.sources)
+    } catch (e) {
+      setErreur(errMsg(e, 'Impossible de charger les sources.'))
+    }
+  }, [])
+
+  useEffect(() => {
+    charger()
+  }, [charger])
+
+  const maj = async (source: string, corps: Record<string, unknown>) => {
+    setEnCours(source)
+    setErreur('')
+    try {
+      const data = await api<{ sources: SourceIdentif[] }>('PUT', '/api/admin-panel/sources/', {
+        source,
+        ...corps,
+      })
+      setSources(data.sources)
+      setCaps((c) => ({ ...c, [source]: '' }))
+    } catch (e) {
+      setErreur(errMsg(e, 'Modification impossible.'))
+    } finally {
+      setEnCours(null)
+    }
+  }
+
+  return (
+    <Card>
+      <CardTitle>Sources d'identification</CardTitle>
+      {erreur && <div className="text-sm text-alerte mb-2">{erreur}</div>}
+      <p className="text-muted/80 text-xs mb-3">
+        Chaque ajout interroge <strong>toutes les sources actives</strong> et fusionne les résultats
+        (fiche la plus riche). Fixe un plafond d'appels mensuel : au-delà, la source est ignorée pour
+        préserver son quota.
+      </p>
+      {sources.map((s) => {
+        const pct = s.plafond ? Math.min(100, Math.round((s.usage_mois / s.plafond) * 100)) : 0
+        const cleManquante = s.voulu === '1' && !s.actif
+        return (
+          <div key={s.source} className="py-3 border-b border-line/40 last:border-0">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-ink text-sm font-medium">
+                {LIBELLES_SOURCE[s.source] || s.source}
+              </span>
+              <div className="flex items-center gap-2">
+                {s.epuise && <Badge ton="wine">Plafond atteint</Badge>}
+                {cleManquante && <Badge ton="muted">Clé requise</Badge>}
+                <Badge ton={s.actif ? 'gold' : 'muted'}>{s.actif ? 'Active' : 'Inactive'}</Badge>
+                <button
+                  onClick={() => maj(s.source, { actif: !s.actif })}
+                  disabled={enCours === s.source}
+                  className={`${s.actif ? ghostCls : primaryCls} shrink-0 disabled:opacity-40`}
+                >
+                  {s.actif ? 'Désactiver' : 'Activer'}
+                </button>
+              </div>
+            </div>
+            <div className="mt-2 text-xs text-muted/80 tabular-nums">
+              {s.usage_mois} appel{s.usage_mois > 1 ? 's' : ''} ce mois
+              {s.plafond != null ? ` / plafond ${s.plafond}` : ' · illimité'}
+              {s.limite_debit ? ` · ${s.limite_debit}` : ''}
+            </div>
+            {s.plafond != null && (
+              <div className="h-1.5 rounded-full bg-line/40 mt-1 overflow-hidden">
+                <div
+                  className={`h-full ${s.epuise ? 'bg-alerte' : 'bg-gold'}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            )}
+            <div className="flex gap-2 mt-2">
+              <input
+                type="number"
+                min={0}
+                value={caps[s.source] ?? ''}
+                onChange={(e) => setCaps((c) => ({ ...c, [s.source]: e.target.value }))}
+                placeholder={s.plafond != null ? String(s.plafond) : 'illimité (0)'}
+                className={`${inputCls} w-32`}
+              />
+              <button
+                onClick={() => maj(s.source, { plafond: Number(caps[s.source]) })}
+                disabled={enCours === s.source || (caps[s.source] ?? '').trim() === ''}
+                className={`${ghostCls} shrink-0 disabled:opacity-40`}
+              >
+                Plafond
+              </button>
+              <button
+                onClick={() => maj(s.source, { plafond: null })}
+                disabled={enCours === s.source}
+                className={`${ghostCls} shrink-0 disabled:opacity-40`}
+                title="Revenir au plafond par défaut de la source"
+              >
+                Défaut
+              </button>
+            </div>
+          </div>
+        )
+      })}
+    </Card>
+  )
+}
+
 /* ---------- Import du référentiel LWIN (upload d'un dump XLSX/CSV) ---------- */
 function ImportLwin({ total, onImported }: { total?: number; onImported: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -387,6 +520,8 @@ export default function AdminScreen() {
               </Card>
             </>
           )}
+
+          <SourcesIdentification />
 
           <ConfigurationApi />
 
