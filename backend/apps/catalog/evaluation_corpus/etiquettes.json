@@ -1,0 +1,97 @@
+{
+  "nom": "Étiquettes de vin — échantillon LibreYOLO/wine-labels (HuggingFace)",
+  "source": "https://huggingface.co/datasets/LibreYOLO/wine-labels",
+  "licence": "CC BY 4.0",
+  "attribution": "Images : jeu de données « wine-labels » (Roboflow-100), créé par Yilong Zheng, redistribué par LibreYOLO sur HuggingFace sous licence CC BY 4.0. Les annotations d'identité (producteur / vin) ci-dessous sont propres à CavaVin : le jeu d'origine n'annote que des zones d'étiquette (emplacement du nom, du millésime…), pas l'identité du vin.",
+  "note": "Les images ne sont pas versionnées : la commande evaluer_reconnaissance les télécharge à la demande dans evaluation_corpus/images/ (ignoré par git). Échantillon volontairement varié — étiquettes sombres, polices scriptes, étiquette minimale, producteurs français, américains, néo-zélandais et portugais.",
+  "cas": [
+    {
+      "id": "101108",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/101108_jpg.rf.cb2f5c4b539356e10f1ee949bebd860c.jpg",
+      "producteur": "Mumm Napa",
+      "vin": "Brut Rosé",
+      "remarque": "Bulles, texte sur fond rosé, mention Méthode Traditionnelle."
+    },
+    {
+      "id": "102077",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/102077_jpg.rf.e72a1dea2c4a2ed5083db913e2a4e1fa.jpg",
+      "producteur": "Ruinart",
+      "vin": "Champagne Blanc de Blancs",
+      "remarque": "Police à empattements sur fond crème, texte courbe en périphérie."
+    },
+    {
+      "id": "102737",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/102737_jpg.rf.091559fff34cfbcd6b6db087c1e6e957.jpg",
+      "producteur": "Spy Valley",
+      "vin": "Marlborough Sauvignon Blanc",
+      "remarque": "Étiquette sombre à texte clair : déclenche la variante inversée du pré-traitement."
+    },
+    {
+      "id": "102896",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/102896_jpg.rf.89634703df872b31c0675e15b7056889.jpg",
+      "producteur": "Chalone Vineyard",
+      "vin": "Chardonnay Estate Grown",
+      "remarque": "Producteur dont le nom contient « Vineyard », mot filtré comme mobilier d'étiquette."
+    },
+    {
+      "id": "10295",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/10295_jpg.rf.7cee6365245b60332efd346ae576b396.jpg",
+      "producteur": "Warre's",
+      "vin": "Warrior Porto Finest Reserve",
+      "remarque": "Fond noir, apostrophe dans le nom, bas d'étiquette en script fin."
+    },
+    {
+      "id": "102978",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/102978_jpg.rf.365d0c2c80b8724343f2661d610bf235.jpg",
+      "producteur": "Olson Ogden",
+      "vin": "Pinot Noir Sonoma Coast",
+      "millesime": 2007,
+      "remarque": "Police stylisée à capitales décoratives — cas hostile à l'OCR."
+    },
+    {
+      "id": "102991",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/102991_jpg.rf.d2a9c9944c59b11c5d1c4df4db493862.jpg",
+      "producteur": "Kendall-Jackson",
+      "vin": "Grand Reserve Chardonnay",
+      "millesime": 2008,
+      "remarque": "Nom composé par trait d'union ; « Grand Reserve » est du mobilier d'étiquette."
+    },
+    {
+      "id": "103482",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/103482_jpg.rf.39a700ec9fc7440c11c330407afe1cdd.jpg",
+      "producteur": "Andrew Will",
+      "vin": "Ciel du Cheval Vineyard",
+      "millesime": 2007,
+      "remarque": "Producteur en blanc sur pavé noir, nom de vin en français sur fond blanc."
+    },
+    {
+      "id": "104617",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/104617_jpg.rf.a0e0e134bb2df8a2d844c01efde738b2.jpg",
+      "producteur": "Ridge",
+      "vin": "Geyserville",
+      "millesime": 2008,
+      "remarque": "Producteur d'un seul mot court ; bas d'étiquette très chargé (cépages, adresse)."
+    },
+    {
+      "id": "104723",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/104723_jpg.rf.1a51f218c3281d3ee57c7c76cfa57aaf.jpg",
+      "producteur": "Robert Craig",
+      "vin": "Affinity Napa Valley Cabernet Sauvignon",
+      "remarque": "Nom du producteur en script anglaise — la police la plus dure pour Tesseract."
+    },
+    {
+      "id": "104939",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/104939_jpg.rf.c7957e6a8c9be3d0b953fe67f91d7364.jpg",
+      "producteur": "Pillar Box",
+      "vin": "Red",
+      "remarque": "Étiquette minimale : presque aucun texte, producteur non mentionné explicitement. Cas où le silence est la bonne réponse."
+    },
+    {
+      "id": "105197",
+      "url": "https://huggingface.co/datasets/LibreYOLO/wine-labels/resolve/main/test/images/105197_jpg.rf.fc602c14987d66f08cbe21521b5ed4ac.jpg",
+      "producteur": "Ravenswood",
+      "vin": "Old Hill Zinfandel Sonoma Valley",
+      "remarque": "Très faible contraste (gris sur noir), bas d'étiquette quasi illisible. Cas limite."
+    }
+  ]
+}

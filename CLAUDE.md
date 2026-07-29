@@ -206,6 +206,23 @@ is reached (`Parametre QUOTA_<SOURCE>`; default 250 for GrapeMinds, unlimited ot
 Counting/enforcement is best-effort — it never breaks an identification. The staff panel drives all this
 via `GET/PUT /api/admin-panel/sources/` (on/off + cap + usage), alongside the existing API-key overrides.
 
+### Measuring recognition quality — use it before touching OCR/matching thresholds
+`manage.py evaluer_reconnaissance` (logic in `catalog/evaluation.py`) is how a change to the OCR
+pipeline or the LWIN fuzzy matching is *justified* rather than guessed. Two corpora: a manifest of
+annotated real label photos (`catalog/evaluation_corpus/etiquettes.json`, images fetched on demand,
+gitignored) and a synthetic tier deriving thousands of OCR-noised queries from the imported LWIN
+referential (seeded, so reproducible).
+
+It reports three outcomes, and **the split is the point**: `trouve` / `silence` (no match — the user
+types it manually, annoying but harmless) / `erreur` (a *different* wine — the costly one: it
+contradicts the provider's precision-first stance and pollutes the shared catalog). A single
+"success rate" hides the trade that matters, so never collapse them. When tuning `_TOKEN_RATIO`,
+`_OCR_CONF_*` or the candidate selection, quote before/after numbers from this command.
+
+Judging is on **wine identity, not row identity** — the LWIN dump holds the same wine under several
+codes, so matching a duplicate code is a success, not an error. Getting that wrong makes the error
+rate wildly pessimistic.
+
 ### Secrets & config
 Secrets come from `.env` (loaded via python-dotenv in `settings.py`); `.env` is gitignored. Never
 hardcode keys — `ANTHROPIC_API_KEY`, `WINEAPI_KEY`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`,

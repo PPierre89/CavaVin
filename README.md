@@ -154,6 +154,45 @@ la zone de texte en pleine résolution, ce qui rattrape une étiquette lointaine
 Tout hit est **mis en cache en base** ; les endpoints d'identification sont protégés par un
 throttle et la re-synchro par un cooldown par vin. Détail complet dans Swagger.
 
+### Mesurer la qualité de reconnaissance
+
+Régler un seuil d'OCR ou de correspondance à l'aveugle, c'est risquer de dégrader la
+reconnaissance en croyant l'améliorer. La commande `evaluer_reconnaissance` chiffre l'effet d'un
+changement, en distinguant les trois issues possibles — la distinction est le cœur de la mesure :
+
+- **reconnu** — le bon vin est identifié ;
+- **silence** — aucune correspondance : l'utilisateur saisit à la main, c'est ennuyeux mais sans
+  conséquence ;
+- **erreur** — un *autre* vin est renvoyé. C'est l'issue coûteuse : elle contredit le parti pris
+  « précision d'abord » et pollue le catalogue mutualisé, partagé par tous. Un réglage qui
+  transforme du silence en reconnaissance est bon ; le même réglage qui transforme du silence en
+  erreur est mauvais — et un simple « taux de réussite » confond les deux.
+
+```bash
+# Photos d'étiquettes réelles annotées (corpus livré avec le projet, images
+# téléchargées à la demande) — mesure la chaîne complète, OCR compris.
+python manage.py evaluer_reconnaissance --details
+
+# Milliers de requêtes dérivées du référentiel LWIN avec un bruit d'OCR simulé
+# (confusions de caractères, tokens perdus, mobilier d'étiquette). Reproductible
+# via sa graine, sans photo ni clé d'API.
+python manage.py evaluer_reconnaissance --synthetique 2000 --intensite 0.3
+
+# Balayage du bruit : la courbe montre où la correspondance décroche.
+for i in 0 0.3 0.6; do python manage.py evaluer_reconnaissance --synthetique 500 --intensite $i; done
+```
+
+Par défaut seule la source `lwin` est évaluée (gratuite et hors-ligne) ; `--sources toutes`
+consomme les quotas des API. Le tiers synthétique exige le **dump LWIN importé** — sans lui, la
+correspondance n'a rien contre quoi jouer et la commande le signale plutôt que d'afficher un 0 %
+trompeur.
+
+Le corpus de photos vient du jeu de données [`LibreYOLO/wine-labels`](https://huggingface.co/datasets/LibreYOLO/wine-labels)
+(Roboflow-100, CC BY 4.0). Attention : ce jeu — comme tous ceux disponibles publiquement à ce jour —
+annote **l'emplacement** des zones d'étiquette, pas l'identité du vin. Les annotations
+producteur/cuvée sont donc propres à CavaVin ; pour étoffer le corpus, ajoutez vos propres photos
+au manifeste `backend/apps/catalog/evaluation_corpus/etiquettes.json`.
+
 Un vin n'est identifié **qu'une fois** : les identités fortes d'un relevé (code-barres, référence
 externe, code LWIN) sont toutes confrontées au catalogue avant d'envisager une création, et celles
 qui manquaient à la cuvée retrouvée viennent la compléter. Scanner le code-barres d'un vin déjà

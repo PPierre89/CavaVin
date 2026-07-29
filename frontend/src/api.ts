@@ -114,16 +114,26 @@ interface Page<T> {
   next?: string | null
 }
 
+// Garde-fou anti-boucle : borne le nombre de pages suivies si l'API renvoyait un
+// `next` circulaire. Assez haut pour qu'une cave réelle ne l'atteigne jamais —
+// à 25 éléments par page, c'est 12 500 lignes de stock.
+const MAX_PAGES = 500
+
 export async function apiAllPages<T = unknown>(url: string): Promise<T[]> {
   let results: T[] = []
   let next: string | null = url
-  let guard = 0
-  while (next && guard < 20) {
+  let pages = 0
+  while (next && pages < MAX_PAGES) {
     const page: T[] | Page<T> = await api('GET', next)
     if (Array.isArray(page)) return results.concat(page)
     results = results.concat(page.results || [])
     next = page.next ?? null
-    guard++
+    pages++
+  }
+  if (next) {
+    // On préfère un signal bruyant à une liste tronquée en silence : jusqu'ici,
+    // au-delà du plafond, des bouteilles disparaissaient de l'écran sans un mot.
+    console.warn(`apiAllPages: ${MAX_PAGES} pages atteintes sur ${url}, liste tronquée`)
   }
   return results
 }

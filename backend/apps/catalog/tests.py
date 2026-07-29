@@ -12,6 +12,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import IntegrityError, connection
 from django.test import (
     SimpleTestCase,
@@ -24,7 +25,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from . import views
+from . import evaluation, views
 from .enrichment import EnrichmentError, NormalizedWine
 from .enrichment import image as image_utils
 from .enrichment import normalize
@@ -2953,3 +2954,128 @@ class SuppressionProtegeeTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
         self.assertTrue(Domaine.objects.filter(pk=self.domaine.pk).exists())
         self.assertTrue(Cuvee.objects.filter(pk=self.cuvee.pk).exists())
+
+
+class EvaluationReconnaissanceTests(TestCase):
+    """Le harnais de mesure : c'est lui qui rend un réglage d'OCR défendable."""
+
+    @staticmethod
+    def _wine(domaine, cuvee, lwin=""):
+        return NormalizedWine(
+            domaine_nom=domaine, cuvee_nom=cuvee, source="lwin",
+            raw={"wineapi_detail": {"lwinCode": lwin}} if lwin else {},
+        )
+
+    def test_aucun_relevé_vaut_silence(self):
+        cas = evaluation.Cas(identifiant="x", producteur="Ridge", vin="Geyserville")
+        self.assertEqual(evaluation.juger(cas, None).issue, "silence")
+
+    def test_code_lwin_identique_vaut_trouve(self):
+        cas = evaluation.Cas(identifiant="x", lwin="1234567", producteur="Ridge", vin="G")
+        resultat = evaluation.juger(cas, self._wine("Ridge", "Geyserville", lwin="1234567"))
+        self.assertEqual(resultat.issue, "trouve")
+
+    def test_doublon_du_referentiel_n_est_pas_une_erreur(self):
+        """Le dump LWIN porte le même vin sous plusieurs codes : tomber sur un
+        autre code du MÊME vin est une identification réussie, pas une erreur.
+        Juger sur le seul code rendrait le taux d'erreur absurdement pessimiste."""
+        cas = evaluation.Cas(identifiant="x", lwin="1111111", producteur="Ridge", vin="Geyserville")
+        resultat = evaluation.juger(cas, self._wine("Ridge", "Geyserville", lwin="2222222"))
+        self.assertEqual(resultat.issue, "trouve")
+
+    def test_autre_vin_vaut_erreur(self):
+        cas = evaluation.Cas(identifiant="x", producteur="Ridge", vin="Geyserville")
+        resultat = evaluation.juger(cas, self._wine("Ravenswood", "Old Hill"))
+        self.assertEqual(resultat.issue, "erreur")
+
+    def test_un_producteur_proche_ne_valide_pas(self):
+        """« Ridge » attendu ne doit pas être validé par « Ridgeview » : la
+        comparaison porte sur des tokens entiers, pas sur des sous-chaînes."""
+        cas = evaluation.Cas(identifiant="x", producteur="Ridge", vin="Geyserville")
+        self.assertEqual(evaluation.juger(cas, self._wine("Ridgeview", "Estate")).issue, "erreur")
+
+    def test_les_taux_du_bilan(self):
+        cas = evaluation.Cas(identifiant="x")
+        bilan = evaluation.Bilan(resultats=[
+            evaluation.Resultat(cas=cas, issue="trouve"),
+            evaluation.Resultat(cas=cas, issue="trouve"),
+            evaluation.Resultat(cas=cas, issue="silence"),
+            evaluation.Resultat(cas=cas, issue="erreur"),
+        ])
+        self.assertEqual(bilan.total, 4)
+        self.assertEqual(bilan.taux_reconnaissance, 50.0)
+        self.assertEqual(bilan.taux_silence, 25.0)
+        self.assertEqual(bilan.taux_erreur, 25.0)
+
+    def test_bilan_vide_ne_divise_pas_par_zero(self):
+        self.assertEqual(evaluation.Bilan().taux_reconnaissance, 0.0)
+
+    def test_generation_synthetique_reproductible(self):
+        ReferenceLwin.objects.create(lwin="1", producteur="Château Margaux", vin="Grand Vin")
+        ReferenceLwin.objects.create(lwin="2", producteur="Domaine Leflaive", vin="Puligny")
+        refs = list(ReferenceLwin.objects.all())
+        a = evaluation.generer_cas_synthetiques(refs, 20, graine=7)
+        b = evaluation.generer_cas_synthetiques(refs, 20, graine=7)
+        self.assertEqual([c.texte for c in a], [c.texte for c in b])  # même graine
+        c = evaluation.generer_cas_synthetiques(refs, 20, graine=8)
+        self.assertNotEqual([x.texte for x in a], [x.texte for x in c])
+
+    def test_sans_bruit_le_texte_genere_reste_fidele(self):
+        ReferenceLwin.objects.create(lwin="1", producteur="Château Margaux", vin="Grand Vin")
+        refs = list(ReferenceLwin.objects.all())
+        cas = evaluation.generer_cas_synthetiques(refs, 5, graine=1, intensite=0.0)
+        for c in cas:
+            self.assertEqual(c.texte, "Château Margaux Grand Vin")
+            self.assertEqual(c.lwin, "1")
+
+    def test_referentiel_vide_ne_genere_rien(self):
+        self.assertEqual(evaluation.generer_cas_synthetiques([], 10), [])
+
+    def test_le_corpus_livre_est_lisible_et_annote(self):
+        from apps.catalog.management.commands.evaluer_reconnaissance import CORPUS_DEFAUT
+
+        cas, meta = evaluation.charger_corpus(CORPUS_DEFAUT)
+        self.assertGreaterEqual(len(cas), 10)
+        self.assertTrue(meta["licence"])       # licence du jeu amont documentée
+        self.assertTrue(meta["attribution"])   # CC BY 4.0 => attribution obligatoire
+        for c in cas:
+            self.assertTrue(c.producteur, f"cas {c.identifiant} sans producteur attendu")
+
+
+class EvaluerReconnaissanceCommandeTests(TestCase):
+    """La commande : orchestration, sans réseau ni image."""
+
+    def setUp(self):
+        for i in range(30):
+            ReferenceLwin.objects.create(
+                lwin=str(2000000 + i), producteur=f"Producteur {i}", vin=f"Cuvée {i}"
+            )
+
+    def _lancer(self, **kwargs):
+        sortie, erreurs = StringIO(), StringIO()
+        call_command("evaluer_reconnaissance", stdout=sortie, stderr=erreurs, **kwargs)
+        return sortie.getvalue(), erreurs.getvalue()
+
+    def test_mode_synthetique_seul(self):
+        sortie, _ = self._lancer(synthetique=15, sources="lwin")
+        self.assertIn("Synthétique", sortie)
+        self.assertIn("15 cas", sortie)
+        self.assertNotIn("Photos réelles", sortie)  # pas de corpus demandé
+
+    def test_source_inconnue_est_refusee(self):
+        with self.assertRaises(CommandError):
+            self._lancer(synthetique=1, sources="nexistepas")
+
+    def test_referentiel_vide_est_signale_et_n_echoue_pas(self):
+        ReferenceLwin.objects.all().delete()
+        _, erreurs = self._lancer(synthetique=5, sources="lwin")
+        self.assertIn("Référentiel LWIN vide", erreurs)
+
+    def test_corpus_introuvable_leve_une_erreur_explicite(self):
+        with self.assertRaises(CommandError):
+            self._lancer(corpus="/tmp/corpus-qui-nexiste-pas.json", sources="lwin")
+
+    def test_le_bruit_maximal_ne_plante_pas(self):
+        """Garde-fou : la génération doit tenir sur des entrées très dégradées."""
+        sortie, _ = self._lancer(synthetique=10, intensite=1.0, sources="lwin")
+        self.assertIn("10 cas", sortie)

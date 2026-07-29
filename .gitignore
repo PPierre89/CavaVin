@@ -14,3 +14,8 @@ backend/spa/
 .coverage
 backend/htmlcov/
 backend/coverage.xml
+
+# Images du corpus d'évaluation : téléchargées à la demande par
+# `manage.py evaluer_reconnaissance` (licence propre au jeu de données amont,
+# cf. evaluation_corpus/etiquettes.json). Le manifeste, lui, est versionné.
+backend/apps/catalog/evaluation_corpus/images/

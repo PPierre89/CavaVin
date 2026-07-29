@@ -79,10 +79,21 @@ class Emplacement(models.Model):
         return f"{self.cave.nom} > {self.chemin()}"
 
     def chemin(self):
-        """Chemin complet lisible, ex: Armoire 1 > Clayette 3 > B4."""
+        """Chemin complet lisible, ex: Armoire 1 > Clayette 3 > B4.
+
+        Le sérialiseur interdit déjà de créer un cycle, mais il ne couvre que la
+        voie API : l'admin Django et une écriture directe en base peuvent en
+        introduire un. Sans garde-fou, la remontée boucle alors indéfiniment et
+        fige le worker sur *toute* lecture de l'emplacement. On borne donc la
+        remontée aux ancêtres déjà vus.
+        """
         segments = [self.nom]
+        vus = {self.pk}
         node = self.parent
-        while node is not None:
+        while node is not None and node.pk not in vus:
             segments.insert(0, node.nom)
+            vus.add(node.pk)
             node = node.parent
+        if node is not None:  # cycle : on le signale plutôt que de mentir
+            segments.insert(0, "…")
         return " > ".join(segments)
