@@ -65,6 +65,9 @@ class Cas:
     # Exactement l'un des deux : une photo à lire, ou un texte déjà « lu ».
     image: Path | None = None
     texte: str = ""
+    # Code-barres du produit, quand le corpus en fournit un : il permet d'évaluer
+    # aussi le chemin d'identification US 01 (scan de code-barres).
+    code_barres: str = ""
     # Vérité terrain. ``lwin`` est le critère fort quand il est connu ; sinon on
     # se rabat sur la présence des tokens attendus dans le libellé renvoyé.
     lwin: str = ""
@@ -195,6 +198,7 @@ def charger_corpus(chemin: Path, racine_images: Path | None = None) -> tuple[lis
             Cas(
                 identifiant=str(entree.get("id") or entree.get("producteur", "?")),
                 image=racine / f"{entree['id']}.jpg" if entree.get("id") else None,
+                code_barres=str(entree.get("code_barres", "")),
                 lwin=entree.get("lwin", ""),
                 producteur=entree.get("producteur", ""),
                 vin=entree.get("vin", ""),

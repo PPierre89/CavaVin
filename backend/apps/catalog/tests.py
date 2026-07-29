@@ -3079,3 +3079,71 @@ class EvaluerReconnaissanceCommandeTests(TestCase):
         """Garde-fou : la génération doit tenir sur des entrées très dégradées."""
         sortie, _ = self._lancer(synthetique=10, intensite=1.0, sources="lwin")
         self.assertIn("10 cas", sortie)
+
+
+class CorpusOpenFoodFactsTests(SimpleTestCase):
+    """Filtrage du corpus : c'est lui qui décide de la qualité de la mesure."""
+
+    def setUp(self):
+        from apps.catalog.management.commands.corpus_openfoodfacts import Command
+
+        self.commande = Command()
+        self.vus = set()
+
+    def _produit(self, **surcharges):
+        base = {
+            "code": "3211203433220",
+            "brands": "Baron de Lestac",
+            "product_name": "Bordeaux 2013",
+            "image_front_url": "https://images.openfoodfacts.org/x.jpg",
+            "categories_tags": ["en:alcoholic-beverages", "en:wines", "en:red-wines"],
+        }
+        base.update(surcharges)
+        return base
+
+    def test_un_vin_complet_est_retenu(self):
+        entree = self.commande._retenir(self._produit(), self.vus)
+        self.assertIsNotNone(entree)
+        self.assertEqual(entree["code_barres"], "3211203433220")
+        self.assertEqual(entree["producteur"], "Baron de Lestac")
+
+    def test_produit_sans_le_tag_vin_est_ecarte(self):
+        """Le paramètre de recherche d'OFF fait une correspondance textuelle et
+        ramène des produits sans rapport : on revalide le tag sur la fiche."""
+        produit = self._produit(categories_tags=["en:jams", "en:marmalades"])
+        self.assertIsNone(self.commande._retenir(produit, self.vus))
+
+    def test_produit_mal_categorise_est_ecarte(self):
+        """Cas réel : une confiture de clémentines porte `en:wines` dans OFF, à
+        côté de `en:jams`. Exiger le tag ne suffit pas, il faut refuser les
+        familles qui le contredisent — sinon le corpus contient des cas
+        ingagnables qui font passer le moteur pour mauvais."""
+        produit = self._produit(
+            product_name="Confiture clémentines et oranges de Corse",
+            categories_tags=["en:wines", "en:wines-from-france", "en:jams", "en:marmalades"],
+        )
+        self.assertIsNone(self.commande._retenir(produit, self.vus))
+
+    def test_vinaigre_de_vin_est_ecarte(self):
+        produit = self._produit(
+            product_name="Vinaigre de vin blanc",
+            categories_tags=["en:wines", "en:vinegars", "en:wine-vinegars"],
+        )
+        self.assertIsNone(self.commande._retenir(produit, self.vus))
+
+    def test_fiche_incomplete_est_ecartee(self):
+        for manquant in ("code", "brands", "product_name", "image_front_url"):
+            self.assertIsNone(
+                self.commande._retenir(self._produit(**{manquant: ""}), self.vus),
+                f"une fiche sans {manquant} ne devrait pas être retenue",
+            )
+
+    def test_marque_ou_nom_non_discriminant_est_ecarte(self):
+        self.assertIsNone(self.commande._retenir(self._produit(brands="Bio"), self.vus))
+        self.assertIsNone(self.commande._retenir(self._produit(brands="AB"), self.vus))
+        self.assertIsNone(self.commande._retenir(self._produit(product_name="75 cl"), self.vus))
+        self.assertIsNone(self.commande._retenir(self._produit(product_name="Rouge"), self.vus))
+
+    def test_doublon_de_code_barres_est_ecarte(self):
+        self.assertIsNotNone(self.commande._retenir(self._produit(), self.vus))
+        self.assertIsNone(self.commande._retenir(self._produit(), self.vus))

@@ -42,6 +42,11 @@ class Command(BaseCommand):
                  "gratuite et hors-ligne). « toutes » consomme les quotas des API.",
         )
         parser.add_argument(
+            "--voie", choices=["image", "code-barres"], default="image",
+            help="Chemin d'identification évalué sur un corpus de photos : lecture de "
+                 "l'étiquette (défaut) ou scan du code-barres, quand le corpus en porte.",
+        )
+        parser.add_argument(
             "--details", action="store_true",
             help="Détaille chaque cas (utile pour comprendre un silence ou une erreur).",
         )
@@ -98,7 +103,7 @@ class Command(BaseCommand):
             graine=options["graine"], intensite=options["intensite"],
         )
         for provider in providers:
-            self._executer(provider, cas, options, image=False)
+            self._executer(provider, cas, options, voie="texte")
 
     def _evaluer_corpus(self, providers, chemin: Path, options):
         if not chemin.exists():
@@ -112,19 +117,47 @@ class Command(BaseCommand):
         ))
         if meta.get("attribution"):
             self.stdout.write(self.style.HTTP_INFO(f"   {meta['attribution']}"))
+        self._avertir_circularite(providers, meta)
 
-        manquantes = self._telecharger(cas, chemin)
-        if manquantes:
-            self.stderr.write(self.style.WARNING(
-                f"{manquantes} image(s) non téléchargée(s) : cas ignorés."
-            ))
-        cas = [c for c in cas if c.image and c.image.exists()]
-        if not cas:
-            raise CommandError("Aucune image disponible : vérifie l'accès réseau.")
+        voie = options["voie"]
+        if voie == "code-barres":
+            cas = [c for c in cas if c.code_barres]
+            if not cas:
+                raise CommandError(
+                    "Ce corpus ne porte aucun code-barres : utilise --voie image, ou "
+                    "génère un corpus Open Food Facts (manage.py corpus_openfoodfacts)."
+                )
+        else:
+            manquantes = self._telecharger(cas, chemin)
+            if manquantes:
+                self.stderr.write(self.style.WARNING(
+                    f"{manquantes} image(s) non téléchargée(s) : cas ignorés."
+                ))
+            cas = [c for c in cas if c.image and c.image.exists()]
+            if not cas:
+                raise CommandError("Aucune image disponible : vérifie l'accès réseau.")
 
         self._avertir_referentiel_vide(providers)
         for provider in providers:
-            self._executer(provider, cas, options, image=True)
+            self._executer(provider, cas, options, voie=voie)
+
+    def _avertir_circularite(self, providers, meta):
+        """Refuse de laisser passer une mesure circulaire sans le dire.
+
+        Évaluer une source sur un corpus qu'elle a elle-même produit donne 100 %
+        par construction. Le chiffre est flatteur, ne mesure rien, et c'est
+        exactement le genre de résultat qu'on cite ensuite de bonne foi.
+        """
+        origine = (meta.get("source") or "").lower()
+        for provider in providers:
+            if provider.name == "openfoodfacts" and "openfoodfacts" in origine:
+                self.stderr.write(self.style.ERROR(
+                    "   MESURE CIRCULAIRE : la source « openfoodfacts » est évaluée sur "
+                    "un corpus issu d'Open Food Facts. Le score sera de ~100 % par "
+                    "construction et ne mesure rien.\n"
+                    "   Évalue plutôt les autres sources (--sources lwin, claude…), pour "
+                    "lesquelles ce corpus est un arbitre indépendant."
+                ))
 
     def _avertir_referentiel_vide(self, providers):
         """Un référentiel vide fait tout échouer en silence : autant le dire.
@@ -134,13 +167,19 @@ class Command(BaseCommand):
         """
         if not any(p.name == "lwin" for p in providers):
             return
-        if ReferenceLwin.objects.exists():
-            return
+        try:
+            if ReferenceLwin.objects.exists():
+                return
+            detail = "Référentiel LWIN VIDE"
+        except Exception:
+            # Base non migrée : c'est précisément le cas où l'utilisateur a besoin
+            # d'un message, pas d'un traceback — la fonction est là pour aider.
+            detail = "Référentiel LWIN INACCESSIBLE (base non migrée ?)"
         self.stderr.write(self.style.ERROR(
-            "   Référentiel LWIN VIDE : la source « lwin » ne peut rien reconnaître, "
+            f"   {detail} : la source « lwin » ne peut rien reconnaître, "
             "tous les cas tomberont en silence.\n"
-            "   Importe le dump Liv-ex (manage.py import_lwin) avant d'interpréter "
-            "ces chiffres."
+            "   Lance `manage.py migrate` puis importe le dump Liv-ex "
+            "(`manage.py import_lwin`) avant d'interpréter ces chiffres."
         ))
 
     def _telecharger(self, cas, chemin_manifeste: Path) -> int:
@@ -171,13 +210,15 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------------------ #
 
-    def _executer(self, provider, cas, options, image: bool):
+    def _executer(self, provider, cas, options, voie: str = "texte"):
         bilan = evaluation.Bilan()
         debut = time.monotonic()
         for c in cas:
             try:
-                if image:
+                if voie == "image":
                     wine = provider.lookup_by_image(c.image.read_bytes(), "image/jpeg")
+                elif voie == "code-barres":
+                    wine = provider.lookup_by_barcode(c.code_barres)
                 else:
                     wine = provider.lookup_by_text(c.texte)
             except Exception as exc:  # une source en panne ne fausse pas le reste

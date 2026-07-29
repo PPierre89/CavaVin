@@ -187,11 +187,39 @@ consomme les quotas des API. Le tiers synthétique exige le **dump LWIN importé
 correspondance n'a rien contre quoi jouer et la commande le signale plutôt que d'afficher un 0 %
 trompeur.
 
-Le corpus de photos vient du jeu de données [`LibreYOLO/wine-labels`](https://huggingface.co/datasets/LibreYOLO/wine-labels)
-(Roboflow-100, CC BY 4.0). Attention : ce jeu — comme tous ceux disponibles publiquement à ce jour —
-annote **l'emplacement** des zones d'étiquette, pas l'identité du vin. Les annotations
-producteur/cuvée sont donc propres à CavaVin ; pour étoffer le corpus, ajoutez vos propres photos
-au manifeste `backend/apps/catalog/evaluation_corpus/etiquettes.json`.
+Deux corpus de photos sont fournis :
+
+- **`etiquettes.json`** — 12 étiquettes issues du jeu [`LibreYOLO/wine-labels`](https://huggingface.co/datasets/LibreYOLO/wine-labels)
+  (Roboflow-100, CC BY 4.0), annotées à la main. Ce jeu — comme tous ceux publiquement disponibles à
+  ce jour — n'annote que **l'emplacement** des zones d'étiquette, jamais l'identité du vin : les
+  annotations producteur/cuvée sont donc propres à CavaVin.
+- **`openfoodfacts.json`** — régénérable à volonté, et à préférer pour une mesure sérieuse :
+
+```bash
+python manage.py corpus_openfoodfacts --nombre 300 --pays france
+python manage.py evaluer_reconnaissance --corpus apps/catalog/evaluation_corpus/openfoodfacts.json --sources lwin
+python manage.py evaluer_reconnaissance --corpus apps/catalog/evaluation_corpus/openfoodfacts.json --voie code-barres --sources lwin
+```
+
+Open Food Facts publie ses données en **ODbL** — l'extraction y est explicitement permise, à la
+différence des sites marchands dont les CGU l'interdisent (le projet s'interdit déjà le scraping,
+cf. les stubs Vivino et CellarTracker). Surtout, chaque produit porte son **code-barres** : la vérité
+terrain est donc non ambiguë et obtenue sans annotation manuelle, ce qui permet des centaines de cas
+au lieu de quelques dizaines, et l'évaluation des **deux** voies d'identification (`--voie image` et
+`--voie code-barres`).
+
+Deux limites à connaître avant de lire les chiffres :
+
+- **N'évaluez pas la source `openfoodfacts` sur ce corpus** : il en est issu, le score serait de
+  100 % par construction. La commande le refuse bruyamment. Le corpus sert d'arbitre indépendant
+  pour les *autres* sources.
+- Open Food Facts est **contributif**, donc parfois mal catégorisé — une confiture de clémentines y
+  porte réellement le tag `en:wines`. Le générateur écarte les familles incompatibles (confitures,
+  vinaigres, poissons…), mais quelques scories peuvent subsister : un écart peut venir du corpus
+  autant que du moteur.
+
+Le plus représentatif reste **vos propres photos de cave** (lumière, angle, reflets) : ajoutez-les au
+manifeste de votre choix, le format est le même.
 
 Un vin n'est identifié **qu'une fois** : les identités fortes d'un relevé (code-barres, référence
 externe, code LWIN) sont toutes confrontées au catalogue avant d'envisager une création, et celles

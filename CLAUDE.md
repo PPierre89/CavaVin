@@ -223,6 +223,15 @@ Judging is on **wine identity, not row identity** — the LWIN dump holds the sa
 codes, so matching a duplicate code is a success, not an error. Getting that wrong makes the error
 rate wildly pessimistic.
 
+`manage.py corpus_openfoodfacts` regenerates a photo corpus from Open Food Facts (ODbL — extraction
+is explicitly permitted there, unlike retailer sites whose ToS forbid it; the repo already refuses
+scraping, see the Vivino/CellarTracker stubs). Each product carries its **barcode**, so ground truth
+is unambiguous and needs no manual annotation, and both identification paths can be measured
+(`--voie image` / `--voie code-barres`). Two traps the code guards against, keep them guarded:
+**never evaluate the `openfoodfacts` source on an OFF-derived corpus** (100 % by construction — the
+command errors loudly), and OFF is crowd-sourced so **`en:wines` alone is not enough** — a
+clementine jam genuinely carries that tag, hence the incompatible-family exclusion list.
+
 ### Secrets & config
 Secrets come from `.env` (loaded via python-dotenv in `settings.py`); `.env` is gitignored. Never
 hardcode keys — `ANTHROPIC_API_KEY`, `WINEAPI_KEY`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`,
