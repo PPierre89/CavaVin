@@ -3266,3 +3266,138 @@ class RecadrageEtiquetteTests(SimpleTestCase):
             vignette, content_type = image_utils.recadrer_etiquette(tampon.getvalue())
         self.assertEqual(content_type, "image/jpeg")
         self.assertTrue(vignette)
+
+
+class DedupNomCuveeTests(TestCase):
+    """Le nom normalisé ferme la dernière porte aux doublons du catalogue."""
+
+    def _wine(self, nom, domaine="Ch. Test"):
+        # Ni code-barres ni référence externe : c'est exactement ce que produit
+        # une identification par LLM, donc le chemin qui retombe sur le nom.
+        return NormalizedWine(
+            domaine_nom=domaine, cuvee_nom=nom, couleur="ROUGE", source="claude"
+        )
+
+    def test_les_variantes_de_casse_et_d_espaces_convergent(self):
+        for nom in ("Grand Vin", "Grand vin", "GRAND VIN", " Grand  Vin ", "Grand-Vin"):
+            upsert_cuvee(self._wine(nom))
+        self.assertEqual(Cuvee.objects.count(), 1, "variantes non dédoublonnées")
+
+    def test_les_accents_convergent(self):
+        upsert_cuvee(self._wine("Château Margaux"))
+        _, created = upsert_cuvee(self._wine("Chateau Margaux"))
+        self.assertFalse(created)
+        self.assertEqual(Cuvee.objects.count(), 1)
+
+    def test_deux_vins_reellement_differents_restent_distincts(self):
+        upsert_cuvee(self._wine("Grand Vin"))
+        upsert_cuvee(self._wine("Second Vin"))
+        self.assertEqual(Cuvee.objects.count(), 2)
+
+    def test_meme_nom_chez_deux_producteurs_reste_distinct(self):
+        """La contrainte porte sur (domaine, nom) : « Grand Vin » existe partout."""
+        upsert_cuvee(self._wine("Grand Vin", domaine="Ch. A"))
+        upsert_cuvee(self._wine("Grand Vin", domaine="Ch. B"))
+        self.assertEqual(Cuvee.objects.count(), 2)
+
+    def test_la_contrainte_interdit_le_doublon_en_base(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        Cuvee.objects.create(domaine=domaine, nom="Grand Vin", couleur="ROUGE")
+        with self.assertRaises(IntegrityError):
+            Cuvee.objects.create(domaine=domaine, nom="grand vin", couleur="BLANC")
+
+    def test_le_nom_normalise_suit_le_nom(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="Château Test", couleur="ROUGE")
+        self.assertEqual(cuvee.nom_normalise, "chateau test")
+        cuvee.nom = "Clos du Roi"
+        cuvee.save()
+        self.assertEqual(cuvee.nom_normalise, "clos du roi")
+
+    def test_le_nom_normalise_suit_meme_avec_update_fields(self):
+        """update_fields=['nom'] ne doit pas laisser la forme canonique périmée :
+        un champ dérivé qui diverge rouvrirait la porte aux doublons."""
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="Avant", couleur="ROUGE")
+        cuvee.nom = "Après"
+        cuvee.save(update_fields=["nom"])
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.nom_normalise, "apres")
+
+    def test_api_refuse_de_creer_un_doublon(self):
+        """Le catalogue est partagé : le créer en double par l'API n'a pas de sens."""
+        user = User.objects.create_user("bob", password="x")
+        self.client.force_login(user)
+        domaine = Domaine.objects.create(nom="Dom")
+        payload = {"domaine": domaine.id, "nom": "Grand Vin", "couleur": "ROUGE"}
+        self.assertEqual(
+            self.client.post(reverse("cuvee-list"), payload).status_code,
+            status.HTTP_201_CREATED,
+        )
+        seconde = self.client.post(reverse("cuvee-list"), {**payload, "nom": "grand vin"})
+        self.assertEqual(seconde.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Cuvee.objects.count(), 1)
+
+
+class DedupNomMigrationTests(TransactionTestCase):
+    """Migration 0016 : fusion des doublons de nom avant pose de la contrainte.
+
+    On rembobine à l'état 0015 (où le doublon est encore possible), on fabrique
+    les cas que la migration doit résorber, puis on applique 0016 et on vérifie
+    qu'aucune donnée privée n'a été perdue au passage.
+    """
+
+    # `inventory` est épinglé dans les deux états : sans cela, l'état historique
+    # calculé pour catalog-0015 rembobinerait Bouteille avant la suppression de
+    # `statut`, alors que la table, elle, ne l'a plus.
+    migrate_from = [
+        ("catalog", "0015_cuvee_photo_etiquette"),
+        ("inventory", "0006_remove_bouteille_statut"),
+    ]
+    migrate_to = [
+        ("catalog", "0016_dedup_nom_cuvee"),
+        ("inventory", "0006_remove_bouteille_statut"),
+    ]
+
+    def test_fusionne_les_doublons_et_preserve_le_prive(self):
+        from django.db.migrations.executor import MigrationExecutor
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_from)
+        old_apps = executor.loader.project_state(self.migrate_from).apps
+        Domaine = old_apps.get_model("catalog", "Domaine")
+        Cuvee = old_apps.get_model("catalog", "Cuvee")
+        Bouteille = old_apps.get_model("inventory", "Bouteille")
+        NoteDegustation = old_apps.get_model("inventory", "NoteDegustation")
+        User = old_apps.get_model("auth", "User")
+
+        user = User.objects.create(username="alice")
+        domaine = Domaine.objects.create(nom="Ch. Test", region="")
+        # Trois variantes du même vin, comme un LLM peut les produire.
+        garde = Cuvee.objects.create(domaine=domaine, nom="Grand Vin", couleur="ROUGE")
+        doublon = Cuvee.objects.create(domaine=domaine, nom="grand vin", couleur="ROUGE",
+                                       code_barres="777", region="Bordeaux")
+        autre = Cuvee.objects.create(domaine=domaine, nom="Grand  Vin ", couleur="ROUGE")
+        # Données privées réparties sur les doublons : rien ne doit disparaître.
+        Bouteille.objects.create(proprietaire=user, cuvee=doublon, quantite=3)
+        Bouteille.objects.create(proprietaire=user, cuvee=autre, quantite=2)
+        NoteDegustation.objects.create(proprietaire=user, cuvee=doublon, note="4.0")
+
+        executor.loader.build_graph()
+        executor.migrate(self.migrate_to)
+        new_apps = executor.loader.project_state(self.migrate_to).apps
+        Cuvee = new_apps.get_model("catalog", "Cuvee")
+        Bouteille = new_apps.get_model("inventory", "Bouteille")
+        NoteDegustation = new_apps.get_model("inventory", "NoteDegustation")
+
+        self.assertEqual(Cuvee.objects.filter(domaine=domaine.pk).count(), 1)
+        survivante = Cuvee.objects.get(pk=garde.pk)  # la plus ancienne survit
+        self.assertEqual(survivante.nom_normalise, "grand vin")
+        # Ce que seuls les doublons portaient a été récupéré.
+        self.assertEqual(survivante.code_barres, "777")
+        self.assertEqual(survivante.region, "Bordeaux")
+        # Aucune donnée privée perdue.
+        self.assertEqual(
+            sum(Bouteille.objects.filter(cuvee=survivante).values_list("quantite", flat=True)), 5
+        )
+        self.assertEqual(NoteDegustation.objects.filter(cuvee=survivante).count(), 1)

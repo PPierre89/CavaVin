@@ -157,6 +157,35 @@ class BouteilleSerializer(serializers.ModelSerializer):
                 )
         return attrs
 
+    # Ce qui distingue deux lignes de stock. Deux ajouts identiques sur tous ces
+    # champs décrivent le même lot : les garder séparés donnerait « deux lignes
+    # de 1 » là où l'utilisateur attend « une ligne de 2 ». Dès qu'un seul diffère
+    # (autre emplacement, autre prix d'achat, autre date), ce sont bien deux lots
+    # distincts et on ne fusionne pas — le prix d'achat moyen de la fiche en
+    # dépend.
+    _CHAMPS_LOT = ("cuvee", "millesime", "emplacement", "prix_achat", "date_achat")
+
+    def create(self, validated_data):
+        """Ajoute une ligne de stock, ou renforce la ligne identique existante."""
+        proprietaire = validated_data.get("proprietaire")
+        # Une ligne annotée (notes, apogée saisie) est trop singulière pour être
+        # fondue dans une autre : on ne fusionne que les ajouts « nus ».
+        annotee = validated_data.get("notes") or validated_data.get("apogee_debut") \
+            or validated_data.get("apogee_fin")
+        if proprietaire is not None and not annotee:
+            criteres = {c: validated_data.get(c) for c in self._CHAMPS_LOT}
+            existante = (
+                Bouteille.objects.filter(proprietaire=proprietaire, notes="", **criteres)
+                .filter(apogee_debut__isnull=True, apogee_fin__isnull=True)
+                .order_by("pk")
+                .first()
+            )
+            if existante is not None:
+                existante.quantite += validated_data.get("quantite", 1)
+                existante.save(update_fields=["quantite", "maj_le"])
+                return existante
+        return super().create(validated_data)
+
     def update(self, instance, validated_data):
         ancien_emplacement = instance.emplacement_id
         instance = super().update(instance, validated_data)

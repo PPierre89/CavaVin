@@ -269,6 +269,15 @@ Fonction `consolidate(cuvee)` — pure autant que possible, déclenchée après 
    wineapi est 1:1 avec un vin. Sans identité forte au relevé, repli sur
    `(domaine, nom)`.
 
+   **Sans aucune identité forte**, le repli est `(domaine, nom_normalise)` — la
+   forme canonique du nom (minuscules, sans accents ni ponctuation), pas la chaîne
+   brute. C'est le cas de *toute* identification par LLM, qui ne fournit ni
+   code-barres ni référence distante : comme un modèle ne rend jamais deux fois la
+   même chaîne, comparer les noms bruts laissait « Grand Vin », « Grand vin » et
+   « Grand Vin » (espace final) créer trois cuvées du même vin. Ce repli porte
+   désormais lui aussi une contrainte d'unicité (partielle), si bien qu'aucune des
+   quatre clés n'est plus une simple convention.
+
    Deux corollaires : (a) les identités **manquantes** de la cuvée retrouvée sont
    complétées par celles du relevé (`_completer_identites`), de sorte qu'un vin
    d'abord identifié par son nom puis scanné finisse par porter son code-barres —
@@ -318,6 +327,16 @@ respecte les conventions (`makemigrations` commité, tests, commits conventionne
   violait la contrainte d'unicité de la référence externe — `IntegrityError`,
   soit un **500 sur le scan**. La résolution confronte désormais *toutes* les
   identités du relevé, avec une asymétrie assumée (cf. §5, règle 0).
+
+  *Second correctif — le nom comme identité contrainte.* Il restait une porte
+  ouverte : une cuvée sans identité forte retombait sur `(domaine, nom)`, clé
+  **sans contrainte** et comparée de façon exacte. Or c'est le cas de toute
+  identification par LLM. `Cuvee.nom_normalise` (forme canonique dérivée de `nom`)
+  porte désormais une contrainte d'unicité partielle avec `domaine`, et la
+  migration `0016_dedup_nom_cuvee` fusionne d'abord les doublons existants — en
+  re-pointant stock, notes et observations, et en reprenant du doublon ce qu'il
+  était seul à porter. Les quatre clés de déduplication sont maintenant toutes
+  contraintes : D3 est clos.
 
 - **Phase 1 — `SourceObservation` (feat). ✅ *Faite.***
   Table `SourceObservation` (append-only : `cuvee`, `canal`, `releve_le`,

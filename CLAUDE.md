@@ -179,6 +179,16 @@ the first key present is what made a barcode scan of an already-known wine blow 
 claimed by another cuvée is never taken — first claimant keeps it. See
 `docs/architecture-referentiel.md` §5.
 
+When a reading carries **no** strong identity — which is every LLM identification, since Claude
+returns neither a barcode nor an external reference — the fallback key is `(domaine, nom_normalise)`,
+**not** the raw name. `Cuvee.nom_normalise` is derived in `save()` (lowercase, no accents, no
+punctuation) and carries a partial unique constraint. An LLM never returns the same string twice, so
+comparing raw names let "Grand Vin", "Grand vin" and "Grand Vin " become three cuvées of the same
+wine in the *shared* catalog. Two consequences to preserve: the constraint sits on a derived field
+so DRF cannot infer a validator — `CuveeSerializer.validate` raises the 400 by hand, otherwise the
+API 500s on an IntegrityError; and any new duplicate-merging migration must **delete the duplicate
+before** copying its strong identities onto the survivor, or the unique constraint fires mid-merge.
+
 **Multi-source fusion.** Identification (`scan-code-barres`, `identifier-vin`, `scan-etiquette`) does
 **not** stop at the first hit: `views._cascade_multi` queries *every* enabled source and
 `ingest.upsert_multi` merges them — the first hit anchors the canonical cuvée, the rest are recorded as

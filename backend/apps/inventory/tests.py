@@ -449,3 +449,55 @@ class RangementTests(APITestCase):
         resp = self.client.patch(url, {"case": 1}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("case", resp.data)
+
+
+class FusionLignesStockTests(APITestCase):
+    """Ajouter deux fois le même lot renforce la ligne au lieu de la dupliquer."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="alice", password="x")
+        self.cuvee = _cuvee()
+        self.client.force_authenticate(self.user)
+        self.url = reverse("bouteille-list")
+
+    def test_deux_ajouts_identiques_font_une_ligne_de_deux(self):
+        for _ in range(2):
+            resp = self.client.post(self.url, {"cuvee": self.cuvee.id, "millesime": 2020})
+            self.assertIn(resp.status_code, (status.HTTP_200_OK, status.HTTP_201_CREATED))
+        lignes = Bouteille.objects.filter(cuvee=self.cuvee)
+        self.assertEqual(lignes.count(), 1)
+        self.assertEqual(lignes.first().quantite, 2)
+
+    def test_les_quantites_s_additionnent(self):
+        self.client.post(self.url, {"cuvee": self.cuvee.id, "millesime": 2020, "quantite": 3})
+        self.client.post(self.url, {"cuvee": self.cuvee.id, "millesime": 2020, "quantite": 2})
+        self.assertEqual(Bouteille.objects.get(cuvee=self.cuvee).quantite, 5)
+
+    def test_un_prix_different_reste_une_ligne_distincte(self):
+        """Le prix d'achat moyen de la fiche est pondéré : fondre deux achats à
+        des prix différents fausserait le calcul."""
+        self.client.post(self.url, {"cuvee": self.cuvee.id, "millesime": 2020, "prix_achat": "20.00"})
+        self.client.post(self.url, {"cuvee": self.cuvee.id, "millesime": 2020, "prix_achat": "35.00"})
+        self.assertEqual(Bouteille.objects.filter(cuvee=self.cuvee).count(), 2)
+
+    def test_un_millesime_different_reste_distinct(self):
+        self.client.post(self.url, {"cuvee": self.cuvee.id, "millesime": 2019})
+        self.client.post(self.url, {"cuvee": self.cuvee.id, "millesime": 2020})
+        self.assertEqual(Bouteille.objects.filter(cuvee=self.cuvee).count(), 2)
+
+    def test_une_ligne_annotee_n_est_pas_absorbee(self):
+        """Une ligne portant des notes ou une apogée saisie est trop singulière
+        pour être fondue dans une autre."""
+        self.client.post(self.url, {"cuvee": self.cuvee.id, "millesime": 2020})
+        self.client.post(self.url, {"cuvee": self.cuvee.id, "millesime": 2020,
+                                    "notes": "cadeau de Paul"})
+        self.assertEqual(Bouteille.objects.filter(cuvee=self.cuvee).count(), 2)
+
+    def test_le_stock_d_un_autre_utilisateur_n_est_jamais_touche(self):
+        autre = User.objects.create_user(username="bob", password="x")
+        sienne = Bouteille.objects.create(proprietaire=autre, cuvee=self.cuvee,
+                                          millesime=2020, quantite=1)
+        self.client.post(self.url, {"cuvee": self.cuvee.id, "millesime": 2020})
+        sienne.refresh_from_db()
+        self.assertEqual(sienne.quantite, 1)
+        self.assertEqual(Bouteille.objects.filter(proprietaire=self.user).count(), 1)
