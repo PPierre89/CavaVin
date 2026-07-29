@@ -1,5 +1,7 @@
+from django.urls import reverse
 from rest_framework import serializers
 
+from .enrichment.normalize import normaliser_nom
 from .models import Cepage, Cuvee, Domaine
 
 
@@ -68,6 +70,45 @@ class CuveeSerializer(serializers.ModelSerializer):
     cepages_noms = serializers.SlugRelatedField(
         source="cepages", slug_field="nom", many=True, read_only=True
     )
+    photo_etiquette_url = serializers.SerializerMethodField()
+
+    def validate(self, attrs):
+        """Refuse un doublon de cuvée chez un même producteur.
+
+        La contrainte d'unicité porte sur `nom_normalise`, champ dérivé absent du
+        sérialiseur : DRF ne peut donc pas en déduire de validateur, et l'insertion
+        remontait en IntegrityError — soit un 500 là où l'appelant mérite un 400
+        qui lui dit quoi corriger.
+        """
+        domaine = attrs.get("domaine") or getattr(self.instance, "domaine", None)
+        nom = attrs.get("nom", getattr(self.instance, "nom", ""))
+        normalise = normaliser_nom(nom)
+        if not (domaine and normalise):
+            return attrs
+        doublons = Cuvee.objects.filter(domaine=domaine, nom_normalise=normalise)
+        if self.instance is not None:
+            doublons = doublons.exclude(pk=self.instance.pk)
+        existante = doublons.first()
+        if existante is not None:
+            raise serializers.ValidationError({
+                "nom": (
+                    f"« {existante.nom} » existe déjà chez ce producteur "
+                    f"(cuvée #{existante.id}). Le catalogue est partagé : "
+                    "complète la fiche existante plutôt que d'en créer une seconde."
+                )
+            })
+        return attrs
+
+    def get_photo_etiquette_url(self, obj) -> str | None:
+        """URL de la vignette d'étiquette, ou None si la cuvée n'en a pas.
+
+        On expose l'action de l'API plutôt que le chemin du fichier : le stockage
+        reste interne et le client n'a jamais à connaître MEDIA_URL."""
+        if not obj.photo_etiquette:
+            return None
+        chemin = reverse("cuvee-photo", args=[obj.pk])
+        requete = self.context.get("request")
+        return requete.build_absolute_uri(chemin) if requete else chemin
 
     class Meta:
         model = Cuvee
@@ -92,6 +133,7 @@ class CuveeSerializer(serializers.ModelSerializer):
             "acidite",
             "degre_alcool",
             "image_url",
+            "photo_etiquette_url",
             "lwin_code",
             "note_moyenne",
             "nb_notes",

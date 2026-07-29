@@ -80,3 +80,84 @@ def reduire(data: bytes, content_type: str = "") -> tuple[bytes, str]:
     except Exception as exc:  # Pillow absent, image corrompue, format exotique…
         logger.warning("réduction d'image impossible (%s), original conservé", exc)
         return data, content_type
+
+
+# Grand côté de la vignette d'étiquette conservée au catalogue : assez pour
+# relire le nom du vin à l'écran, assez petit pour que quelques milliers de
+# cuvées ne pèsent pas sur le volume d'un NAS (~50 à 100 Ko par photo).
+TAILLE_VIGNETTE = 800
+# Marge laissée autour de la zone de texte détectée (part de chaque dimension) :
+# une étiquette rognée au ras des lettres est laide et perd son cadre.
+_MARGE = 0.06
+# Budget du repérage : une seule passe, courte. On est dans le temps de réponse
+# d'un scan, et l'enjeu n'est qu'esthétique — un repli sur la photo entière est
+# parfaitement acceptable.
+_TIMEOUT_REPERAGE = 6
+
+
+def recadrer_etiquette(data: bytes) -> tuple[bytes, str]:
+    """Vignette de l'étiquette, recadrée sur le texte -> ``(octets, content_type)``.
+
+    Réutilise le repérage de zone de texte déjà écrit pour l'OCR
+    (``enrichment.lwin._zone_texte``) : les boîtes de mots de Tesseract
+    délimitent l'étiquette dans la photo, ce qui évite de conserver au catalogue
+    une bouteille perdue dans une cuisine. Le recadrage retire d'ailleurs
+    l'essentiel de ce qui entoure la bouteille — utile puisque cette vignette est
+    attachée au catalogue *mutualisé*, donc visible par les autres utilisateurs.
+
+    Best-effort de bout en bout : sans Tesseract, sans Pillow, ou si le repérage
+    ne trouve rien, on renvoie la photo simplement redimensionnée. Un scan ne doit
+    jamais échouer pour une question de vignette.
+    """
+    reduite, _ = reduire(data)
+    zone = _zone_etiquette(reduite)
+    try:
+        from PIL import Image, ImageOps
+
+        image = ImageOps.exif_transpose(Image.open(BytesIO(reduite))).convert("RGB")
+        if zone:
+            gauche, haut, droite, bas = zone
+            marge_l = round(image.width * _MARGE)
+            marge_h = round(image.height * _MARGE)
+            image = image.crop((
+                max(0, gauche - marge_l),
+                max(0, haut - marge_h),
+                min(image.width, droite + marge_l),
+                min(image.height, bas + marge_h),
+            ))
+        grand_cote = max(image.size)
+        if grand_cote > TAILLE_VIGNETTE:
+            facteur = TAILLE_VIGNETTE / grand_cote
+            image = image.resize(
+                (max(1, round(image.width * facteur)), max(1, round(image.height * facteur))),
+                Image.LANCZOS,
+            )
+        tampon = BytesIO()
+        image.save(tampon, "JPEG", quality=QUALITE_JPEG, optimize=True)
+        return tampon.getvalue(), "image/jpeg"
+    except Exception as exc:
+        logger.warning("recadrage d'étiquette impossible (%s)", exc)
+        return reduite, "image/jpeg"
+
+
+def _zone_etiquette(image: bytes) -> tuple[int, int, int, int] | None:
+    """Boîte du texte dans l'image, via une passe Tesseract courte. None si rien."""
+    import subprocess
+
+    from django.conf import settings
+
+    from .lwin import _zone_texte
+
+    try:
+        resultat = subprocess.run(
+            [settings.TESSERACT_CMD, "stdin", "stdout", "--dpi", "300", "--psm", "3", "tsv"],
+            input=image,
+            capture_output=True,
+            timeout=_TIMEOUT_REPERAGE,
+        )
+        if resultat.returncode != 0:
+            return None
+        return _zone_texte([resultat.stdout.decode("utf-8", "ignore")])
+    except Exception:
+        # Binaire absent, délai dépassé… : la photo entière fera l'affaire.
+        return None

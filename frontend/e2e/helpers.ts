@@ -69,6 +69,7 @@ const FICHE = {
     elaborate: '',
     degre_alcool: 13.5,
     image_url: '',
+    photo_etiquette_url: null,
   },
   conseil_degustation: { temperature: '16-18', carafage: '1h-2h' },
   profil_gustatif: [{ gauche: 'Léger', droite: 'Puissant', valeur: 0.8 }],

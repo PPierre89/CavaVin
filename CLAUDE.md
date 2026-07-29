@@ -179,6 +179,16 @@ the first key present is what made a barcode scan of an already-known wine blow 
 claimed by another cuvée is never taken — first claimant keeps it. See
 `docs/architecture-referentiel.md` §5.
 
+When a reading carries **no** strong identity — which is every LLM identification, since Claude
+returns neither a barcode nor an external reference — the fallback key is `(domaine, nom_normalise)`,
+**not** the raw name. `Cuvee.nom_normalise` is derived in `save()` (lowercase, no accents, no
+punctuation) and carries a partial unique constraint. An LLM never returns the same string twice, so
+comparing raw names let "Grand Vin", "Grand vin" and "Grand Vin " become three cuvées of the same
+wine in the *shared* catalog. Two consequences to preserve: the constraint sits on a derived field
+so DRF cannot infer a validator — `CuveeSerializer.validate` raises the 400 by hand, otherwise the
+API 500s on an IntegrityError; and any new duplicate-merging migration must **delete the duplicate
+before** copying its strong identities onto the survivor, or the unique constraint fires mid-merge.
+
 **Multi-source fusion.** Identification (`scan-code-barres`, `identifier-vin`, `scan-etiquette`) does
 **not** stop at the first hit: `views._cascade_multi` queries *every* enabled source and
 `ingest.upsert_multi` merges them — the first hit anchors the canonical cuvée, the rest are recorded as
@@ -191,6 +201,17 @@ rather than the sum. Two invariants the tests pin down: `hits` stays in **cascad
 completion order (the first anchors identity), and the surfaced `EnrichmentError` is the first in that
 same order, so it is deterministic. Worker threads must `connection.close()` — Django only reaps the
 connection of the request thread — and only there: never in the request thread itself.
+
+**Label thumbnail on the shared catalog.** A successful `scan-etiquette` stores the photo on
+`Cuvee.photo_etiquette`, cropped to the label via `enrichment.image.recadrer_etiquette` (one short
+tesseract pass reusing `lwin._zone_texte`). Three rules hold it together: it only fills when
+**empty** (the catalog is mutualised — a later, blurrier scan must not overwrite everyone's good
+photo), any failure is swallowed (a thumbnail is a bonus, never a reason to fail an identification),
+and the crop is not merely cosmetic — it strips the kitchen/hands around the bottle before the image
+becomes visible to every user. Served by `CuveeViewSet.photo` **by cuvée id, never by path**, so
+directory traversal is impossible by construction and `MEDIA_ROOT` need not be published. Files live
+next to the SQLite file (same `data/` volume), so the documented "backup = copy the folder" still
+holds.
 
 **Label payload.** `enrichment.image.reduire` shrinks the photo **once** before the cascade (longest
 side 1568 px, the point past which vision APIs downscale anyway); every remote source shares that
@@ -205,6 +226,32 @@ prerequisites (key present…) with a runtime toggle `source_activee(name, defau
 is reached (`Parametre QUOTA_<SOURCE>`; default 250 for GrapeMinds, unlimited otherwise; `0` = unlimited).
 Counting/enforcement is best-effort — it never breaks an identification. The staff panel drives all this
 via `GET/PUT /api/admin-panel/sources/` (on/off + cap + usage), alongside the existing API-key overrides.
+
+### Measuring recognition quality — use it before touching OCR/matching thresholds
+`manage.py evaluer_reconnaissance` (logic in `catalog/evaluation.py`) is how a change to the OCR
+pipeline or the LWIN fuzzy matching is *justified* rather than guessed. Two corpora: a manifest of
+annotated real label photos (`catalog/evaluation_corpus/etiquettes.json`, images fetched on demand,
+gitignored) and a synthetic tier deriving thousands of OCR-noised queries from the imported LWIN
+referential (seeded, so reproducible).
+
+It reports three outcomes, and **the split is the point**: `trouve` / `silence` (no match — the user
+types it manually, annoying but harmless) / `erreur` (a *different* wine — the costly one: it
+contradicts the provider's precision-first stance and pollutes the shared catalog). A single
+"success rate" hides the trade that matters, so never collapse them. When tuning `_TOKEN_RATIO`,
+`_OCR_CONF_*` or the candidate selection, quote before/after numbers from this command.
+
+Judging is on **wine identity, not row identity** — the LWIN dump holds the same wine under several
+codes, so matching a duplicate code is a success, not an error. Getting that wrong makes the error
+rate wildly pessimistic.
+
+`manage.py corpus_openfoodfacts` regenerates a photo corpus from Open Food Facts (ODbL — extraction
+is explicitly permitted there, unlike retailer sites whose ToS forbid it; the repo already refuses
+scraping, see the Vivino/CellarTracker stubs). Each product carries its **barcode**, so ground truth
+is unambiguous and needs no manual annotation, and both identification paths can be measured
+(`--voie image` / `--voie code-barres`). Two traps the code guards against, keep them guarded:
+**never evaluate the `openfoodfacts` source on an OFF-derived corpus** (100 % by construction — the
+command errors loudly), and OFF is crowd-sourced so **`en:wines` alone is not enough** — a
+clementine jam genuinely carries that tag, hence the incompatible-family exclusion list.
 
 ### Secrets & config
 Secrets come from `.env` (loaded via python-dotenv in `settings.py`); `.env` is gitignored. Never

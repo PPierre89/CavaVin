@@ -18,6 +18,9 @@ un **conteneur Docker unique** (Django REST + SPA React, SQLite).
   wineapi.io → **OCR local + référentiel LWIN** (repli 100 % gratuit), avec mise en cache.
 - **Fiche vin enrichie** : appellation, cépages, conseil de service (température, carafage),
   profil gustatif, accords mets-vins, prix marché et **historique de prix**.
+- **Photo d'étiquette conservée** : la photo prise au scan est recadrée sur l'étiquette et
+  attachée au catalogue mutualisé — un vin devient reconnaissable d'un coup d'œil à la saisie
+  suivante, y compris pour les petits domaines dont aucun visuel marchand n'existe.
 - **Fenêtre de dégustation** calculée (à garder / à boire / dépassé) qui pilote un code couleur ;
   estimation affinée par le **cépage** (aptitude à la garde) et la **qualité du millésime** (repères
   régionaux), la saisie manuelle restant prioritaire.
@@ -91,6 +94,7 @@ carnet) strictement filtrées par propriétaire côté serveur.
 | `POST /api/scan-etiquette/` · `scan-code-barres/` · `identifier-vin/` | Identification (photo / EAN / texte) |
 | `GET /api/recherche-vins/?q=` | Recherche dynamique (autocomplétion) dans le référentiel LWIN |
 | `GET /api/cuvees/{id}/fiche/` | Fiche vin consolidée (référentiel + conseil + enrichissement) |
+| `GET /api/cuvees/{id}/photo/` | Vignette d'étiquette du catalogue (lecture publique, servie par id) |
 | `POST /api/cuvees/{id}/rafraichir/` | Re-synchro wineapi (cooldown anti-quota) |
 | `GET /api/bouteilles/` | Stock privé — chaque ligne porte les attributs de sa cuvée (couleur, appellation, région, valeur marché) et sa fenêtre d'apogée calculée |
 | `POST /api/bouteilles/{id}/consommer/` | Sortie de stock atomique + journal |
@@ -153,6 +157,73 @@ la zone de texte en pleine résolution, ce qui rattrape une étiquette lointaine
 
 Tout hit est **mis en cache en base** ; les endpoints d'identification sont protégés par un
 throttle et la re-synchro par un cooldown par vin. Détail complet dans Swagger.
+
+### Mesurer la qualité de reconnaissance
+
+Régler un seuil d'OCR ou de correspondance à l'aveugle, c'est risquer de dégrader la
+reconnaissance en croyant l'améliorer. La commande `evaluer_reconnaissance` chiffre l'effet d'un
+changement, en distinguant les trois issues possibles — la distinction est le cœur de la mesure :
+
+- **reconnu** — le bon vin est identifié ;
+- **silence** — aucune correspondance : l'utilisateur saisit à la main, c'est ennuyeux mais sans
+  conséquence ;
+- **erreur** — un *autre* vin est renvoyé. C'est l'issue coûteuse : elle contredit le parti pris
+  « précision d'abord » et pollue le catalogue mutualisé, partagé par tous. Un réglage qui
+  transforme du silence en reconnaissance est bon ; le même réglage qui transforme du silence en
+  erreur est mauvais — et un simple « taux de réussite » confond les deux.
+
+```bash
+# Photos d'étiquettes réelles annotées (corpus livré avec le projet, images
+# téléchargées à la demande) — mesure la chaîne complète, OCR compris.
+python manage.py evaluer_reconnaissance --details
+
+# Milliers de requêtes dérivées du référentiel LWIN avec un bruit d'OCR simulé
+# (confusions de caractères, tokens perdus, mobilier d'étiquette). Reproductible
+# via sa graine, sans photo ni clé d'API.
+python manage.py evaluer_reconnaissance --synthetique 2000 --intensite 0.3
+
+# Balayage du bruit : la courbe montre où la correspondance décroche.
+for i in 0 0.3 0.6; do python manage.py evaluer_reconnaissance --synthetique 500 --intensite $i; done
+```
+
+Par défaut seule la source `lwin` est évaluée (gratuite et hors-ligne) ; `--sources toutes`
+consomme les quotas des API. Le tiers synthétique exige le **dump LWIN importé** — sans lui, la
+correspondance n'a rien contre quoi jouer et la commande le signale plutôt que d'afficher un 0 %
+trompeur.
+
+Deux corpus de photos sont fournis :
+
+- **`etiquettes.json`** — 12 étiquettes issues du jeu [`LibreYOLO/wine-labels`](https://huggingface.co/datasets/LibreYOLO/wine-labels)
+  (Roboflow-100, CC BY 4.0), annotées à la main. Ce jeu — comme tous ceux publiquement disponibles à
+  ce jour — n'annote que **l'emplacement** des zones d'étiquette, jamais l'identité du vin : les
+  annotations producteur/cuvée sont donc propres à CavaVin.
+- **`openfoodfacts.json`** — régénérable à volonté, et à préférer pour une mesure sérieuse :
+
+```bash
+python manage.py corpus_openfoodfacts --nombre 300 --pays france
+python manage.py evaluer_reconnaissance --corpus apps/catalog/evaluation_corpus/openfoodfacts.json --sources lwin
+python manage.py evaluer_reconnaissance --corpus apps/catalog/evaluation_corpus/openfoodfacts.json --voie code-barres --sources lwin
+```
+
+Open Food Facts publie ses données en **ODbL** — l'extraction y est explicitement permise, à la
+différence des sites marchands dont les CGU l'interdisent (le projet s'interdit déjà le scraping,
+cf. les stubs Vivino et CellarTracker). Surtout, chaque produit porte son **code-barres** : la vérité
+terrain est donc non ambiguë et obtenue sans annotation manuelle, ce qui permet des centaines de cas
+au lieu de quelques dizaines, et l'évaluation des **deux** voies d'identification (`--voie image` et
+`--voie code-barres`).
+
+Deux limites à connaître avant de lire les chiffres :
+
+- **N'évaluez pas la source `openfoodfacts` sur ce corpus** : il en est issu, le score serait de
+  100 % par construction. La commande le refuse bruyamment. Le corpus sert d'arbitre indépendant
+  pour les *autres* sources.
+- Open Food Facts est **contributif**, donc parfois mal catégorisé — une confiture de clémentines y
+  porte réellement le tag `en:wines`. Le générateur écarte les familles incompatibles (confitures,
+  vinaigres, poissons…), mais quelques scories peuvent subsister : un écart peut venir du corpus
+  autant que du moteur.
+
+Le plus représentatif reste **vos propres photos de cave** (lumière, angle, reflets) : ajoutez-les au
+manifeste de votre choix, le format est le même.
 
 Un vin n'est identifié **qu'une fois** : les identités fortes d'un relevé (code-barres, référence
 externe, code LWIN) sont toutes confrontées au catalogue avant d'envisager une création, et celles

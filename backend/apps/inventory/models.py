@@ -14,6 +14,10 @@ class Bouteille(models.Model):
     """
 
     class Statut(models.TextChoices):
+        """Statut de dégustation — **calculé** à la lecture (cf. ``statut_apogee``),
+        jamais stocké : la fenêtre d'apogée dépend de l'année courante, une colonne
+        serait périmée dès le 1er janvier suivant."""
+
         A_GARDER = "A_GARDER", "À garder"
         A_BOIRE = "A_BOIRE", "À boire"
         DEPASSE = "DEPASSE", "Dépassé"
@@ -42,7 +46,6 @@ class Bouteille(models.Model):
         help_text="Laisser vide si le placement physique n'a pas encore été fait.",
     )
     quantite = models.PositiveIntegerField(default=1)
-    statut = models.CharField(max_length=10, choices=Statut.choices, default=Statut.A_GARDER)
 
     prix_achat = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     date_achat = models.DateField(null=True, blank=True)

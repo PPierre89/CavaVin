@@ -40,6 +40,7 @@ export interface Cuvee {
   pays?: string
   classification?: string
   image_url?: string
+  photo_etiquette_url?: string | null
   lwin_code?: string
   prix_min?: string | null
   prix_max?: string | null
@@ -142,6 +143,8 @@ export interface FicheCuvee {
     elaborate: string
     degre_alcool: number | null
     image_url: string
+    /** Vignette d'étiquette issue d'un scan (catalogue partagé), ou null. */
+    photo_etiquette_url: string | null
   }
   conseil_degustation: { temperature: string; carafage: string }
   profil_gustatif: AxeGustatif[]

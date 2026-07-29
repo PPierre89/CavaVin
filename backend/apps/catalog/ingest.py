@@ -6,6 +6,7 @@ from django.utils import timezone
 from . import wine_profile
 from .consolidation import consolider
 from .enrichment import NormalizedWine
+from .enrichment.normalize import normaliser_nom
 from .models import Cepage, Cuvee, Domaine, SourceObservation
 
 # Champs de la cuvée alimentés par l'enrichissement wineapi (hors cépages M2M).
@@ -275,7 +276,15 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
         if cuvee is not None or champ != "code_barres":
             break  # seul un code-barres inconnu autorise à essayer la clé suivante.
     if cuvee is None and not identites:
-        cuvee = Cuvee.objects.filter(domaine=domaine, nom=wine.cuvee_nom).order_by("pk").first()
+        # Repli sur la forme *normalisée* du nom : une comparaison brute laissait
+        # « Grand Vin » et « Grand vin » cohabiter (cf. Cuvee.nom_normalise).
+        cuvee = (
+            Cuvee.objects.filter(
+                domaine=domaine, nom_normalise=normaliser_nom(wine.cuvee_nom)
+            )
+            .order_by("pk")
+            .first()
+        )
 
     created = cuvee is None
     if created:

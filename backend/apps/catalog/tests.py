@@ -12,6 +12,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import IntegrityError, connection
 from django.test import (
     SimpleTestCase,
@@ -24,7 +25,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from . import views
+from . import evaluation, views
 from .enrichment import EnrichmentError, NormalizedWine
 from .enrichment import image as image_utils
 from .enrichment import normalize
@@ -2953,3 +2954,450 @@ class SuppressionProtegeeTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
         self.assertTrue(Domaine.objects.filter(pk=self.domaine.pk).exists())
         self.assertTrue(Cuvee.objects.filter(pk=self.cuvee.pk).exists())
+
+
+class EvaluationReconnaissanceTests(TestCase):
+    """Le harnais de mesure : c'est lui qui rend un réglage d'OCR défendable."""
+
+    @staticmethod
+    def _wine(domaine, cuvee, lwin=""):
+        return NormalizedWine(
+            domaine_nom=domaine, cuvee_nom=cuvee, source="lwin",
+            raw={"wineapi_detail": {"lwinCode": lwin}} if lwin else {},
+        )
+
+    def test_aucun_relevé_vaut_silence(self):
+        cas = evaluation.Cas(identifiant="x", producteur="Ridge", vin="Geyserville")
+        self.assertEqual(evaluation.juger(cas, None).issue, "silence")
+
+    def test_code_lwin_identique_vaut_trouve(self):
+        cas = evaluation.Cas(identifiant="x", lwin="1234567", producteur="Ridge", vin="G")
+        resultat = evaluation.juger(cas, self._wine("Ridge", "Geyserville", lwin="1234567"))
+        self.assertEqual(resultat.issue, "trouve")
+
+    def test_doublon_du_referentiel_n_est_pas_une_erreur(self):
+        """Le dump LWIN porte le même vin sous plusieurs codes : tomber sur un
+        autre code du MÊME vin est une identification réussie, pas une erreur.
+        Juger sur le seul code rendrait le taux d'erreur absurdement pessimiste."""
+        cas = evaluation.Cas(identifiant="x", lwin="1111111", producteur="Ridge", vin="Geyserville")
+        resultat = evaluation.juger(cas, self._wine("Ridge", "Geyserville", lwin="2222222"))
+        self.assertEqual(resultat.issue, "trouve")
+
+    def test_autre_vin_vaut_erreur(self):
+        cas = evaluation.Cas(identifiant="x", producteur="Ridge", vin="Geyserville")
+        resultat = evaluation.juger(cas, self._wine("Ravenswood", "Old Hill"))
+        self.assertEqual(resultat.issue, "erreur")
+
+    def test_un_producteur_proche_ne_valide_pas(self):
+        """« Ridge » attendu ne doit pas être validé par « Ridgeview » : la
+        comparaison porte sur des tokens entiers, pas sur des sous-chaînes."""
+        cas = evaluation.Cas(identifiant="x", producteur="Ridge", vin="Geyserville")
+        self.assertEqual(evaluation.juger(cas, self._wine("Ridgeview", "Estate")).issue, "erreur")
+
+    def test_les_taux_du_bilan(self):
+        cas = evaluation.Cas(identifiant="x")
+        bilan = evaluation.Bilan(resultats=[
+            evaluation.Resultat(cas=cas, issue="trouve"),
+            evaluation.Resultat(cas=cas, issue="trouve"),
+            evaluation.Resultat(cas=cas, issue="silence"),
+            evaluation.Resultat(cas=cas, issue="erreur"),
+        ])
+        self.assertEqual(bilan.total, 4)
+        self.assertEqual(bilan.taux_reconnaissance, 50.0)
+        self.assertEqual(bilan.taux_silence, 25.0)
+        self.assertEqual(bilan.taux_erreur, 25.0)
+
+    def test_bilan_vide_ne_divise_pas_par_zero(self):
+        self.assertEqual(evaluation.Bilan().taux_reconnaissance, 0.0)
+
+    def test_generation_synthetique_reproductible(self):
+        ReferenceLwin.objects.create(lwin="1", producteur="Château Margaux", vin="Grand Vin")
+        ReferenceLwin.objects.create(lwin="2", producteur="Domaine Leflaive", vin="Puligny")
+        refs = list(ReferenceLwin.objects.all())
+        a = evaluation.generer_cas_synthetiques(refs, 20, graine=7)
+        b = evaluation.generer_cas_synthetiques(refs, 20, graine=7)
+        self.assertEqual([c.texte for c in a], [c.texte for c in b])  # même graine
+        c = evaluation.generer_cas_synthetiques(refs, 20, graine=8)
+        self.assertNotEqual([x.texte for x in a], [x.texte for x in c])
+
+    def test_sans_bruit_le_texte_genere_reste_fidele(self):
+        ReferenceLwin.objects.create(lwin="1", producteur="Château Margaux", vin="Grand Vin")
+        refs = list(ReferenceLwin.objects.all())
+        cas = evaluation.generer_cas_synthetiques(refs, 5, graine=1, intensite=0.0)
+        for c in cas:
+            self.assertEqual(c.texte, "Château Margaux Grand Vin")
+            self.assertEqual(c.lwin, "1")
+
+    def test_referentiel_vide_ne_genere_rien(self):
+        self.assertEqual(evaluation.generer_cas_synthetiques([], 10), [])
+
+    def test_le_corpus_livre_est_lisible_et_annote(self):
+        from apps.catalog.management.commands.evaluer_reconnaissance import CORPUS_DEFAUT
+
+        cas, meta = evaluation.charger_corpus(CORPUS_DEFAUT)
+        self.assertGreaterEqual(len(cas), 10)
+        self.assertTrue(meta["licence"])       # licence du jeu amont documentée
+        self.assertTrue(meta["attribution"])   # CC BY 4.0 => attribution obligatoire
+        for c in cas:
+            self.assertTrue(c.producteur, f"cas {c.identifiant} sans producteur attendu")
+
+
+class EvaluerReconnaissanceCommandeTests(TestCase):
+    """La commande : orchestration, sans réseau ni image."""
+
+    def setUp(self):
+        for i in range(30):
+            ReferenceLwin.objects.create(
+                lwin=str(2000000 + i), producteur=f"Producteur {i}", vin=f"Cuvée {i}"
+            )
+
+    def _lancer(self, **kwargs):
+        sortie, erreurs = StringIO(), StringIO()
+        call_command("evaluer_reconnaissance", stdout=sortie, stderr=erreurs, **kwargs)
+        return sortie.getvalue(), erreurs.getvalue()
+
+    def test_mode_synthetique_seul(self):
+        sortie, _ = self._lancer(synthetique=15, sources="lwin")
+        self.assertIn("Synthétique", sortie)
+        self.assertIn("15 cas", sortie)
+        self.assertNotIn("Photos réelles", sortie)  # pas de corpus demandé
+
+    def test_source_inconnue_est_refusee(self):
+        with self.assertRaises(CommandError):
+            self._lancer(synthetique=1, sources="nexistepas")
+
+    def test_referentiel_vide_est_signale_et_n_echoue_pas(self):
+        ReferenceLwin.objects.all().delete()
+        _, erreurs = self._lancer(synthetique=5, sources="lwin")
+        self.assertIn("Référentiel LWIN vide", erreurs)
+
+    def test_corpus_introuvable_leve_une_erreur_explicite(self):
+        with self.assertRaises(CommandError):
+            self._lancer(corpus="/tmp/corpus-qui-nexiste-pas.json", sources="lwin")
+
+    def test_le_bruit_maximal_ne_plante_pas(self):
+        """Garde-fou : la génération doit tenir sur des entrées très dégradées."""
+        sortie, _ = self._lancer(synthetique=10, intensite=1.0, sources="lwin")
+        self.assertIn("10 cas", sortie)
+
+
+class CorpusOpenFoodFactsTests(SimpleTestCase):
+    """Filtrage du corpus : c'est lui qui décide de la qualité de la mesure."""
+
+    def setUp(self):
+        from apps.catalog.management.commands.corpus_openfoodfacts import Command
+
+        self.commande = Command()
+        self.vus = set()
+
+    def _produit(self, **surcharges):
+        base = {
+            "code": "3211203433220",
+            "brands": "Baron de Lestac",
+            "product_name": "Bordeaux 2013",
+            "image_front_url": "https://images.openfoodfacts.org/x.jpg",
+            "categories_tags": ["en:alcoholic-beverages", "en:wines", "en:red-wines"],
+        }
+        base.update(surcharges)
+        return base
+
+    def test_un_vin_complet_est_retenu(self):
+        entree = self.commande._retenir(self._produit(), self.vus)
+        self.assertIsNotNone(entree)
+        self.assertEqual(entree["code_barres"], "3211203433220")
+        self.assertEqual(entree["producteur"], "Baron de Lestac")
+
+    def test_produit_sans_le_tag_vin_est_ecarte(self):
+        """Le paramètre de recherche d'OFF fait une correspondance textuelle et
+        ramène des produits sans rapport : on revalide le tag sur la fiche."""
+        produit = self._produit(categories_tags=["en:jams", "en:marmalades"])
+        self.assertIsNone(self.commande._retenir(produit, self.vus))
+
+    def test_produit_mal_categorise_est_ecarte(self):
+        """Cas réel : une confiture de clémentines porte `en:wines` dans OFF, à
+        côté de `en:jams`. Exiger le tag ne suffit pas, il faut refuser les
+        familles qui le contredisent — sinon le corpus contient des cas
+        ingagnables qui font passer le moteur pour mauvais."""
+        produit = self._produit(
+            product_name="Confiture clémentines et oranges de Corse",
+            categories_tags=["en:wines", "en:wines-from-france", "en:jams", "en:marmalades"],
+        )
+        self.assertIsNone(self.commande._retenir(produit, self.vus))
+
+    def test_vinaigre_de_vin_est_ecarte(self):
+        produit = self._produit(
+            product_name="Vinaigre de vin blanc",
+            categories_tags=["en:wines", "en:vinegars", "en:wine-vinegars"],
+        )
+        self.assertIsNone(self.commande._retenir(produit, self.vus))
+
+    def test_fiche_incomplete_est_ecartee(self):
+        for manquant in ("code", "brands", "product_name", "image_front_url"):
+            self.assertIsNone(
+                self.commande._retenir(self._produit(**{manquant: ""}), self.vus),
+                f"une fiche sans {manquant} ne devrait pas être retenue",
+            )
+
+    def test_marque_ou_nom_non_discriminant_est_ecarte(self):
+        self.assertIsNone(self.commande._retenir(self._produit(brands="Bio"), self.vus))
+        self.assertIsNone(self.commande._retenir(self._produit(brands="AB"), self.vus))
+        self.assertIsNone(self.commande._retenir(self._produit(product_name="75 cl"), self.vus))
+        self.assertIsNone(self.commande._retenir(self._produit(product_name="Rouge"), self.vus))
+
+    def test_doublon_de_code_barres_est_ecarte(self):
+        self.assertIsNotNone(self.commande._retenir(self._produit(), self.vus))
+        self.assertIsNone(self.commande._retenir(self._produit(), self.vus))
+
+
+# Les tests écrivent de vraies vignettes : on les isole dans un dossier
+# temporaire plutôt que de semer des fichiers dans l'arborescence du projet.
+_MEDIA_TEST = tempfile.mkdtemp(prefix="cavavin-media-")
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_TEST)
+class PhotoEtiquetteTests(APITestCase):
+    """La vignette d'étiquette conservée au catalogue lors d'un scan."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user("alice", password="x")
+        self.client.force_authenticate(self.user)
+
+    @staticmethod
+    def _photo(largeur=1200, hauteur=900):
+        from PIL import Image
+
+        tampon = BytesIO()
+        Image.effect_noise((largeur, hauteur), 40).convert("RGB").save(tampon, "JPEG")
+        return tampon.getvalue()
+
+    def _scanner(self, wine):
+        with patch("apps.catalog.views.get_enabled_providers",
+                   return_value=[_FakeProvider(wine=wine, name="claude")]):
+            return self.client.post(
+                reverse("scan-etiquette"),
+                {"image": SimpleUploadedFile("e.jpg", self._photo(), content_type="image/jpeg")},
+                format="multipart",
+            )
+
+    def test_le_scan_conserve_une_vignette_sur_la_cuvee(self):
+        wine = NormalizedWine(domaine_nom="Ch. Test", cuvee_nom="Grand Vin", source="claude")
+        resp = self._scanner(wine)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        cuvee = Cuvee.objects.get(nom="Grand Vin")
+        self.assertTrue(cuvee.photo_etiquette, "aucune vignette conservée")
+        self.assertIsNotNone(resp.data["cuvee"]["photo_etiquette_url"])
+
+    def test_une_vignette_existante_n_est_pas_ecrasee(self):
+        """Le catalogue est mutualisé : un second scan, plus flou ou plus lointain,
+        ne doit pas remplacer pour tout le monde une photo déjà correcte."""
+        wine = NormalizedWine(domaine_nom="Ch. Test", cuvee_nom="Grand Vin", source="claude")
+        self._scanner(wine)
+        cuvee = Cuvee.objects.get(nom="Grand Vin")
+        premiere = cuvee.photo_etiquette.name
+
+        self._scanner(wine)
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.photo_etiquette.name, premiere)
+
+    def test_la_vignette_est_servie_et_lisible_publiquement(self):
+        """Le catalogue est en lecture publique : sa vignette doit l'être aussi."""
+        wine = NormalizedWine(domaine_nom="Ch. Test", cuvee_nom="Grand Vin", source="claude")
+        self._scanner(wine)
+        cuvee = Cuvee.objects.get(nom="Grand Vin")
+
+        self.client.force_authenticate(None)  # anonyme
+        resp = self.client.get(reverse("cuvee-photo", args=[cuvee.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp["Content-Type"], "image/jpeg")
+        self.assertTrue(b"".join(resp.streaming_content))
+
+    def test_cuvee_sans_vignette_repond_404(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="Sans photo", couleur="ROUGE")
+        resp = self.client.get(reverse("cuvee-photo", args=[cuvee.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_fichier_disparu_repond_404_et_non_500(self):
+        """Volume remonté, sauvegarde partielle : la fiche doit survivre."""
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="Fantome", couleur="ROUGE")
+        cuvee.photo_etiquette.name = "etiquettes/2026/07/inexistant.jpg"
+        cuvee.save(update_fields=["photo_etiquette"])
+        resp = self.client.get(reverse("cuvee-photo", args=[cuvee.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_un_echec_de_vignette_ne_fait_pas_echouer_le_scan(self):
+        """Enrichir le catalogue d'une photo est un bonus, jamais une raison
+        d'échouer une identification."""
+        wine = NormalizedWine(domaine_nom="Ch. Test", cuvee_nom="Grand Vin", source="claude")
+        with patch("apps.catalog.views.recadrer_etiquette", side_effect=OSError("disque plein")):
+            resp = self._scanner(wine)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(Cuvee.objects.get(nom="Grand Vin").photo_etiquette)
+
+
+class RecadrageEtiquetteTests(SimpleTestCase):
+    """Le recadrage : best-effort, jamais bloquant."""
+
+    def test_la_vignette_est_bornee_et_en_jpeg(self):
+        from PIL import Image
+
+        tampon = BytesIO()
+        Image.effect_noise((3000, 2000), 40).convert("RGB").save(tampon, "JPEG")
+        vignette, content_type = image_utils.recadrer_etiquette(tampon.getvalue())
+
+        self.assertEqual(content_type, "image/jpeg")
+        self.assertLessEqual(
+            max(Image.open(BytesIO(vignette)).size), image_utils.TAILLE_VIGNETTE
+        )
+
+    def test_une_image_illisible_ne_leve_pas(self):
+        vignette, _ = image_utils.recadrer_etiquette(b"pas une image")
+        self.assertEqual(vignette, b"pas une image")
+
+    def test_sans_tesseract_on_garde_la_photo_entiere(self):
+        from PIL import Image
+
+        tampon = BytesIO()
+        Image.effect_noise((1000, 800), 40).convert("RGB").save(tampon, "JPEG")
+        with override_settings(TESSERACT_CMD="binaire-inexistant"):
+            vignette, content_type = image_utils.recadrer_etiquette(tampon.getvalue())
+        self.assertEqual(content_type, "image/jpeg")
+        self.assertTrue(vignette)
+
+
+class DedupNomCuveeTests(TestCase):
+    """Le nom normalisé ferme la dernière porte aux doublons du catalogue."""
+
+    def _wine(self, nom, domaine="Ch. Test"):
+        # Ni code-barres ni référence externe : c'est exactement ce que produit
+        # une identification par LLM, donc le chemin qui retombe sur le nom.
+        return NormalizedWine(
+            domaine_nom=domaine, cuvee_nom=nom, couleur="ROUGE", source="claude"
+        )
+
+    def test_les_variantes_de_casse_et_d_espaces_convergent(self):
+        for nom in ("Grand Vin", "Grand vin", "GRAND VIN", " Grand  Vin ", "Grand-Vin"):
+            upsert_cuvee(self._wine(nom))
+        self.assertEqual(Cuvee.objects.count(), 1, "variantes non dédoublonnées")
+
+    def test_les_accents_convergent(self):
+        upsert_cuvee(self._wine("Château Margaux"))
+        _, created = upsert_cuvee(self._wine("Chateau Margaux"))
+        self.assertFalse(created)
+        self.assertEqual(Cuvee.objects.count(), 1)
+
+    def test_deux_vins_reellement_differents_restent_distincts(self):
+        upsert_cuvee(self._wine("Grand Vin"))
+        upsert_cuvee(self._wine("Second Vin"))
+        self.assertEqual(Cuvee.objects.count(), 2)
+
+    def test_meme_nom_chez_deux_producteurs_reste_distinct(self):
+        """La contrainte porte sur (domaine, nom) : « Grand Vin » existe partout."""
+        upsert_cuvee(self._wine("Grand Vin", domaine="Ch. A"))
+        upsert_cuvee(self._wine("Grand Vin", domaine="Ch. B"))
+        self.assertEqual(Cuvee.objects.count(), 2)
+
+    def test_la_contrainte_interdit_le_doublon_en_base(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        Cuvee.objects.create(domaine=domaine, nom="Grand Vin", couleur="ROUGE")
+        with self.assertRaises(IntegrityError):
+            Cuvee.objects.create(domaine=domaine, nom="grand vin", couleur="BLANC")
+
+    def test_le_nom_normalise_suit_le_nom(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="Château Test", couleur="ROUGE")
+        self.assertEqual(cuvee.nom_normalise, "chateau test")
+        cuvee.nom = "Clos du Roi"
+        cuvee.save()
+        self.assertEqual(cuvee.nom_normalise, "clos du roi")
+
+    def test_le_nom_normalise_suit_meme_avec_update_fields(self):
+        """update_fields=['nom'] ne doit pas laisser la forme canonique périmée :
+        un champ dérivé qui diverge rouvrirait la porte aux doublons."""
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="Avant", couleur="ROUGE")
+        cuvee.nom = "Après"
+        cuvee.save(update_fields=["nom"])
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.nom_normalise, "apres")
+
+    def test_api_refuse_de_creer_un_doublon(self):
+        """Le catalogue est partagé : le créer en double par l'API n'a pas de sens."""
+        user = User.objects.create_user("bob", password="x")
+        self.client.force_login(user)
+        domaine = Domaine.objects.create(nom="Dom")
+        payload = {"domaine": domaine.id, "nom": "Grand Vin", "couleur": "ROUGE"}
+        self.assertEqual(
+            self.client.post(reverse("cuvee-list"), payload).status_code,
+            status.HTTP_201_CREATED,
+        )
+        seconde = self.client.post(reverse("cuvee-list"), {**payload, "nom": "grand vin"})
+        self.assertEqual(seconde.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Cuvee.objects.count(), 1)
+
+
+class DedupNomMigrationTests(TransactionTestCase):
+    """Migration 0016 : fusion des doublons de nom avant pose de la contrainte.
+
+    On rembobine à l'état 0015 (où le doublon est encore possible), on fabrique
+    les cas que la migration doit résorber, puis on applique 0016 et on vérifie
+    qu'aucune donnée privée n'a été perdue au passage.
+    """
+
+    # `inventory` est épinglé dans les deux états : sans cela, l'état historique
+    # calculé pour catalog-0015 rembobinerait Bouteille avant la suppression de
+    # `statut`, alors que la table, elle, ne l'a plus.
+    migrate_from = [
+        ("catalog", "0015_cuvee_photo_etiquette"),
+        ("inventory", "0006_remove_bouteille_statut"),
+    ]
+    migrate_to = [
+        ("catalog", "0016_dedup_nom_cuvee"),
+        ("inventory", "0006_remove_bouteille_statut"),
+    ]
+
+    def test_fusionne_les_doublons_et_preserve_le_prive(self):
+        from django.db.migrations.executor import MigrationExecutor
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_from)
+        old_apps = executor.loader.project_state(self.migrate_from).apps
+        Domaine = old_apps.get_model("catalog", "Domaine")
+        Cuvee = old_apps.get_model("catalog", "Cuvee")
+        Bouteille = old_apps.get_model("inventory", "Bouteille")
+        NoteDegustation = old_apps.get_model("inventory", "NoteDegustation")
+        User = old_apps.get_model("auth", "User")
+
+        user = User.objects.create(username="alice")
+        domaine = Domaine.objects.create(nom="Ch. Test", region="")
+        # Trois variantes du même vin, comme un LLM peut les produire.
+        garde = Cuvee.objects.create(domaine=domaine, nom="Grand Vin", couleur="ROUGE")
+        doublon = Cuvee.objects.create(domaine=domaine, nom="grand vin", couleur="ROUGE",
+                                       code_barres="777", region="Bordeaux")
+        autre = Cuvee.objects.create(domaine=domaine, nom="Grand  Vin ", couleur="ROUGE")
+        # Données privées réparties sur les doublons : rien ne doit disparaître.
+        Bouteille.objects.create(proprietaire=user, cuvee=doublon, quantite=3)
+        Bouteille.objects.create(proprietaire=user, cuvee=autre, quantite=2)
+        NoteDegustation.objects.create(proprietaire=user, cuvee=doublon, note="4.0")
+
+        executor.loader.build_graph()
+        executor.migrate(self.migrate_to)
+        new_apps = executor.loader.project_state(self.migrate_to).apps
+        Cuvee = new_apps.get_model("catalog", "Cuvee")
+        Bouteille = new_apps.get_model("inventory", "Bouteille")
+        NoteDegustation = new_apps.get_model("inventory", "NoteDegustation")
+
+        self.assertEqual(Cuvee.objects.filter(domaine=domaine.pk).count(), 1)
+        survivante = Cuvee.objects.get(pk=garde.pk)  # la plus ancienne survit
+        self.assertEqual(survivante.nom_normalise, "grand vin")
+        # Ce que seuls les doublons portaient a été récupéré.
+        self.assertEqual(survivante.code_barres, "777")
+        self.assertEqual(survivante.region, "Bordeaux")
+        # Aucune donnée privée perdue.
+        self.assertEqual(
+            sum(Bouteille.objects.filter(cuvee=survivante).values_list("quantite", flat=True)), 5
+        )
+        self.assertEqual(NoteDegustation.objects.filter(cuvee=survivante).count(), 1)

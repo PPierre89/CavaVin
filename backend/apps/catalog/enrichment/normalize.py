@@ -13,6 +13,7 @@ COULEUR_KEYWORDS = {
 
 
 import re
+import unicodedata
 
 # Type wineapi.io -> couleur interne (Cuvee.Couleur).
 TYPE_COULEUR = {
@@ -26,6 +27,28 @@ TYPE_COULEUR = {
 }
 
 _VINTAGE_RE = re.compile(r"\s*\b(?:19|20)\d{2}\b")
+
+
+def normaliser_nom(texte: str) -> str:
+    """Forme canonique d'un nom, pour la **déduplication** du catalogue.
+
+    Minuscules, sans accents ni ligatures, toute ponctuation et tout blanc
+    ramenés à une espace simple. « Château Margaux », « CHATEAU MARGAUX » et
+    « Chateau-Margaux » se rejoignent donc sur « chateau margaux ».
+
+    C'est ce dont dépend l'unicité d'une cuvée sans identité forte : un LLM ne
+    rend pas deux fois exactement la même chaîne, si bien qu'une comparaison
+    brute laissait deux scans du même vin créer deux cuvées dans le catalogue
+    mutualisé (cf. `Cuvee.nom_normalise` et sa contrainte d'unicité).
+    """
+    if not texte:
+        return ""
+    # Les ligatures n'ont pas de décomposition NFKD : sans ce remplacement,
+    # « Cœur » deviendrait « cur » et ne rejoindrait plus « coeur ».
+    for source, cible in (("œ", "oe"), ("Œ", "OE"), ("æ", "ae"), ("Æ", "AE")):
+        texte = texte.replace(source, cible)
+    sans_accents = unicodedata.normalize("NFKD", texte).encode("ascii", "ignore").decode()
+    return " ".join(m for m in re.split(r"[^a-z0-9]+", sans_accents.lower()) if m)
 
 
 def clean(text) -> str:

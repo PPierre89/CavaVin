@@ -6,6 +6,7 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 from . import apogee
+from .enrichment.normalize import normaliser_nom
 
 
 class Domaine(models.Model):
@@ -50,6 +51,12 @@ class Cuvee(models.Model):
 
     domaine = models.ForeignKey(Domaine, on_delete=models.CASCADE, related_name="cuvees")
     nom = models.CharField(max_length=255)
+    # Forme canonique du nom (minuscules, sans accents ni ponctuation), dérivée
+    # de `nom` à chaque enregistrement. C'est la clé de déduplication d'une cuvée
+    # dépourvue d'identité forte : la comparaison brute laissait « Grand Vin »,
+    # « Grand vin » et « Grand Vin » (espace final) créer trois cuvées pour le
+    # même vin — un LLM ne rend pas deux fois la même chaîne.
+    nom_normalise = models.CharField(max_length=255, blank=True, default="", db_index=True)
     appellation = models.CharField(max_length=255, blank=True)
     couleur = models.CharField(max_length=10, choices=Couleur.choices)
     cepages = models.ManyToManyField(Cepage, blank=True, related_name="cuvees")
@@ -70,6 +77,16 @@ class Cuvee(models.Model):
     acidite = models.CharField(max_length=50, blank=True, default="", help_text="Acidity wineapi.")
     degre_alcool = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
     image_url = models.URLField(blank=True, default="")
+    # Photo d'étiquette prise par un utilisateur lors d'un scan, recadrée sur le
+    # texte de l'étiquette (cf. enrichment.image.recadrer_etiquette). Elle rend
+    # une cuvée reconnaissable d'un coup d'œil au moment de la saisie, là où
+    # `image_url` (visuel marchand) est souvent absente sur les petits domaines.
+    # Elle appartient au catalogue MUTUALISÉ, donc visible de tous : le recadrage
+    # n'est pas qu'esthétique, il écarte le décor autour de la bouteille.
+    photo_etiquette = models.ImageField(
+        upload_to="etiquettes/%Y/%m/", blank=True, null=True,
+        help_text="Vignette d'étiquette issue d'un scan, recadrée sur le texte.",
+    )
     lwin_code = models.CharField(max_length=32, blank=True, default="")
     note_moyenne = models.DecimalField(
         max_digits=3, decimal_places=1, null=True, blank=True, help_text="Note communautaire /5."
@@ -133,7 +150,28 @@ class Cuvee(models.Model):
                 condition=~models.Q(lwin_code=""),
                 name="unique_cuvee_lwin_code",
             ),
+            # Dernier recours d'identité : un producteur n'a qu'une cuvée d'un nom
+            # donné. Sans cette contrainte, la clé de repli (domaine, nom) était
+            # une simple convention — et les doublons s'accumulaient en silence,
+            # exactement le défaut D3 de la revue d'architecture.
+            models.UniqueConstraint(
+                fields=["domaine", "nom_normalise"],
+                condition=~models.Q(nom_normalise=""),
+                name="unique_cuvee_nom_par_domaine",
+            ),
         ]
+
+    def save(self, *args, **kwargs):
+        # Champ dérivé : on le recalcule systématiquement pour qu'il ne puisse
+        # pas diverger de `nom` (une valeur périmée rouvrirait la porte aux
+        # doublons que la contrainte est censée fermer).
+        self.nom_normalise = normaliser_nom(self.nom)[:255]
+        if "update_fields" in kwargs and kwargs["update_fields"] is not None:
+            champs = set(kwargs["update_fields"])
+            if "nom" in champs:
+                champs.add("nom_normalise")
+            kwargs["update_fields"] = champs
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.domaine.nom} - {self.nom}"

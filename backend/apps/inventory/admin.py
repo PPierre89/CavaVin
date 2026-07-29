@@ -16,8 +16,8 @@ class RangementInline(admin.TabularInline):
 
 @admin.register(Bouteille)
 class BouteilleAdmin(admin.ModelAdmin):
-    list_display = ["cuvee", "millesime", "quantite", "statut", "emplacement"]
-    list_filter = ["statut", "cuvee__couleur"]
+    list_display = ["cuvee", "millesime", "quantite", "statut_apogee", "emplacement"]
+    list_filter = ["cuvee__couleur"]
     search_fields = ["cuvee__nom", "cuvee__domaine__nom"]
     autocomplete_fields = ["cuvee", "emplacement"]
     inlines = [MouvementStockInline, RangementInline]

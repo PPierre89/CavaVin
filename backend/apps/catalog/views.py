@@ -1,14 +1,19 @@
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.conf import settings
 from django.core.cache import cache
+from django.core.files.base import ContentFile
 from django.db import connection
 from django.db.models import DecimalField, ExpressionWrapper, F, Max, Min, Sum
+from django.http import FileResponse, Http404
+from django.urls import reverse
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -22,7 +27,7 @@ from .enrichment import (
     refresh_wineapi_detail,
     wineapi_detail,
 )
-from .enrichment.image import reduire as reduire_image
+from .enrichment.image import recadrer_etiquette, reduire as reduire_image
 from .enrichment.lwin import LwinProvider, evaluer_confiance, rechercher_lwin
 from .enrichment.normalize import guess_couleur, parse_vintage, strip_vintage
 from .ingest import synchroniser_wineapi, upsert_cuvee, upsert_multi
@@ -37,6 +42,8 @@ from .serializers import (
     ScanCodeBarresSerializer,
     ScanEtiquetteSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _local_response(cuvee):
@@ -67,6 +74,24 @@ def _enriched_response(wine, cuvee, created):
             "suggestions": wine.raw.get("suggestions") or [],
         }
     )
+
+
+def _conserver_etiquette(cuvee, photo: bytes) -> None:
+    """Attache au catalogue la vignette d'étiquette issue d'un scan.
+
+    On ne remplit que si la cuvée n'a pas déjà de vignette : le catalogue est
+    mutualisé, un scan ultérieur — pris de plus loin ou plus flou — ne doit pas
+    écraser une photo correcte pour tout le monde. Enrichir le catalogue d'une
+    photo est un effet de bord agréable de l'identification, jamais une raison de
+    la faire échouer : toute erreur est donc absorbée.
+    """
+    if cuvee.photo_etiquette:
+        return
+    try:
+        vignette, _ = recadrer_etiquette(photo)
+        cuvee.photo_etiquette.save(f"cuvee-{cuvee.pk}.jpg", ContentFile(vignette), save=True)
+    except Exception as exc:  # disque plein, volume en lecture seule…
+        logger.warning("vignette d'étiquette non conservée pour %s : %s", cuvee.pk, exc)
 
 
 def _interroger(provider, appel):
@@ -263,6 +288,11 @@ def _build_fiche(cuvee, user):
             "elaborate": cuvee.elaborate,
             "degre_alcool": float(cuvee.degre_alcool) if cuvee.degre_alcool is not None else None,
             "image_url": cuvee.image_url,
+            # Vignette d'étiquette issue d'un scan : sur les petits domaines, c'est
+            # souvent le seul visuel disponible (image_url reste vide).
+            "photo_etiquette_url": (
+                reverse("cuvee-photo", args=[cuvee.pk]) if cuvee.photo_etiquette else None
+            ),
         },
         "conseil_degustation": {
             "temperature": conseil.temperature,
@@ -300,6 +330,30 @@ class CuveeViewSet(viewsets.ModelViewSet):
             self.throttle_scope = "enrichment"
             return [ScopedRateThrottle()]
         return super().get_throttles()
+
+    @action(detail=True, methods=["get"], permission_classes=[AllowAny])
+    def photo(self, request, pk=None):
+        """Vignette d'étiquette de la cuvée (catalogue partagé, lecture publique).
+
+        Servie par identifiant de cuvée, jamais par chemin : aucune valeur fournie
+        par le client n'atteint le système de fichiers, la traversée de répertoire
+        est donc impossible par construction. C'est aussi ce qui dispense de
+        publier MEDIA_ROOT derrière une URL statique.
+        """
+        cuvee = self.get_object()
+        if not cuvee.photo_etiquette:
+            raise Http404("Aucune photo d'étiquette pour ce vin.")
+        try:
+            fichier = cuvee.photo_etiquette.open("rb")
+        except (FileNotFoundError, OSError) as exc:
+            # Fichier disparu (volume remonté, sauvegarde partielle) : 404 plutôt
+            # qu'une 500, la fiche sait se passer de la vignette.
+            raise Http404("Photo d'étiquette introuvable sur le disque.") from exc
+        reponse = FileResponse(fichier, content_type="image/jpeg")
+        # Le contenu ne change pas sans nouvelle photo : on laisse le navigateur
+        # et le cache du NAS travailler.
+        reponse["Cache-Control"] = "public, max-age=86400"
+        return reponse
 
     @action(detail=True, methods=["get"])
     def fiche(self, request, pk=None):
@@ -553,6 +607,7 @@ class ScanEtiquetteView(APIView):
         if hits:
             primary = hits[0]
             cuvee, created = upsert_multi(hits)
+            _conserver_etiquette(cuvee, data)
             return _enriched_response(primary, cuvee, created)
 
         if erreur is not None:

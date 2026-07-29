@@ -206,6 +206,11 @@ export function FicheVin({
   const [syncing, setSyncing] = useState(false)
   const [adding, setAdding] = useState(false)
 
+  // Visuel de la fiche : la photo d'étiquette prise lors d'un scan prime sur le
+  // visuel marchand. C'est la vraie bouteille, et sur un petit domaine c'est
+  // souvent le seul visuel disponible (`image_url` reste vide).
+  const visuel = fiche?.cuvee.photo_etiquette_url || fiche?.cuvee.image_url || null
+
   // Millésimes en stock de cette cuvée (données réelles de la cave), triés du
   // plus récent au plus ancien. On garde les Bouteille (avec id + apogée) pour
   // le sélecteur et les actions bas de page.
@@ -360,11 +365,11 @@ export function FicheVin({
             +
           </button>
 
-          {fiche?.cuvee.image_url ? (
+          {visuel ? (
             <img
-              src={fiche.cuvee.image_url}
+              src={visuel}
               alt={bouteille.cuvee_nom}
-              className="h-44 object-contain drop-shadow-[0_8px_20px_rgba(0,0,0,0.35)]"
+              className="h-44 object-contain rounded drop-shadow-[0_8px_20px_rgba(0,0,0,0.35)]"
             />
           ) : (
             /* Étiquette stylisée (à défaut de photo) : crème, liseré or. */
