@@ -192,6 +192,17 @@ completion order (the first anchors identity), and the surfaced `EnrichmentError
 same order, so it is deterministic. Worker threads must `connection.close()` — Django only reaps the
 connection of the request thread — and only there: never in the request thread itself.
 
+**Label thumbnail on the shared catalog.** A successful `scan-etiquette` stores the photo on
+`Cuvee.photo_etiquette`, cropped to the label via `enrichment.image.recadrer_etiquette` (one short
+tesseract pass reusing `lwin._zone_texte`). Three rules hold it together: it only fills when
+**empty** (the catalog is mutualised — a later, blurrier scan must not overwrite everyone's good
+photo), any failure is swallowed (a thumbnail is a bonus, never a reason to fail an identification),
+and the crop is not merely cosmetic — it strips the kitchen/hands around the bottle before the image
+becomes visible to every user. Served by `CuveeViewSet.photo` **by cuvée id, never by path**, so
+directory traversal is impossible by construction and `MEDIA_ROOT` need not be published. Files live
+next to the SQLite file (same `data/` volume), so the documented "backup = copy the folder" still
+holds.
+
 **Label payload.** `enrichment.image.reduire` shrinks the photo **once** before the cascade (longest
 side 1568 px, the point past which vision APIs downscale anyway); every remote source shares that
 version, cutting a ~9 MB phone photo to well under 1 MB before base64. Providers that need the

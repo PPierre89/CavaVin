@@ -19,3 +19,6 @@ backend/coverage.xml
 # `manage.py evaluer_reconnaissance` (licence propre au jeu de données amont,
 # cf. evaluation_corpus/etiquettes.json). Le manifeste, lui, est versionné.
 backend/apps/catalog/evaluation_corpus/images/
+
+# Médias téléversés en développement local (vignettes d'étiquette).
+backend/media/

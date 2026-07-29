@@ -18,6 +18,9 @@ un **conteneur Docker unique** (Django REST + SPA React, SQLite).
   wineapi.io → **OCR local + référentiel LWIN** (repli 100 % gratuit), avec mise en cache.
 - **Fiche vin enrichie** : appellation, cépages, conseil de service (température, carafage),
   profil gustatif, accords mets-vins, prix marché et **historique de prix**.
+- **Photo d'étiquette conservée** : la photo prise au scan est recadrée sur l'étiquette et
+  attachée au catalogue mutualisé — un vin devient reconnaissable d'un coup d'œil à la saisie
+  suivante, y compris pour les petits domaines dont aucun visuel marchand n'existe.
 - **Fenêtre de dégustation** calculée (à garder / à boire / dépassé) qui pilote un code couleur ;
   estimation affinée par le **cépage** (aptitude à la garde) et la **qualité du millésime** (repères
   régionaux), la saisie manuelle restant prioritaire.
@@ -91,6 +94,7 @@ carnet) strictement filtrées par propriétaire côté serveur.
 | `POST /api/scan-etiquette/` · `scan-code-barres/` · `identifier-vin/` | Identification (photo / EAN / texte) |
 | `GET /api/recherche-vins/?q=` | Recherche dynamique (autocomplétion) dans le référentiel LWIN |
 | `GET /api/cuvees/{id}/fiche/` | Fiche vin consolidée (référentiel + conseil + enrichissement) |
+| `GET /api/cuvees/{id}/photo/` | Vignette d'étiquette du catalogue (lecture publique, servie par id) |
 | `POST /api/cuvees/{id}/rafraichir/` | Re-synchro wineapi (cooldown anti-quota) |
 | `GET /api/bouteilles/` | Stock privé — chaque ligne porte les attributs de sa cuvée (couleur, appellation, région, valeur marché) et sa fenêtre d'apogée calculée |
 | `POST /api/bouteilles/{id}/consommer/` | Sortie de stock atomique + journal |

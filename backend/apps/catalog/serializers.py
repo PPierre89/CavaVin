@@ -1,3 +1,4 @@
+from django.urls import reverse
 from rest_framework import serializers
 
 from .models import Cepage, Cuvee, Domaine
@@ -68,6 +69,18 @@ class CuveeSerializer(serializers.ModelSerializer):
     cepages_noms = serializers.SlugRelatedField(
         source="cepages", slug_field="nom", many=True, read_only=True
     )
+    photo_etiquette_url = serializers.SerializerMethodField()
+
+    def get_photo_etiquette_url(self, obj) -> str | None:
+        """URL de la vignette d'étiquette, ou None si la cuvée n'en a pas.
+
+        On expose l'action de l'API plutôt que le chemin du fichier : le stockage
+        reste interne et le client n'a jamais à connaître MEDIA_URL."""
+        if not obj.photo_etiquette:
+            return None
+        chemin = reverse("cuvee-photo", args=[obj.pk])
+        requete = self.context.get("request")
+        return requete.build_absolute_uri(chemin) if requete else chemin
 
     class Meta:
         model = Cuvee
@@ -92,6 +105,7 @@ class CuveeSerializer(serializers.ModelSerializer):
             "acidite",
             "degre_alcool",
             "image_url",
+            "photo_etiquette_url",
             "lwin_code",
             "note_moyenne",
             "nb_notes",

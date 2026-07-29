@@ -3147,3 +3147,122 @@ class CorpusOpenFoodFactsTests(SimpleTestCase):
     def test_doublon_de_code_barres_est_ecarte(self):
         self.assertIsNotNone(self.commande._retenir(self._produit(), self.vus))
         self.assertIsNone(self.commande._retenir(self._produit(), self.vus))
+
+
+# Les tests écrivent de vraies vignettes : on les isole dans un dossier
+# temporaire plutôt que de semer des fichiers dans l'arborescence du projet.
+_MEDIA_TEST = tempfile.mkdtemp(prefix="cavavin-media-")
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_TEST)
+class PhotoEtiquetteTests(APITestCase):
+    """La vignette d'étiquette conservée au catalogue lors d'un scan."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user("alice", password="x")
+        self.client.force_authenticate(self.user)
+
+    @staticmethod
+    def _photo(largeur=1200, hauteur=900):
+        from PIL import Image
+
+        tampon = BytesIO()
+        Image.effect_noise((largeur, hauteur), 40).convert("RGB").save(tampon, "JPEG")
+        return tampon.getvalue()
+
+    def _scanner(self, wine):
+        with patch("apps.catalog.views.get_enabled_providers",
+                   return_value=[_FakeProvider(wine=wine, name="claude")]):
+            return self.client.post(
+                reverse("scan-etiquette"),
+                {"image": SimpleUploadedFile("e.jpg", self._photo(), content_type="image/jpeg")},
+                format="multipart",
+            )
+
+    def test_le_scan_conserve_une_vignette_sur_la_cuvee(self):
+        wine = NormalizedWine(domaine_nom="Ch. Test", cuvee_nom="Grand Vin", source="claude")
+        resp = self._scanner(wine)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        cuvee = Cuvee.objects.get(nom="Grand Vin")
+        self.assertTrue(cuvee.photo_etiquette, "aucune vignette conservée")
+        self.assertIsNotNone(resp.data["cuvee"]["photo_etiquette_url"])
+
+    def test_une_vignette_existante_n_est_pas_ecrasee(self):
+        """Le catalogue est mutualisé : un second scan, plus flou ou plus lointain,
+        ne doit pas remplacer pour tout le monde une photo déjà correcte."""
+        wine = NormalizedWine(domaine_nom="Ch. Test", cuvee_nom="Grand Vin", source="claude")
+        self._scanner(wine)
+        cuvee = Cuvee.objects.get(nom="Grand Vin")
+        premiere = cuvee.photo_etiquette.name
+
+        self._scanner(wine)
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.photo_etiquette.name, premiere)
+
+    def test_la_vignette_est_servie_et_lisible_publiquement(self):
+        """Le catalogue est en lecture publique : sa vignette doit l'être aussi."""
+        wine = NormalizedWine(domaine_nom="Ch. Test", cuvee_nom="Grand Vin", source="claude")
+        self._scanner(wine)
+        cuvee = Cuvee.objects.get(nom="Grand Vin")
+
+        self.client.force_authenticate(None)  # anonyme
+        resp = self.client.get(reverse("cuvee-photo", args=[cuvee.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp["Content-Type"], "image/jpeg")
+        self.assertTrue(b"".join(resp.streaming_content))
+
+    def test_cuvee_sans_vignette_repond_404(self):
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="Sans photo", couleur="ROUGE")
+        resp = self.client.get(reverse("cuvee-photo", args=[cuvee.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_fichier_disparu_repond_404_et_non_500(self):
+        """Volume remonté, sauvegarde partielle : la fiche doit survivre."""
+        domaine = Domaine.objects.create(nom="Dom")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="Fantome", couleur="ROUGE")
+        cuvee.photo_etiquette.name = "etiquettes/2026/07/inexistant.jpg"
+        cuvee.save(update_fields=["photo_etiquette"])
+        resp = self.client.get(reverse("cuvee-photo", args=[cuvee.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_un_echec_de_vignette_ne_fait_pas_echouer_le_scan(self):
+        """Enrichir le catalogue d'une photo est un bonus, jamais une raison
+        d'échouer une identification."""
+        wine = NormalizedWine(domaine_nom="Ch. Test", cuvee_nom="Grand Vin", source="claude")
+        with patch("apps.catalog.views.recadrer_etiquette", side_effect=OSError("disque plein")):
+            resp = self._scanner(wine)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(Cuvee.objects.get(nom="Grand Vin").photo_etiquette)
+
+
+class RecadrageEtiquetteTests(SimpleTestCase):
+    """Le recadrage : best-effort, jamais bloquant."""
+
+    def test_la_vignette_est_bornee_et_en_jpeg(self):
+        from PIL import Image
+
+        tampon = BytesIO()
+        Image.effect_noise((3000, 2000), 40).convert("RGB").save(tampon, "JPEG")
+        vignette, content_type = image_utils.recadrer_etiquette(tampon.getvalue())
+
+        self.assertEqual(content_type, "image/jpeg")
+        self.assertLessEqual(
+            max(Image.open(BytesIO(vignette)).size), image_utils.TAILLE_VIGNETTE
+        )
+
+    def test_une_image_illisible_ne_leve_pas(self):
+        vignette, _ = image_utils.recadrer_etiquette(b"pas une image")
+        self.assertEqual(vignette, b"pas une image")
+
+    def test_sans_tesseract_on_garde_la_photo_entiere(self):
+        from PIL import Image
+
+        tampon = BytesIO()
+        Image.effect_noise((1000, 800), 40).convert("RGB").save(tampon, "JPEG")
+        with override_settings(TESSERACT_CMD="binaire-inexistant"):
+            vignette, content_type = image_utils.recadrer_etiquette(tampon.getvalue())
+        self.assertEqual(content_type, "image/jpeg")
+        self.assertTrue(vignette)

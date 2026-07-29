@@ -146,6 +146,20 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# Médias téléversés (photos d'étiquette du catalogue). Ils sont *persistants* et
+# doivent survivre à une recréation du conteneur : on les range donc à côté de la
+# base SQLite, dans le même volume — un utilisateur qui sauvegarde son dossier
+# `data/` emporte ainsi la base ET les photos, sans volume supplémentaire à
+# déclarer. En local (hors conteneur), on retombe sur backend/media/.
+_sqlite = os.getenv("SQLITE_PATH")
+MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT") or (
+    Path(_sqlite).parent / "media" if _sqlite else BASE_DIR / "media"
+))
+# Les photos ne sont pas servies par une URL de fichier : elles transitent par
+# une action de l'API, indexée par cuvée (cf. CuveeViewSet.photo). Aucun chemin
+# fourni par le client n'atteint le disque, donc aucune traversée possible.
+MEDIA_URL = "/media/"
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},

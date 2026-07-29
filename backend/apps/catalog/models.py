@@ -70,6 +70,16 @@ class Cuvee(models.Model):
     acidite = models.CharField(max_length=50, blank=True, default="", help_text="Acidity wineapi.")
     degre_alcool = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
     image_url = models.URLField(blank=True, default="")
+    # Photo d'étiquette prise par un utilisateur lors d'un scan, recadrée sur le
+    # texte de l'étiquette (cf. enrichment.image.recadrer_etiquette). Elle rend
+    # une cuvée reconnaissable d'un coup d'œil au moment de la saisie, là où
+    # `image_url` (visuel marchand) est souvent absente sur les petits domaines.
+    # Elle appartient au catalogue MUTUALISÉ, donc visible de tous : le recadrage
+    # n'est pas qu'esthétique, il écarte le décor autour de la bouteille.
+    photo_etiquette = models.ImageField(
+        upload_to="etiquettes/%Y/%m/", blank=True, null=True,
+        help_text="Vignette d'étiquette issue d'un scan, recadrée sur le texte.",
+    )
     lwin_code = models.CharField(max_length=32, blank=True, default="")
     note_moyenne = models.DecimalField(
         max_digits=3, decimal_places=1, null=True, blank=True, help_text="Note communautaire /5."
