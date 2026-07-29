@@ -143,6 +143,14 @@ région, et, si la cuvée est déjà au catalogue partagé, cépages, note de la
 mets-vins ; quand l'algorithme hésite, la liste des correspondances sollicite une vérification
 manuelle.
 
+Toutes les sources activées étant de toute façon interrogées (fusion multi-sources), elles le sont
+**en parallèle** : une identification coûte le temps de la source la plus lente, et non la somme de
+toutes — l'attente est réseau, pas calcul. La photo d'étiquette est par ailleurs **réduite une seule
+fois** avant l'envoi (grand côté 1568 px, seuil au-delà duquel les APIs de vision redimensionnent
+d'elles-mêmes) : une photo de téléphone de ~9 Mo part en moins de 1 Mo, et toutes les sources
+distantes se partagent cette version. L'OCR local, lui, garde l'original — sa phase de recadrage relit
+la zone de texte en pleine résolution, ce qui rattrape une étiquette lointaine dans le cadre.
+
 Tout hit est **mis en cache en base** ; les endpoints d'identification sont protégés par un
 throttle et la re-synchro par un cooldown par vin. Détail complet dans Swagger.
 

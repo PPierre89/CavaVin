@@ -2,9 +2,10 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import urllib.error
 from datetime import date
-from io import StringIO
+from io import BytesIO, StringIO
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
@@ -23,7 +24,9 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from . import views
 from .enrichment import EnrichmentError, NormalizedWine
+from .enrichment import image as image_utils
 from .enrichment import normalize
 from .enrichment.openfoodfacts import OpenFoodFactsProvider
 from .enrichment.grapeminds import GrapeMindsProvider
@@ -1574,6 +1577,171 @@ class SourcesViewTests(APITestCase):
     def test_reserve_au_staff(self):
         self.client.force_authenticate(User.objects.create_user("lambda", password="x"))
         self.assertEqual(self.client.get(self.url).status_code, status.HTTP_403_FORBIDDEN)
+
+
+class CascadeParalleleTests(TestCase):
+    """La cascade interroge les sources en parallèle, sans changer son contrat."""
+
+    class _Lente:
+        """Source dont le lookup dort, pour mesurer série vs parallèle."""
+
+        def __init__(self, name, delai, wine=None, erreur=None):
+            self.name, self.delai, self.wine, self.erreur = name, delai, wine, erreur
+
+        def lookup_by_text(self, query):
+            time.sleep(self.delai)
+            if self.erreur:
+                raise self.erreur
+            return self.wine
+
+    def setUp(self):
+        cache.clear()
+
+    def _sources(self, *sources):
+        return patch("apps.catalog.views.get_enabled_providers", return_value=list(sources))
+
+    def test_les_sources_sont_interrogees_en_parallele(self):
+        delai = 0.4
+        sources = [
+            self._Lente(nom, delai, wine=NormalizedWine(domaine_nom="D", cuvee_nom="C", source=nom))
+            for nom in ("claude", "wineapi", "lwin")
+        ]
+        with self._sources(*sources):
+            debut = time.monotonic()
+            hits, erreur = views._cascade_multi(lambda p: p.lookup_by_text("q"))
+            duree = time.monotonic() - debut
+
+        self.assertEqual(len(hits), 3)
+        self.assertIsNone(erreur)
+        # En série il faudrait 3 × delai ; en parallèle, un seul delai (marge
+        # large pour ne pas rendre le test sensible à la charge de la CI).
+        self.assertLess(duree, delai * 2, f"cascade encore sérialisée ({duree:.2f}s)")
+
+    def test_l_ordre_de_cascade_est_preserve_malgre_l_ordre_d_arrivee(self):
+        """L'ancre d'identité est la 1re source de la cascade, pas la plus rapide."""
+        sources = [
+            self._Lente("claude", 0.30, wine=NormalizedWine(domaine_nom="D", cuvee_nom="C", source="claude")),
+            self._Lente("wineapi", 0.01, wine=NormalizedWine(domaine_nom="D", cuvee_nom="C", source="wineapi")),
+            self._Lente("lwin", 0.15, wine=NormalizedWine(domaine_nom="D", cuvee_nom="C", source="lwin")),
+        ]
+        with self._sources(*sources):
+            hits, _ = views._cascade_multi(lambda p: p.lookup_by_text("q"))
+        self.assertEqual([h.source for h in hits], ["claude", "wineapi", "lwin"])
+
+    def test_l_erreur_remontee_est_la_premiere_dans_l_ordre_de_cascade(self):
+        """Déterminisme : deux sources en erreur -> toujours la même remontée."""
+        sources = [
+            self._Lente("claude", 0.20, erreur=EnrichmentError(429, "quota claude")),
+            self._Lente("wineapi", 0.01, erreur=EnrichmentError(502, "clé wineapi")),
+        ]
+        with self._sources(*sources):
+            hits, erreur = views._cascade_multi(lambda p: p.lookup_by_text("q"))
+        self.assertEqual(hits, [])
+        self.assertEqual(erreur.status, 429)  # claude est 1re dans la cascade
+
+    def test_une_source_en_erreur_n_empeche_pas_les_autres(self):
+        sources = [
+            self._Lente("claude", 0.01, erreur=EnrichmentError(429, "quota")),
+            self._Lente("wineapi", 0.01, wine=NormalizedWine(domaine_nom="D", cuvee_nom="C", source="wineapi")),
+        ]
+        with self._sources(*sources):
+            hits, erreur = views._cascade_multi(lambda p: p.lookup_by_text("q"))
+        self.assertEqual([h.source for h in hits], ["wineapi"])
+        self.assertIsNotNone(erreur)
+
+    def test_une_exception_inattendue_remonte_comme_avant(self):
+        """Seule EnrichmentError est absorbée : le reste ne doit pas être avalé."""
+        class Cassee:
+            name = "cassee"
+
+            def lookup_by_text(self, query):
+                raise RuntimeError("bug provider")
+
+        with self._sources(Cassee()):
+            with self.assertRaises(RuntimeError):
+                views._cascade_multi(lambda p: p.lookup_by_text("q"))
+
+    def test_aucune_source_activee(self):
+        with self._sources():
+            self.assertEqual(views._cascade_multi(lambda p: p.lookup_by_text("q")), ([], None))
+
+
+class ReductionImageTests(SimpleTestCase):
+    """La photo envoyée aux sources distantes est réduite une fois pour toutes."""
+
+    @staticmethod
+    def _photo(largeur, hauteur, mode="RGB", fmt="JPEG", qualite=92):
+        from PIL import Image
+
+        image = Image.effect_noise((largeur, hauteur), 60).convert(mode)
+        tampon = BytesIO()
+        image.save(tampon, fmt, **({"quality": qualite} if fmt == "JPEG" else {}))
+        return tampon.getvalue()
+
+    def test_une_photo_de_telephone_est_fortement_allegee(self):
+        from PIL import Image
+
+        original = self._photo(4032, 3024)
+        reduite, content_type = image_utils.reduire(original, "image/jpeg")
+
+        self.assertLess(len(reduite), len(original) / 4)
+        self.assertEqual(content_type, "image/jpeg")
+        self.assertEqual(max(Image.open(BytesIO(reduite)).size), image_utils.TAILLE_MAX)
+
+    def test_une_photo_deja_petite_est_laissee_telle_quelle(self):
+        original = self._photo(800, 600)
+        reduite, content_type = image_utils.reduire(original, "image/jpeg")
+        self.assertEqual(reduite, original)
+        self.assertEqual(content_type, "image/jpeg")
+
+    def test_le_png_transparent_est_aplati_sans_fond_noir(self):
+        from PIL import Image
+
+        transparent = Image.new("RGBA", (2000, 1500), (255, 0, 0, 0))
+        tampon = BytesIO()
+        transparent.save(tampon, "PNG")
+
+        reduite, content_type = image_utils.reduire(tampon.getvalue(), "image/png")
+        self.assertEqual(content_type, "image/jpeg")
+        # Fond blanc (et non noir) là où l'original était transparent.
+        self.assertGreater(min(Image.open(BytesIO(reduite)).convert("RGB").getpixel((5, 5))), 200)
+
+    def test_une_image_illisible_est_renvoyee_intacte(self):
+        """Best-effort : jamais d'échec d'identification pour un redimensionnement."""
+        self.assertEqual(image_utils.reduire(b"pas une image", "image/jpeg"),
+                         (b"pas une image", "image/jpeg"))
+
+
+class ScanEtiquetteChargeUtileTests(APITestCase):
+    """L'OCR local lit l'original ; les sources distantes reçoivent la réduction."""
+
+    def setUp(self):
+        cache.clear()
+        self.client.force_authenticate(User.objects.create_user("alice", password="x"))
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_chaque_source_recoit_la_charge_qui_lui_convient(self, mock_providers):
+        recu = {}
+
+        class Source:
+            def __init__(self, name, pleine):
+                self.name, self.image_pleine_resolution = name, pleine
+
+            def lookup_by_image(self, data, content_type):
+                recu[self.name] = len(data)
+                return None
+
+        mock_providers.return_value = [Source("claude", False), Source("lwin", True)]
+
+        photo = ReductionImageTests._photo(3000, 2250)
+        self.client.post(
+            reverse("scan-etiquette"),
+            {"image": SimpleUploadedFile("etiquette.jpg", photo, content_type="image/jpeg")},
+            format="multipart",
+        )
+
+        self.assertEqual(recu["lwin"], len(photo))  # OCR local : pleine résolution
+        self.assertLess(recu["claude"], len(photo))  # source distante : réduite
 
 
 class FusionMultiSourceTests(APITestCase):
