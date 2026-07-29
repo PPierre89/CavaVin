@@ -28,7 +28,8 @@ un **conteneur Docker unique** (Django REST + SPA React, SQLite).
   mutualisé, stock, activité), état des sources d'enrichissement, gestion des comptes
   (activation, rôle staff, suppression), **paramétrage à chaud des clés d'API** (override en base,
   prioritaire sur le `.env`, sans redémarrage) et **import du référentiel LWIN** par upload de dump.
-- **SPA mobile-first** (thème sombre lie-de-vin/or), authentification JWT.
+- **SPA mobile-first** (thème sombre lie-de-vin/or), authentification JWT à **session glissante**
+  (le jeton de rafraîchissement tourne avec l'usage : pas de reconnexion périodique imposée).
 
 ## Stack
 
@@ -91,6 +92,7 @@ carnet) strictement filtrées par propriétaire côté serveur.
 | `GET /api/recherche-vins/?q=` | Recherche dynamique (autocomplétion) dans le référentiel LWIN |
 | `GET /api/cuvees/{id}/fiche/` | Fiche vin consolidée (référentiel + conseil + enrichissement) |
 | `POST /api/cuvees/{id}/rafraichir/` | Re-synchro wineapi (cooldown anti-quota) |
+| `GET /api/bouteilles/` | Stock privé — chaque ligne porte les attributs de sa cuvée (couleur, appellation, région, valeur marché) et sa fenêtre d'apogée calculée |
 | `POST /api/bouteilles/{id}/consommer/` | Sortie de stock atomique + journal |
 | `/api/notes-degustation/` | Carnet de dégustation (privé) |
 | `GET /api/auth/me/` | Profil du compte connecté (rôle `is_staff`) |
@@ -143,6 +145,14 @@ manuelle.
 
 Tout hit est **mis en cache en base** ; les endpoints d'identification sont protégés par un
 throttle et la re-synchro par un cooldown par vin. Détail complet dans Swagger.
+
+Un vin n'est identifié **qu'une fois** : les identités fortes d'un relevé (code-barres, référence
+externe, code LWIN) sont toutes confrontées au catalogue avant d'envisager une création, et celles
+qui manquaient à la cuvée retrouvée viennent la compléter. Scanner le code-barres d'un vin déjà
+connu par son nom l'enrichit donc de ce code-barres : le scan suivant devient un **hit local**, sans
+appel externe ni quota consommé. Un code-barres inconnu ne conclut pas (un même vin se décline en
+plusieurs conditionnements) ; une référence externe ou un code LWIN inconnus, eux, désignent bien un
+vin distinct.
 
 ## CI/CD
 

@@ -1,9 +1,14 @@
 # Revue d'architecture — le référentiel comme socle de vérité
 
-> **Statut** : proposition d'architecture (revue). Ce document analyse l'existant
-> et propose une trajectoire ; il n'engage aucune migration tant qu'une phase
-> n'a pas été validée. Il complète `README.md` (spec produit) et `CLAUDE.md`
-> (conventions).
+> **Statut** : revue d'architecture, **phases 0 à 4 livrées** (seule la phase 5,
+> le cadre scraping, reste optionnelle et non engagée). Ce document complète
+> `README.md` (spec produit) et `CLAUDE.md` (conventions).
+>
+> **Comment lire ce document.** Les sections 2 et 3 (« État actuel »,
+> « Diagnostic ») sont l'instantané pris **au moment de la revue** : elles
+> décrivent les défauts qui ont motivé la trajectoire, pas le code d'aujourd'hui.
+> Les sections 4 et 5 décrivent la cible et les règles d'arbitrage **en vigueur**.
+> Le §6 fait foi sur ce qui est réellement implémenté, phase par phase.
 
 ## 1. Vision cible
 
@@ -183,6 +188,11 @@ id_externe)`.
 (`UniqueConstraint`, partielle pour tolérer les valeurs vides) pour rendre les
 doublons *impossibles*, pas seulement improbables.
 
+> **Force ≠ ordre d'essai.** Cet ordre classe la *fiabilité* d'une clé quand deux
+> se contredisent. L'ordre dans lequel `ingest` les interroge est distinct (et
+> l'implémentation en place le fait déjà) : cf. §5, règle 0 — ce qui départage
+> une clé n'est pas sa force mais la conclusion qu'on peut tirer de son **absence**.
+
 ### 4.2 `SourceObservation` — le brut par canal (nouveau)
 
 Une ligne par relevé de canal (append-only, jamais écrasée) :
@@ -240,6 +250,33 @@ en repli offline). La logique pure reste testable en injectant la table.
 Fonction `consolidate(cuvee)` — pure autant que possible, déclenchée après chaque
 `ingest` et rejouable en masse (commande `manage.py reconsolider`) :
 
+0. **Résoudre l'identité** (en amont, dans `ingest.upsert_cuvee`) : confronter au
+   catalogue **toutes** les identités fortes affirmées par le relevé, dans l'ordre
+   `code_barres` > `reference_externe_id` > `lwin_code`, avant d'envisager une
+   création. Cet ordre reflète la spécificité du chemin d'entrée (le scan d'un
+   code-barres désigne un conditionnement précis, la référence externe un vin,
+   le code LWIN une identité parfois partagée) ; mais le point décisif n'est pas
+   l'ordre — c'est la conclusion que chaque clé autorise :
+
+   | Clé | Trouvée | Absente du catalogue |
+   |---|---|---|
+   | `code_barres` | c'est ce vin | **non concluant** → essayer la clé suivante |
+   | `reference_externe_id` | c'est ce vin | décisif → vin distinct, on crée |
+   | `lwin_code` | c'est ce vin | décisif → vin distinct, on crée |
+
+   L'asymétrie est délibérée : un même vin se décline en plusieurs
+   conditionnements, donc en plusieurs code-barres, alors qu'un identifiant
+   wineapi est 1:1 avec un vin. Sans identité forte au relevé, repli sur
+   `(domaine, nom)`.
+
+   Deux corollaires : (a) les identités **manquantes** de la cuvée retrouvée sont
+   complétées par celles du relevé (`_completer_identites`), de sorte qu'un vin
+   d'abord identifié par son nom puis scanné finisse par porter son code-barres —
+   le scan suivant est alors un hit local, sans quota ; (b) une identité **déjà
+   revendiquée** par une autre cuvée n'est jamais volée ni recopiée (deux vins
+   distincts peuvent exceptionnellement partager un code LWIN) : le premier
+   arrivé la garde, plutôt que de violer la contrainte et de faire échouer le scan.
+
 1. **Rassembler** les `SourceObservation` de la cuvée.
 2. **Par champ**, choisir la valeur gagnante selon une politique explicite :
    - **identité** (couleur, appellation, cépages) : priorité à la confiance la
@@ -273,6 +310,14 @@ respecte les conventions (`makemigrations` commité, tests, commits conventionne
   Migration `0008_dedup_identite_cuvee` : dédoublonne d'abord les `Domaine`
   scindés et les `Cuvee` en double sur une clé forte (en re-pointant le stock
   privé), puis pose les contraintes. → traite D3.
+
+  *Correctif ultérieur — résolution multi-clés.* Poser les contraintes a révélé
+  un angle mort : `upsert_cuvee` ne testait que la **première** clé forte
+  renseignée par le relevé. Un vin déjà connu par sa `reference_externe_id` mais
+  scanné par un code-barres inédit n'était donc pas retrouvé, et sa création
+  violait la contrainte d'unicité de la référence externe — `IntegrityError`,
+  soit un **500 sur le scan**. La résolution confronte désormais *toutes* les
+  identités du relevé, avec une asymétrie assumée (cf. §5, règle 0).
 
 - **Phase 1 — `SourceObservation` (feat). ✅ *Faite.***
   Table `SourceObservation` (append-only : `cuvee`, `canal`, `releve_le`,
