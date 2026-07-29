@@ -9,7 +9,7 @@ import {
   identifyByText,
   isValidEan,
   MAX_LABEL_SIZE,
-  searchLocalCuvees,
+  searchCatalogue,
   searchReferentiel,
   type IdentifiedWine,
   type RechercheReferentiel,
@@ -26,8 +26,9 @@ import { COULEUR_VARS, type Couleur, type Cuvee } from '../types'
  *
  *  Méthodes de repli (dépliables via « Autre méthode ») :
  *    • recherche par nom — dynamique et économe en quota : au fil de la
- *      frappe, on propose les cuvées DÉJÀ en base (filtrage en mémoire,
- *      sans réseau). L'appel à wineapi.io (consommateur de quota) n'est
+ *      frappe, on propose les cuvées DÉJÀ en base et les références LWIN
+ *      (recherches serveur, sans source externe). L'appel à wineapi.io
+ *      (consommateur de quota) n'est
  *      déclenché qu'explicitement, via 🔎 / « Rechercher en ligne », ou
  *      par Entrée quand aucune cuvée locale ne correspond.
  *    • code-barres : scan « live » (caméra, si contexte sécurisé), sinon PHOTO
@@ -89,12 +90,8 @@ function useBarcodeScanner(onDetected: (ean: string) => void) {
 
 export function VinIdentification({
   onIdentified,
-  cuvees,
 }: {
   onIdentified: (wine: IdentifiedWine, sourceLabel: string) => void
-  // Catalogue déjà chargé côté client : sert la recherche locale « au fil de la
-  // frappe » sans aucun appel réseau (donc sans consommer le quota wineapi).
-  cuvees: Cuvee[]
 }) {
   const toast = useToast()
   // Deux entrées fichier distinctes : l'une ouvre l'appareil photo (capture),
@@ -201,30 +198,33 @@ export function VinIdentification({
   }
 
   const q = search.trim()
-  // Suggestions locales (mémoire, zéro appel réseau) recalculées à chaque frappe.
-  const matches = useMemo(() => searchLocalCuvees(cuvees, q), [cuvees, q])
 
-  // Recherche dynamique dans le référentiel LWIN local (côté serveur, aucun
-  // quota externe) : déclenchée au fil de la frappe avec un debounce, le
-  // dernier mot étant traité comme un préfixe (« marg » -> « Margaux »).
+  // Recherche dynamique au fil de la frappe (debounce commun), sur deux fronts
+  // 100 % locaux côté serveur — aucun quota externe consommé :
+  //  - le catalogue mutualisé (cuvées déjà connues), interrogé en entier ;
+  //  - le référentiel LWIN, dont le dernier mot est traité comme un préfixe
+  //    (« marg » -> « Margaux »).
+  const [matches, setMatches] = useState<Cuvee[]>([])
   const [referentiel, setReferentiel] = useState<RechercheReferentiel>({
     evaluation: null,
     resultats: [],
   })
   useEffect(() => {
     if (q.length < 2) {
+      setMatches([])
       setReferentiel({ evaluation: null, resultats: [] })
       return
     }
     let annule = false
     const timer = setTimeout(async () => {
-      try {
-        const recherche = await searchReferentiel(q)
-        if (!annule) setReferentiel(recherche)
-      } catch {
-        // Référentiel non importé / réseau : la recherche locale reste servie.
-        if (!annule) setReferentiel({ evaluation: null, resultats: [] })
-      }
+      // Les deux recherches sont indépendantes : l'échec de l'une (référentiel
+      // LWIN non importé, réseau) ne doit pas priver l'autre de ses résultats.
+      const [cat, ref] = await Promise.allSettled([searchCatalogue(q), searchReferentiel(q)])
+      if (annule) return
+      setMatches(cat.status === 'fulfilled' ? cat.value : [])
+      setReferentiel(
+        ref.status === 'fulfilled' ? ref.value : { evaluation: null, resultats: [] },
+      )
     }, 300)
     return () => {
       annule = true
@@ -233,7 +233,7 @@ export function VinIdentification({
   }, [q])
 
   // Écarte les suggestions du référentiel déjà présentes dans le catalogue
-  // local affiché au-dessus (même code LWIN).
+  // affiché au-dessus (même code LWIN).
   const suggestionsRef = useMemo(() => {
     const locaux = new Set(matches.map((c) => c.lwin_code).filter(Boolean))
     return referentiel.resultats.filter((s) => !locaux.has(s.lwin)).slice(0, 4)

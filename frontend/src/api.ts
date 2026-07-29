@@ -34,7 +34,13 @@ export class ApiError extends Error {
   }
 }
 
-async function refreshAccess(): Promise<boolean> {
+// Refresh en cours, partagé : l'app lance plusieurs requêtes en parallèle et
+// elles expirent ensemble. Sans ce verrou, chacune déclenchait son propre
+// refresh — rafale inutile sur le throttle « auth », et course entre les jetons
+// tournants renvoyés (le serveur a ROTATE_REFRESH_TOKENS).
+let refreshEnCours: Promise<boolean> | null = null
+
+async function demanderRefresh(): Promise<boolean> {
   const refresh = getRefresh()
   if (!refresh) return false
   const res = await fetch('/api/auth/token/refresh/', {
@@ -44,11 +50,21 @@ async function refreshAccess(): Promise<boolean> {
   })
   if (!res.ok) return false
   const data = await res.json()
-  setTokens(data.access)
+  // Le serveur fait tourner le jeton de refresh : le conserver prolonge la
+  // session au fil de l'usage. L'ignorer figeait la session sur le jeton initial,
+  // donc déconnectait tout utilisateur au bout de 7 jours même actif.
+  setTokens(data.access, data.refresh)
   return true
 }
 
-async function raw(method: string, path: string, body?: unknown, isForm = false): Promise<Response> {
+function refreshAccess(): Promise<boolean> {
+  refreshEnCours ??= demanderRefresh().finally(() => {
+    refreshEnCours = null
+  })
+  return refreshEnCours
+}
+
+async function raw(method: string, path: string, body?: unknown): Promise<Response> {
   const headers: Record<string, string> = {}
   const access = getAccess()
   if (access) headers['Authorization'] = `Bearer ${access}`
@@ -59,7 +75,6 @@ async function raw(method: string, path: string, body?: unknown, isForm = false)
     headers['Content-Type'] = 'application/json'
     payload = JSON.stringify(body)
   }
-  void isForm
   return fetch(path, { method, headers, body: payload, credentials: 'same-origin' })
 }
 

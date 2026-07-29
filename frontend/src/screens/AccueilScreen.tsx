@@ -24,7 +24,7 @@ function mouvementLabel(type: string, quantite: number): { txt: string; gold: bo
 }
 
 export default function AccueilScreen({ onAjouter }: { onAjouter: () => void }) {
-  const { bouteilles, cuveeColor, mouvements, cuvees } = useData()
+  const { bouteilles, cuveeColor, mouvements } = useData()
 
   const [fiche, setFiche] = useState<Bouteille | null>(null)
   const [options, setOptions] = useState<Bouteille | null>(null)
@@ -42,10 +42,8 @@ export default function AccueilScreen({ onAjouter }: { onAjouter: () => void }) 
   )
   const nbABoire = aBoire.reduce((n, b) => n + b.quantite, 0)
 
-  const regionOf = (b: Bouteille) => {
-    const c = cuvees.find((c) => c.id === b.cuvee)
-    return c?.region || c?.appellation || ''
-  }
+  // La région voyage avec la ligne de stock : plus de balayage du catalogue.
+  const regionOf = (b: Bouteille) => b.region || b.appellation || ''
 
   const bottleName = (id: number) => {
     const b = bouteilles.find((x) => x.id === id)

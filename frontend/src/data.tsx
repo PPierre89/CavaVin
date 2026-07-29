@@ -3,12 +3,12 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
 import { api, apiAllPages } from './api'
-import type { Bouteille, Cave, Couleur, Cuvee, Emplacement, Mouvement, Rangement } from './types'
+import type { Bouteille, Cave, Couleur, Emplacement, Mouvement, Rangement } from './types'
 
 interface DataCtx {
   caves: Cave[]
@@ -17,7 +17,6 @@ interface DataCtx {
   emplacements: Emplacement[]
   bouteilles: Bouteille[]
   rangements: Rangement[]
-  cuvees: Cuvee[]
   mouvements: Mouvement[]
   loading: boolean
   loadCaves: () => Promise<void>
@@ -35,22 +34,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [emplacements, setEmplacements] = useState<Emplacement[]>([])
   const [bouteilles, setBouteilles] = useState<Bouteille[]>([])
   const [rangements, setRangements] = useState<Rangement[]>([])
-  const [cuvees, setCuvees] = useState<Cuvee[]>([])
   const [mouvements, setMouvements] = useState<Mouvement[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Numéro du dernier chargement demandé : une réponse plus ancienne qui arrive
+  // après (changement rapide de cave, refresh concurrent) est ignorée, sinon
+  // elle réaffiche les données de la cave précédente.
+  const demande = useRef(0)
+
   const refreshFor = useCallback(async (cid: number | null) => {
-    const [emps, btls, rgs, cvs, mvts] = await Promise.all([
+    const moi = ++demande.current
+    const [emps, btls, rgs, mvts] = await Promise.all([
       cid ? apiAllPages<Emplacement>(`/api/emplacements/?cave=${cid}`) : Promise.resolve([]),
       apiAllPages<Bouteille>('/api/bouteilles/'),
       cid ? apiAllPages<Rangement>(`/api/rangements/?emplacement__cave=${cid}`) : Promise.resolve([]),
-      apiAllPages<Cuvee>('/api/cuvees/'),
       api<{ results?: Mouvement[] } | Mouvement[]>('GET', '/api/mouvements/?ordering=-date'),
     ])
+    if (moi !== demande.current) return // une demande plus récente a pris la main
     setEmplacements(emps)
     setBouteilles(btls)
     setRangements(rgs)
-    setCuvees(cvs)
     setMouvements((Array.isArray(mvts) ? mvts : mvts.results || []).slice(0, 30))
   }, [])
 
@@ -79,12 +82,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const colorMap = useMemo(() => {
-    const m = new Map<number, Couleur>()
-    cuvees.forEach((c) => m.set(c.id, c.couleur))
-    return m
-  }, [cuvees])
-  const cuveeColor = useCallback((b: Bouteille): Couleur => colorMap.get(b.cuvee) ?? 'AUTRE', [colorMap])
+  // La couleur voyage désormais avec la ligne de stock.
+  const cuveeColor = useCallback((b: Bouteille): Couleur => b.couleur ?? 'AUTRE', [])
 
   return (
     <Ctx.Provider
@@ -95,7 +94,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
         emplacements,
         bouteilles,
         rangements,
-        cuvees,
         mouvements,
         loading,
         loadCaves,

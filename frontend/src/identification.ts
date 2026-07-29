@@ -99,29 +99,21 @@ export async function decodeBarcodeFromImage(file: File): Promise<string> {
   }
 }
 
-/** Normalise une chaîne pour la recherche : minuscules, sans accents ni espaces superflus. */
-function normalize(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '') // retire les diacritiques (é -> e, ô -> o…)
-    .trim()
-}
-
 /**
- * Recherche dynamique, en mémoire, dans le catalogue déjà chargé côté client —
- * aucun appel réseau, donc AUCUN quota wineapi consommé. C'est la brique de la
- * recherche « au fil de la frappe » : elle propose d'abord les cuvées déjà
- * connues (évitant un appel externe pour un vin déjà en base). Tous les mots de
- * la requête doivent apparaître dans le domaine, le nom, l'appellation ou la
- * région de la cuvée.
+ * Recherche dans le catalogue mutualisé — requête serveur, donc AUCUN quota
+ * externe consommé. C'est la brique de la recherche « au fil de la frappe » :
+ * elle propose d'abord les cuvées déjà connues, évitant un appel externe pour un
+ * vin déjà en base. Tous les mots de la requête doivent apparaître dans le
+ * domaine, le nom, l'appellation ou la région de la cuvée (filtre `search` de
+ * l'API). Elle interroge tout le catalogue, là où l'ancienne version filtrait la
+ * copie chargée côté client — copie plafonnée, donc muette dès que le catalogue
+ * communautaire dépassait quelques centaines de cuvées.
  */
-export function searchLocalCuvees(cuvees: Cuvee[], query: string, limit = 6): Cuvee[] {
-  const mots = normalize(query).split(/\s+/).filter(Boolean)
-  if (mots.length === 0) return []
-  const matches = cuvees.filter((c) => {
-    const foin = normalize(`${c.domaine_nom} ${c.nom} ${c.appellation ?? ''} ${c.region ?? ''}`)
-    return mots.every((m) => foin.includes(m))
-  })
-  return matches.slice(0, limit)
+export async function searchCatalogue(query: string, limit = 6): Promise<Cuvee[]> {
+  const data = await api<{ results?: Cuvee[] } | Cuvee[]>(
+    'GET',
+    `/api/cuvees/?search=${encodeURIComponent(query)}`,
+  )
+  const cuvees = Array.isArray(data) ? data : (data?.results ?? [])
+  return cuvees.slice(0, limit)
 }

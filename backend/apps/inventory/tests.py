@@ -164,6 +164,61 @@ class NoteDegustationTests(APITestCase):
         self.assertEqual(len(results), 1)
 
 
+class AttributsCuveeTests(APITestCase):
+    """La ligne de stock porte les attributs de sa cuvée : les écrans de stock
+    n'ont plus à télécharger tout le catalogue mutualisé pour les afficher."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="alice", password="x")
+        domaine = Domaine.objects.create(nom="Château Test", region="Bordeaux")
+        self.cuvee = Cuvee.objects.create(
+            domaine=domaine,
+            nom="Grand Vin",
+            couleur=Cuvee.Couleur.ROUGE,
+            appellation="Margaux",
+            region="Bordeaux",
+            pays="France",
+            classification="1er Grand Cru Classé",
+            prix_min="120.00",
+            prix_max="180.00",
+            devise="EUR",
+        )
+        self.client.force_authenticate(self.user)
+
+    def test_liste_bouteilles_porte_les_attributs_de_la_cuvee(self):
+        Bouteille.objects.create(
+            proprietaire=self.user, cuvee=self.cuvee, millesime=2015, quantite=2
+        )
+        resp = self.client.get(reverse("bouteille-list"))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        ligne = resp.data["results"][0]
+        self.assertEqual(ligne["couleur"], Cuvee.Couleur.ROUGE)
+        self.assertEqual(ligne["appellation"], "Margaux")
+        self.assertEqual(ligne["region"], "Bordeaux")
+        self.assertEqual(ligne["pays"], "France")
+        self.assertEqual(ligne["classification"], "1er Grand Cru Classé")
+        self.assertEqual(ligne["prix_min"], "120.00")
+        self.assertEqual(ligne["prix_max"], "180.00")
+        self.assertEqual(ligne["devise"], "EUR")
+
+    def test_liste_bouteilles_a_un_nombre_de_requetes_constant(self):
+        """Garde-fou anti-N+1 : ajouter des lignes ne doit pas ajouter de requêtes."""
+        Bouteille.objects.create(proprietaire=self.user, cuvee=self.cuvee, quantite=1)
+        with self.assertNumQueries(3):  # count + page + prefetch cépages
+            self.client.get(reverse("bouteille-list"))
+
+        autre = Cuvee.objects.create(
+            domaine=self.cuvee.domaine, nom="Second Vin", couleur=Cuvee.Couleur.BLANC
+        )
+        for millesime in (2016, 2017, 2018):
+            Bouteille.objects.create(
+                proprietaire=self.user, cuvee=autre, millesime=millesime, quantite=1
+            )
+        with self.assertNumQueries(3):
+            resp = self.client.get(reverse("bouteille-list"))
+        self.assertEqual(len(resp.data["results"]), 4)
+
+
 class ApogeeStatutTests(APITestCase):
     """La fenêtre d'apogée et le statut sont calculés (couleur × millésime × année)."""
 

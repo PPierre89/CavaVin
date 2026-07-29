@@ -146,8 +146,8 @@ export function FiltresSheet({
     const regions = new Set<string>()
     const millesimes = new Set<string>()
     for (const l of lignes) {
-      if (l.cuvee?.pays) pays.add(l.cuvee.pays)
-      if (l.cuvee?.region) regions.add(l.cuvee.region)
+      if (l.ref.pays) pays.add(l.ref.pays)
+      if (l.ref.region) regions.add(l.ref.region)
       millesimes.add(String(l.ref.millesime ?? 'NM'))
     }
     const millListe = [...millesimes].sort((a, b) => {
