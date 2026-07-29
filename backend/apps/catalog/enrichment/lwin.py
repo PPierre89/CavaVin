@@ -364,10 +364,43 @@ def _classement(texte: str, ocr: bool = False, prefixe: bool = False) -> list[tu
     # pas « ancrer » Rouget par correspondance floue avec lui-même.
     tokens_distinctifs = tokens_entree - _GENERIQUES
 
+    # Mémos de requête : `idf`, `scores_vocab` et `tokens_distinctifs` sont fixés
+    # pour toute la durée du classement, si bien que le poids d'un token et le
+    # verdict d'une ancre ne dépendent que du token. Sans ces mémos, les mêmes
+    # valeurs étaient recalculées une fois par candidate — sur un référentiel
+    # réel, des centaines de milliers de fois par recherche (cf. profil : le
+    # coût dominant était cette boucle Python, pas la correspondance floue).
+    _memo_ancre: dict[str, bool] = {}
+    _memo_poids: dict[str, float] = {}
+    _memo_idf: dict[str, float] = {}
+
     def ancre_trouvee(ancre: str) -> bool:
-        if ancre in tokens_distinctifs:
-            return True
-        return max((fuzz.ratio(ancre, t) for t in tokens_distinctifs), default=0.0) >= _TOKEN_RATIO
+        verdict = _memo_ancre.get(ancre)
+        if verdict is None:
+            if ancre in tokens_distinctifs:
+                verdict = True
+            else:
+                verdict = max(
+                    (fuzz.ratio(ancre, t) for t in tokens_distinctifs), default=0.0
+                ) >= _TOKEN_RATIO
+            _memo_ancre[ancre] = verdict
+        return verdict
+
+    def poids_token(token: str) -> float:
+        """Poids IDF d'un token, pondéré par la qualité de sa correspondance."""
+        p = _memo_poids.get(token)
+        if p is None:
+            p = idf.get(token, 1.0) * (scores_vocab.get(token, _TOKEN_RATIO) / 100) ** 2
+            _memo_poids[token] = p
+        return p
+
+    def poids_idf(token: str) -> float:
+        """Poids IDF brut d'un token (couverture attendue, sans pondération)."""
+        p = _memo_idf.get(token)
+        if p is None:
+            p = idf.get(token, 1.0)
+            _memo_idf[token] = p
+        return p
 
     # Classement (identification) : une référence dont TOUS les tokens requis
     # sont retrouvés à l'identique prime toujours sur une correspondance floue
@@ -383,28 +416,23 @@ def _classement(texte: str, ocr: bool = False, prefixe: bool = False) -> list[tu
         if ancres and not ancres_trouvees:
             continue  # nom générique (« Riesling ») sans son producteur
         bonus_trouves = [t for t in bonus if scores_vocab.get(t, 0.0) >= _TOKEN_RATIO]
-        poids_ancres = sum(
-            idf.get(t, 1.0) * (scores_vocab.get(t, _TOKEN_RATIO) / 100) ** 2
-            for t in bonus_trouves
-        )
+        poids_ancres = sum(poids_token(t) for t in bonus_trouves)
         if ancres:
             # Pondéré par la couverture du producteur : un producteur reconnu
             # en entier (« Mayacamas Vineyards », 2/2) doit peser plus que
             # deux mots géographiques sur sept (« Premiere Napa Valley
             # (Hewitt…) » accroché par « napa » + « valley », 2/7).
             poids_ancres += (len(ancres_trouvees) / len(ancres)) * sum(
-                idf.get(t, 1.0) * (scores_vocab.get(t, _TOKEN_RATIO) / 100) ** 2
-                for t in ancres_trouvees
+                poids_token(t) for t in ancres_trouvees
             )
 
         if prefixe:
             # Autocomplétion : couverture pondérée partielle admise, mais au
             # moins un token distinctif doit soutenir le candidat.
-            poids_total = sum(idf.get(t, 1.0) for t in requis)
-            poids_trouve = sum(
-                idf.get(t, 1.0) * (s / 100) ** 2
-                for t, s in zip(requis, scores) if s >= _TOKEN_RATIO
-            )
+            # (Un token retenu ici a `s >= _TOKEN_RATIO`, donc `s` *est*
+            # `scores_vocab[t]` : `poids_token(t)` calcule le même produit.)
+            poids_total = sum(poids_idf(t) for t in requis)
+            poids_trouve = sum(poids_token(t) for t, s in zip(requis, scores) if s >= _TOKEN_RATIO)
             if poids_trouve < poids_total * 0.5:
                 continue
             distinctif = ancres_trouvees or any(
@@ -433,7 +461,7 @@ def _classement(texte: str, ocr: bool = False, prefixe: bool = False) -> list[tu
             # token unique exige ≥ 6 caractères : sur photos réelles, un junk
             # de 5 lettres (« rossa ») suffisait à accrocher une référence.
             continue
-        poids = sum(idf.get(t, 1.0) * (s / 100) ** 2 for t, s in zip(requis, scores))
+        poids = sum(poids_token(t) for t in requis)
         classement.append((
             # « Exact avant flou » vaut pour une saisie humaine (« La Tâche »
             # exact bat « Taches » flou) mais pas pour l'OCR, où les
@@ -661,6 +689,9 @@ class LwinProvider(EnrichmentProvider):
     """
 
     name = "lwin"
+    # Rien ne transite par le réseau ici : on lit la photo d'origine, dont la
+    # pleine résolution fait tout l'intérêt de la phase de recadrage (§ _ocr).
+    image_pleine_resolution = True
 
     @property
     def enabled(self) -> bool:  # type: ignore[override]

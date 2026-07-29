@@ -185,6 +185,19 @@ claimed by another cuvée is never taken — first claimant keeps it. See
 per-canal `SourceObservation`s and `consolidation.consolider` arbitrates each field by channel
 confidence (best of each: identity from one, prices from another, description from a third).
 
+Since every enabled source is called anyway, they are queried **in parallel** (thread pool — the wait
+is I/O: network, plus the tesseract subprocess), so an identification costs the *slowest* source
+rather than the sum. Two invariants the tests pin down: `hits` stays in **cascade order**, not
+completion order (the first anchors identity), and the surfaced `EnrichmentError` is the first in that
+same order, so it is deterministic. Worker threads must `connection.close()` — Django only reaps the
+connection of the request thread — and only there: never in the request thread itself.
+
+**Label payload.** `enrichment.image.reduire` shrinks the photo **once** before the cascade (longest
+side 1568 px, the point past which vision APIs downscale anyway); every remote source shares that
+version, cutting a ~9 MB phone photo to well under 1 MB before base64. Providers that need the
+original set `image_pleine_resolution = True` — only `lwin` does, because its crop pass re-reads the
+text zone at full resolution, which is exactly what rescues a small label in a wide frame.
+
 **Runtime source control (admin, `runtime_config` + `quotas`).** Each provider's `enabled` combines its
 prerequisites (key present…) with a runtime toggle `source_activee(name, default_env)` (DB override
 `SOURCE_ENABLED_<name>` > `.env`). Every real outbound call increments a monthly counter

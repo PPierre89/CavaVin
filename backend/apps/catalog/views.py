@@ -1,8 +1,10 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.conf import settings
 from django.core.cache import cache
+from django.db import connection
 from django.db.models import DecimalField, ExpressionWrapper, F, Max, Min, Sum
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -20,6 +22,7 @@ from .enrichment import (
     refresh_wineapi_detail,
     wineapi_detail,
 )
+from .enrichment.image import reduire as reduire_image
 from .enrichment.lwin import LwinProvider, evaluer_confiance, rechercher_lwin
 from .enrichment.normalize import guess_couleur, parse_vintage, strip_vintage
 from .ingest import synchroniser_wineapi, upsert_cuvee, upsert_multi
@@ -66,6 +69,34 @@ def _enriched_response(wine, cuvee, created):
     )
 
 
+def _interroger(provider, appel):
+    """Exécute le lookup d'une source et neutralise l'erreur remontable.
+
+    Renvoie ``(wine, erreur)`` — l'un des deux est toujours ``None``. Seule
+    ``EnrichmentError`` (quota/clé) est interceptée : les erreurs réseau sont
+    déjà traduites en miss par les providers, et tout le reste doit remonter
+    comme avant la parallélisation.
+    """
+    try:
+        return appel(provider), None
+    except EnrichmentError as exc:
+        return None, exc
+
+
+def _interroger_en_thread(provider, appel):
+    """``_interroger`` dans un thread de travail de la cascade."""
+    try:
+        return _interroger(provider, appel)
+    finally:
+        # Django ouvre une connexion par thread et ne la referme qu'en fin de
+        # requête HTTP — ce thread-ci n'en est pas un. Sans cela, chaque
+        # identification laisserait filer autant de connexions SQLite que de
+        # sources interrogées (quotas.compter écrit depuis le thread). À ne
+        # surtout pas faire dans le thread de la requête : on y fermerait la
+        # connexion de la requête elle-même.
+        connection.close()
+
+
 def _cascade_multi(appel):
     """Interroge **toutes** les sources activées (fusion multi-sources) et collecte
     leurs résultats, au lieu de s'arrêter au premier hit.
@@ -76,22 +107,37 @@ def _cascade_multi(appel):
     invalide) d'une source n'interrompent pas les autres : on les mémorise pour ne
     les renvoyer qu'en dernier recours (aucun hit du tout).
 
-    Renvoie ``(hits, erreur)`` : la liste des résultats dans l'ordre de la cascade
-    (le 1er sert d'ancre d'identité, cf. ``upsert_multi``) et la dernière erreur
-    éventuelle.
+    Les sources sont interrogées **en parallèle** : elles sont indépendantes et
+    toutes appelées de toute façon (fusion multi-sources), si bien que la latence
+    d'une identification est celle de la source la plus lente et non plus la
+    *somme* de toutes. Une identification par photo enchaînait Claude (vision),
+    wineapi et l'OCR local : plusieurs dizaines de secondes, jusqu'à friser le
+    timeout du worker gunicorn. L'attente est d'entrée/sortie (réseau, sous-processus
+    tesseract), donc des threads suffisent.
+
+    Renvoie ``(hits, erreur)`` : la liste des résultats **dans l'ordre de la
+    cascade** — indépendante de l'ordre d'arrivée, le 1er servant d'ancre
+    d'identité (cf. ``upsert_multi``) — et la première erreur éventuelle dans ce
+    même ordre (déterministe d'un appel à l'autre).
     """
-    hits = []
-    erreur = None
-    for provider in get_enabled_providers():
-        if not quotas.reste(provider.name):
-            continue  # plafond mensuel atteint : on préserve le quota
-        try:
-            wine = appel(provider)
-        except EnrichmentError as exc:
-            erreur = exc
-            continue
-        if wine:
-            hits.append(wine)
+    # Le plafond mensuel se lit avant de lancer quoi que ce soit : c'est une
+    # lecture base, autant la faire dans le thread de la requête.
+    sources = [p for p in get_enabled_providers() if quotas.reste(p.name)]
+    if not sources:
+        return [], None
+    if len(sources) == 1:
+        # Une seule source : inutile de payer un thread, on reste dans celui de
+        # la requête (dont la connexion base ne doit pas être fermée).
+        wine, erreur = _interroger(sources[0], appel)
+        return ([wine] if wine else []), erreur
+
+    with ThreadPoolExecutor(
+        max_workers=len(sources), thread_name_prefix="identification"
+    ) as pool:
+        resultats = list(pool.map(lambda p: _interroger_en_thread(p, appel), sources))
+
+    hits = [wine for wine, _ in resultats if wine]
+    erreur = next((exc for _, exc in resultats if exc is not None), None)
     return hits, erreur
 
 
@@ -490,7 +536,20 @@ class ScanEtiquetteView(APIView):
         image = serializer.validated_data["image"]
         data = image.read()
 
-        hits, erreur = _cascade_multi(lambda p: p.lookup_by_image(data, image.content_type))
+        # Réduction unique, partagée par toutes les sources distantes : une photo
+        # de téléphone est bien plus lourde que ce que les APIs de vision
+        # exploitent, et chacune la ré-encodait à pleine taille pour son propre
+        # transport. L'OCR local garde l'original (cf. enrichment.image).
+        reduite, type_reduit = reduire_image(data, image.content_type)
+
+        def appel(p):
+            # getattr : le contrat porte l'attribut sur EnrichmentProvider, mais
+            # la cascade reste tolérante à un provider simplement « canard ».
+            if getattr(p, "image_pleine_resolution", False):
+                return p.lookup_by_image(data, image.content_type)
+            return p.lookup_by_image(reduite, type_reduit)
+
+        hits, erreur = _cascade_multi(appel)
         if hits:
             primary = hits[0]
             cuvee, created = upsert_multi(hits)

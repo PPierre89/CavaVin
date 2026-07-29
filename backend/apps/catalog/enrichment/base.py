@@ -49,6 +49,12 @@ class EnrichmentProvider(ABC):
 
     name: str = "base"
     enabled: bool = False
+    # Le provider a-t-il besoin de la photo d'étiquette en pleine résolution ?
+    # Par défaut non : les sources distantes reçoivent une version réduite
+    # (cf. enrichment.image), qu'elles auraient de toute façon redimensionnée.
+    # Seul l'OCR local dit True — son recadrage relit la zone de texte en pleine
+    # résolution, ce qui rend lisible une étiquette lointaine dans le cadre.
+    image_pleine_resolution: bool = False
 
     def lookup_by_barcode(self, ean: str) -> NormalizedWine | None:
         """Recherche par code-barres (US 01). None si non supporté / non trouvé."""
