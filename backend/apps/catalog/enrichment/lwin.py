@@ -540,6 +540,33 @@ _cache: dict = {
 }
 
 
+# Sonde de fraîcheur du référentiel : le COUNT(*) sur ~200 000 lignes est un
+# balayage complet côté SQLite, et la recherche dynamique appelle ``_referentiel``
+# à chaque frappe. On n'interroge donc la base qu'une fois par ``_VERSION_TTL`` ;
+# un import LWIN devient visible au plus tard après ce délai.
+_VERSION_TTL = 30  # secondes
+_version_memo: dict = {"valeur": None, "expire_le": 0.0}
+
+
+def _version_referentiel() -> int | None:
+    """Nombre d'entrées LWIN, sondé au plus une fois par ``_VERSION_TTL``."""
+    import time
+
+    from ..models import ReferenceLwin
+
+    maintenant = time.monotonic()
+    if maintenant >= _version_memo["expire_le"]:
+        _version_memo["valeur"] = ReferenceLwin.objects.count()
+        _version_memo["expire_le"] = maintenant + _VERSION_TTL
+    return _version_memo["valeur"]
+
+
+def vider_cache_referentiel() -> None:
+    """Force le rechargement du référentiel indexé (après un import LWIN)."""
+    _version_memo["expire_le"] = 0.0
+    _cache["version"] = None
+
+
 def _referentiel() -> dict:
     """Référentiel LWIN indexé, prêt pour la correspondance.
 
@@ -569,7 +596,7 @@ def _referentiel() -> dict:
 
     from ..models import ReferenceLwin
 
-    version = ReferenceLwin.objects.count()
+    version = _version_referentiel()
     if _cache.get("version") != version:
         refs: list = []
         df: dict[str, int] = {}

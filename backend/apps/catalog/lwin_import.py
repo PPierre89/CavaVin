@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 
+from .enrichment.lwin import vider_cache_referentiel
 from .enrichment.normalize import guess_couleur
 from .models import ReferenceLwin
 
@@ -117,4 +118,7 @@ def importer_lwin(chemin: str, delimiter: str = ",") -> int:
             total += _enregistrer(lot)
             lot = []
     total += _enregistrer(lot)
+    # bulk_create ne déclenche pas les signaux du modèle : on invalide à la main
+    # l'index en mémoire pour que le nouveau dump soit servi immédiatement.
+    vider_cache_referentiel()
     return total

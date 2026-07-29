@@ -297,6 +297,54 @@ class UpsertCuveeTests(TestCase):
         Cuvee.objects.create(domaine=domaine, nom="B", couleur="BLANC", code_barres="")
         self.assertEqual(Cuvee.objects.filter(code_barres="").count(), 2)
 
+    def test_scan_code_barres_retrouve_le_vin_connu_par_sa_reference_externe(self):
+        """Un vin identifié par texte (référence wineapi) puis scanné par son
+        code-barres ne doit pas être recréé : la référence externe est unique et
+        la création échouait en IntegrityError (500 au scan)."""
+        upsert_cuvee(NormalizedWine(
+            domaine_nom="Château Palmer", cuvee_nom="Palmer",
+            reference_externe_id="wineapi-123", couleur="ROUGE",
+        ))
+        cuvee, created = upsert_cuvee(NormalizedWine(
+            domaine_nom="Château Palmer", cuvee_nom="Palmer",
+            code_barres="3760012345678", reference_externe_id="wineapi-123",
+            couleur="ROUGE",
+        ))
+        self.assertFalse(created)
+        self.assertEqual(Cuvee.objects.count(), 1)
+        # Le code-barres inédit complète l'identité : le prochain scan sera un
+        # hit local, sans appel externe ni quota consommé.
+        self.assertEqual(cuvee.code_barres, "3760012345678")
+
+    def test_reference_externe_inconnue_reste_decisive(self):
+        """Deux références wineapi distinctes = deux vins, même sans code-barres."""
+        upsert_cuvee(NormalizedWine(
+            domaine_nom="Dom", cuvee_nom="A", reference_externe_id="wine-a"
+        ))
+        _, created = upsert_cuvee(NormalizedWine(
+            domaine_nom="Dom", cuvee_nom="B", reference_externe_id="wine-b"
+        ))
+        self.assertTrue(created)
+        self.assertEqual(Cuvee.objects.count(), 2)
+
+    def test_identite_deja_revendiquee_non_ecrasee(self):
+        """La complétion d'identité ne vole pas une référence déjà attribuée."""
+        domaine = Domaine.objects.create(nom="Dom")
+        # La cuvée retrouvée par son code-barres n'a pas de référence externe…
+        Cuvee.objects.create(domaine=domaine, nom="A", couleur="ROUGE", code_barres="111")
+        # …mais « wine-x » appartient déjà à une autre cuvée.
+        Cuvee.objects.create(
+            domaine=domaine, nom="B", couleur="ROUGE", reference_externe_id="wine-x"
+        )
+        cuvee, created = upsert_cuvee(NormalizedWine(
+            domaine_nom="Dom", cuvee_nom="A", code_barres="111",
+            reference_externe_id="wine-x",
+        ))
+        self.assertFalse(created)
+        self.assertEqual(cuvee.nom, "A")
+        self.assertEqual(cuvee.reference_externe_id, "")  # laissée à son détenteur
+        self.assertEqual(Cuvee.objects.filter(reference_externe_id="wine-x").count(), 1)
+
     def test_domaine_non_scinde_par_region_vide(self):
         """Un canal qui identifie un producteur déjà connu (avec région) ne doit
         pas créer une seconde fiche sans région (cf. correction de l'ingest)."""

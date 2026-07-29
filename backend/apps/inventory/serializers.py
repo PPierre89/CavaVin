@@ -1,6 +1,8 @@
 from django.db.models import Sum
 from rest_framework import serializers
 
+from apps.catalog import apogee
+
 from .models import Bouteille, MouvementStock, NoteDegustation, Rangement
 
 
@@ -23,11 +25,27 @@ class BouteilleSerializer(serializers.ModelSerializer):
     proprietaire = serializers.HiddenField(default=serializers.CurrentUserDefault())
     cuvee_nom = serializers.CharField(source="cuvee.nom", read_only=True)
     domaine_nom = serializers.CharField(source="cuvee.domaine.nom", read_only=True)
+    # Attributs de la cuvée dont les écrans de stock ont besoin (couleur, lieu,
+    # valeur marché). Les servir ici évite au client de télécharger tout le
+    # catalogue mutualisé — qui grossit avec la communauté — pour afficher SES
+    # bouteilles. La cuvée est déjà jointe (select_related) : aucun coût SQL.
+    couleur = serializers.CharField(source="cuvee.couleur", read_only=True)
+    appellation = serializers.CharField(source="cuvee.appellation", read_only=True)
+    region = serializers.CharField(source="cuvee.region", read_only=True)
+    pays = serializers.CharField(source="cuvee.pays", read_only=True)
+    classification = serializers.CharField(source="cuvee.classification", read_only=True)
+    prix_min = serializers.DecimalField(
+        source="cuvee.prix_min", max_digits=10, decimal_places=2, read_only=True
+    )
+    prix_max = serializers.DecimalField(
+        source="cuvee.prix_max", max_digits=10, decimal_places=2, read_only=True
+    )
+    devise = serializers.CharField(source="cuvee.devise", read_only=True)
     emplacement_chemin = serializers.SerializerMethodField()
     # Statut de dégustation *calculé* (à garder / à boire / dépassé), déduit de la
     # fenêtre d'apogée effective et de l'année courante. C'est lui qui pilote le
     # code couleur ; il remplace en lecture la valeur stockée (souvent neutre).
-    statut = serializers.CharField(source="statut_apogee", read_only=True)
+    statut = serializers.SerializerMethodField()
     # Fenêtre d'apogée effective : saisie manuelle si présente, sinon estimée.
     apogee_debut_effectif = serializers.SerializerMethodField()
     apogee_fin_effectif = serializers.SerializerMethodField()
@@ -40,6 +58,14 @@ class BouteilleSerializer(serializers.ModelSerializer):
             "cuvee",
             "cuvee_nom",
             "domaine_nom",
+            "couleur",
+            "appellation",
+            "region",
+            "pays",
+            "classification",
+            "prix_min",
+            "prix_max",
+            "devise",
             "millesime",
             "emplacement",
             "emplacement_chemin",
@@ -60,11 +86,30 @@ class BouteilleSerializer(serializers.ModelSerializer):
     def get_emplacement_chemin(self, obj) -> str | None:
         return obj.emplacement.chemin() if obj.emplacement else None
 
+    def _fenetre(self, obj):
+        """Fenêtre d'apogée de la ligne, estimée une seule fois par ligne.
+
+        Trois champs sérialisés en dérivent (statut + les deux bornes) : sans ce
+        mémo, une liste de bouteilles payait trois estimations par ligne, chacune
+        reconstruisant les cépages et relisant la table des millésimes. Le mémo
+        vit sur le sérialiseur (une instance par requête, partagée par les items
+        d'une liste), pas sur le modèle : une lecture de ``fenetre_apogee`` hors
+        sérialisation reste toujours fraîche."""
+        if not hasattr(self, "_fenetres"):
+            self._fenetres = {}
+        if obj.pk not in self._fenetres:
+            self._fenetres[obj.pk] = obj.fenetre_apogee()
+        return self._fenetres[obj.pk]
+
+    def get_statut(self, obj) -> str:
+        debut, fin = self._fenetre(obj)
+        return apogee.statut_pour_fenetre(debut, fin)
+
     def get_apogee_debut_effectif(self, obj) -> int | None:
-        return obj.fenetre_apogee()[0]
+        return self._fenetre(obj)[0]
 
     def get_apogee_fin_effectif(self, obj) -> int | None:
-        return obj.fenetre_apogee()[1]
+        return self._fenetre(obj)[1]
 
     def validate_emplacement(self, emplacement):
         request = self.context.get("request")

@@ -48,8 +48,18 @@ def compter(source: str) -> None:
     from .models import AppelSource
 
     try:
-        AppelSource.objects.get_or_create(source=source, mois=mois)
-        AppelSource.objects.filter(source=source, mois=mois).update(nombre=F("nombre") + 1)
+        # Incrément atomique en une requête ; on ne crée la ligne que le premier
+        # appel du mois (l'UPDATE ne touche alors rien).
+        if not AppelSource.objects.filter(source=source, mois=mois).update(
+            nombre=F("nombre") + 1
+        ):
+            _, cree = AppelSource.objects.get_or_create(
+                source=source, mois=mois, defaults={"nombre": 1}
+            )
+            if not cree:  # course entre workers : la ligne vient d'apparaître.
+                AppelSource.objects.filter(source=source, mois=mois).update(
+                    nombre=F("nombre") + 1
+                )
     except Exception:
         # Le comptage ne doit JAMAIS casser une identification (base indisponible,
         # migration en cours, contexte sans base…) : on échoue silencieusement.

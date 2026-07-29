@@ -42,7 +42,7 @@ CavaVin/
 │   │   ├── screens/             # screens: Accueil, Cave, MesVins, Ajouter, Carnet, Login
 │   │   ├── components/          # FicheVin, FiltresSheet, TastingSheet, VinIdentification, bottle
 │   │   ├── api.ts               # JWT fetch client with auto-refresh + pagination helper
-│   │   ├── data.tsx             # DataProvider context (caves/emplacements/bouteilles/cuvees)
+│   │   ├── data.tsx             # DataProvider context (caves/emplacements/bouteilles/rangements)
 │   │   ├── auth.tsx             # AuthProvider (JWT in localStorage)
 │   │   └── types.ts             # shared TS types mirroring API payloads
 │   └── e2e/                     # Playwright end-to-end tests (API mocked via page.route)
@@ -197,7 +197,13 @@ See `.env.example` for the full list.
   it opens from the Accueil quick action or the "+" button in Mes vins; stock movements (journal)
   live on the Accueil screen.
 - All API calls go through `api.ts` (`api()` / `apiAllPages()`), which injects the JWT, auto-refreshes
-  on 401, and normalises errors (`ApiError`, `errMsg`). Global state is in `data.tsx`'s `DataProvider`.
+  on 401 (a single shared in-flight refresh, storing the rotated refresh token), and normalises errors
+  (`ApiError`, `errMsg`). Global state is in `data.tsx`'s `DataProvider`.
+- **The SPA never bulk-loads the shared catalog.** `DataProvider` holds private data only; the cuvée
+  attributes the stock screens need (colour, appellation, region, country, classification, market
+  price) are served on each `Bouteille` payload, and the add-flow autocomplete queries
+  `/api/cuvees/?search=` server-side. Keep it that way — the mutualised catalog grows with the
+  community, so any client-side copy of it is both wasteful and silently truncated by pagination.
 - Default add flow is **label photo** (`VinIdentification`); barcode scan & text search are fallbacks.
 
 ### Data model summary

@@ -243,7 +243,9 @@ class CuveeViewSet(viewsets.ModelViewSet):
     queryset = Cuvee.objects.select_related("domaine").prefetch_related("cepages")
     serializer_class = CuveeSerializer
     permission_classes = [LectureOuEcritureSansSuppression]
-    search_fields = ["nom", "domaine__nom", "appellation", "code_barres"]
+    # « region » complète la recherche : l'autocomplétion du formulaire d'ajout
+    # interroge cet endpoint et cherchait aussi sur la région côté client.
+    search_fields = ["nom", "domaine__nom", "appellation", "region", "code_barres"]
     filterset_fields = ["couleur", "domaine"]
 
     def get_throttles(self):

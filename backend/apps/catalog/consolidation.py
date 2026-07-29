@@ -77,7 +77,11 @@ def consolider(cuvee: Cuvee) -> Cuvee:
     arbitre chaque champ selon sa politique et met à jour la projection + la carte
     de provenance. Sans observation, la cuvée est renvoyée inchangée.
     """
-    observations = list(cuvee.observations.all())
+    # ``payload_brut`` (réponse complète du canal) n'entre pas dans l'arbitrage :
+    # on l'écarte du SELECT. Les observations sont append-only et chaque
+    # identification les relit toutes — inutile de charger des payloads wineapi
+    # entiers pour ne lire que ``champs``.
+    observations = list(cuvee.observations.defer("payload_brut"))
     if not observations:
         return cuvee
 

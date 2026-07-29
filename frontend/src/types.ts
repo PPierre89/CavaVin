@@ -51,6 +51,16 @@ export interface Bouteille {
   cuvee: number
   cuvee_nom: string
   domaine_nom: string
+  // Attributs de la cuvée servis avec la ligne de stock : les écrans de stock
+  // s'en contentent, sans charger le catalogue mutualisé complet.
+  couleur: Couleur
+  appellation: string
+  region: string
+  pays: string
+  classification: string
+  prix_min: string | null
+  prix_max: string | null
+  devise: string
   millesime: number | null
   emplacement: number | null
   emplacement_chemin: string | null

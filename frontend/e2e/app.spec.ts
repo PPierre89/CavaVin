@@ -130,7 +130,7 @@ test('le panneau Filtres restreint la vinothèque par type de vin', async ({ pag
   await expect(page.getByLabel('Filtrer').getByText('1')).toBeVisible()
 })
 
-test('recherche dynamique : une cuvée déjà en base est suggérée sans appel réseau', async ({
+test('recherche dynamique : une cuvée déjà en base est suggérée sans consommer de quota', async ({
   page,
 }) => {
   await seedAuth(page)
@@ -138,7 +138,7 @@ test('recherche dynamique : une cuvée déjà en base est suggérée sans appel 
   // Filet anti-quota : on fait échouer explicitement l'endpoint consommateur de
   // quota. Enregistré après mockApi, il est prioritaire (Playwright évalue les
   // routes dans l'ordre inverse d'enregistrement) — le test échouerait donc si
-  // un appel externe partait pendant la recherche locale.
+  // un appel externe partait pendant la recherche au catalogue.
   await page.route('**/api/identifier-vin/', (route) => route.abort())
   await page.goto('/')
 
@@ -146,7 +146,8 @@ test('recherche dynamique : une cuvée déjà en base est suggérée sans appel 
   await page.getByRole('button', { name: 'Ajouter une bouteille' }).click()
   // La recherche par nom est un repli : on déplie « Autre méthode » d'abord.
   await page.getByRole('button', { name: /Autre méthode/ }).click()
-  // Au fil de la frappe, la cuvée du catalogue local remonte en suggestion.
+  // Au fil de la frappe, la cuvée du catalogue mutualisé remonte en suggestion
+  // (recherche serveur sur /api/cuvees/, aucune source externe sollicitée).
   await page.getByPlaceholder(/rechercher par nom/).fill('cantemerle')
   await page.getByText('Grand Cru Classé · Haut-Médoc').click()
 

@@ -13,7 +13,7 @@ import {
 } from '../filtres'
 import { devise, formatPrixCourt } from '../format'
 import { StatutBadge, pillCls, wineFill } from '../ui'
-import { COULEUR_LABELS, type Bouteille, type Couleur, type Cuvee } from '../types'
+import { COULEUR_LABELS, type Bouteille, type Couleur } from '../types'
 
 /* ------------------------------------------------------------------ *
  *  « Mes vins » — vue vinothèque : la liste à plat de tous les vins
@@ -31,18 +31,12 @@ const CHIPS: [Couleur, string][] = [
 ]
 
 export default function MesVinsScreen({ onAjouter }: { onAjouter: () => void }) {
-  const { cuvees, bouteilles, cuveeColor } = useData()
+  const { bouteilles, cuveeColor } = useData()
   const [query, setQuery] = useState('')
   const [showFilters, setShowFilters] = useState(false)
   const [filtres, setFiltres] = useState<Filtres>(() => filtresVides())
   const [fiche, setFiche] = useState<Bouteille | null>(null)
   const [options, setOptions] = useState<Bouteille | null>(null)
-
-  const cuveeMap = useMemo(() => {
-    const m = new Map<number, Cuvee>()
-    cuvees.forEach((c) => m.set(c.id, c))
-    return m
-  }, [cuvees])
 
   // Regroupe les bouteilles actives par cuvée + millésime en cumulant les
   // quantités, puis trie du millésime le plus récent au plus ancien.
@@ -58,7 +52,6 @@ export default function MesVinsScreen({ onAjouter }: { onAjouter: () => void }) 
         groupes.set(key, {
           key,
           ref: b,
-          cuvee: cuveeMap.get(b.cuvee),
           couleur: cuveeColor(b),
           quantite: b.quantite,
         })
@@ -69,8 +62,7 @@ export default function MesVinsScreen({ onAjouter }: { onAjouter: () => void }) 
         (b.ref.millesime ?? 0) - (a.ref.millesime ?? 0) ||
         a.ref.domaine_nom.localeCompare(b.ref.domaine_nom),
     )
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bouteilles, cuveeMap, cuveeColor])
+  }, [bouteilles, cuveeColor])
 
   // Bornes du curseur « Valeur des vins » : min/max des valeurs marché connues.
   const bounds = useMemo<[number, number]>(() => {
@@ -84,8 +76,8 @@ export default function MesVinsScreen({ onAjouter }: { onAjouter: () => void }) 
     return lignes.filter((l) => {
       if (!matchFiltres(l, filtres, bounds)) return false
       if (!q) return true
-      const foin = `${l.ref.domaine_nom} ${l.ref.cuvee_nom} ${l.cuvee?.appellation ?? ''} ${
-        l.cuvee?.region ?? ''
+      const foin = `${l.ref.domaine_nom} ${l.ref.cuvee_nom} ${l.ref.appellation} ${
+        l.ref.region
       } ${l.ref.millesime ?? ''}`.toLowerCase()
       return foin.includes(q)
     })
@@ -180,22 +172,22 @@ export default function MesVinsScreen({ onAjouter }: { onAjouter: () => void }) 
       ) : (
         <div className="flex flex-col gap-2.5">
           {filtered.map((l) => {
-            const c = l.cuvee
+            const c = l.ref
             const prix = formatPrixCourt(l.ref.prix_achat)
             const valeur =
-              c?.prix_min && c?.prix_max
+              c.prix_min && c.prix_max
                 ? `${Math.round(Number(c.prix_min))}–${Math.round(Number(c.prix_max))} ${devise(
                     c.devise || 'EUR',
                   )}`
                 : null
-            const lieu = [c?.region || c?.appellation, l.ref.millesime]
+            const lieu = [c.region || c.appellation, l.ref.millesime]
               .filter(Boolean)
               .join(' · ')
             return (
               <LigneVin
                 key={l.key}
                 couleur={l.couleur}
-                titre={c?.classification || l.ref.cuvee_nom}
+                titre={c.classification || l.ref.cuvee_nom}
                 sousTitre={lieu || l.ref.domaine_nom}
                 droite={<QtyBadge n={l.quantite} />}
                 onClick={() => setFiche(l.ref)}

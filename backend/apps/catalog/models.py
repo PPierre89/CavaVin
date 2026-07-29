@@ -168,6 +168,22 @@ class ReferenceLwin(models.Model):
     def __str__(self):
         return f"{self.producteur} - {self.vin}" if self.vin else self.producteur
 
+    def _vider_index(self):
+        # L'index de correspondance est tenu en mémoire (cf. enrichment.lwin) et
+        # sa fraîcheur n'est re-sondée que périodiquement : une écriture unitaire
+        # doit l'invalider tout de suite.
+        from .enrichment.lwin import vider_cache_referentiel
+
+        vider_cache_referentiel()
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self._vider_index()
+
+    def delete(self, *args, **kwargs):
+        super().delete(*args, **kwargs)
+        self._vider_index()
+
 
 class SourceObservation(models.Model):
     """Relevé brut d'un canal d'enrichissement pour une cuvée (append-only).

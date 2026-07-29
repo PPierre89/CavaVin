@@ -56,7 +56,7 @@ export default function AjouterScreen({
 type VinChoisi = { mode: 'cuvee'; cuvee: Cuvee } | { mode: 'manuel' }
 
 function BottleForm({ onDone }: { onDone: () => void }) {
-  const { cuvees, emplacements, caveId, refresh } = useData()
+  const { emplacements, caveId, refresh } = useData()
   const toast = useToast()
   const formRef = useRef<HTMLFormElement>(null)
 
@@ -150,7 +150,7 @@ function BottleForm({ onDone }: { onDone: () => void }) {
     return (
       <Card>
         <CardTitle>Ajouter une bouteille</CardTitle>
-        <VinIdentification onIdentified={applyIdentified} cuvees={cuvees} />
+        <VinIdentification onIdentified={applyIdentified} />
         <button
           onClick={() => setVin({ mode: 'manuel' })}
           className="w-full mt-3 text-xs text-muted underline"

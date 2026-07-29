@@ -1,4 +1,4 @@
-import type { Bouteille, Couleur, Cuvee } from './types'
+import type { Bouteille, Couleur } from './types'
 
 /* ------------------------------------------------------------------ *
  *  Modèle et logique de filtrage de la vinothèque (« Mes vins »).
@@ -8,8 +8,9 @@ import type { Bouteille, Couleur, Cuvee } from './types'
 /** Une entrée vinothèque : une cuvée + un millésime, quantités cumulées. */
 export interface Ligne {
   key: string
+  /** Ligne de stock représentative : elle porte aussi les attributs de la cuvée
+   *  (couleur, appellation, région, valeur marché) servis par l'API. */
   ref: Bouteille
-  cuvee: Cuvee | undefined
   couleur: Couleur
   quantite: number
 }
@@ -26,7 +27,7 @@ export interface Filtres {
 
 /** Valeur marché d'une ligne (prix max, à défaut prix min), ou null. */
 export function ligneValeur(l: Ligne): number | null {
-  const v = l.cuvee?.prix_max ?? l.cuvee?.prix_min
+  const v = l.ref.prix_max ?? l.ref.prix_min
   if (v == null || v === '') return null
   const n = Number(v)
   return Number.isFinite(n) ? n : null
@@ -40,9 +41,9 @@ function valeurNarrowed(f: Filtres, bounds: [number, number]): boolean {
 /** Filtre vrai/faux d'une ligne selon la sélection courante. */
 export function matchFiltres(l: Ligne, f: Filtres, bounds: [number, number]): boolean {
   if (f.couleurs.size && !f.couleurs.has(l.couleur)) return false
-  if (f.pays.size && !(l.cuvee?.pays && f.pays.has(l.cuvee.pays))) return false
+  if (f.pays.size && !(l.ref.pays && f.pays.has(l.ref.pays))) return false
   if (f.millesimes.size && !f.millesimes.has(String(l.ref.millesime ?? 'NM'))) return false
-  if (f.regions.size && !(l.cuvee?.region && f.regions.has(l.cuvee.region))) return false
+  if (f.regions.size && !(l.ref.region && f.regions.has(l.ref.region))) return false
   if (f.tailles.size && !f.tailles.has('Standard')) return false
   if (valeurNarrowed(f, bounds)) {
     const v = ligneValeur(l)
