@@ -168,6 +168,17 @@ The **raw** wineapi payload is persisted verbatim on `Cuvee.wineapi_detail` so n
 ever lost. Quota is protected by caching (registry TTLs) and a per-wine refresh cooldown
 (`WINEAPI_REFRESH_COOLDOWN`, default 1h).
 
+**Identity resolution (`upsert_cuvee`) — get this right or you resurrect a 500.** A reading's strong
+identities are *all* checked against the catalog before creating anything, in order `code_barres` >
+`reference_externe_id` > `lwin_code`. What matters is not each key's strength but what its **absence**
+proves: a missing barcode is inconclusive (one wine has several bottlings) so the next key is tried,
+whereas a missing external reference or LWIN code is decisive (distinct wine → create). Checking only
+the first key present is what made a barcode scan of an already-known wine blow up on the
+`unique_cuvee_reference_externe` constraint. Two invariants follow: identities the matched cuvée
+*lacks* get backfilled from the reading (so a later scan is a free local hit), and an identity already
+claimed by another cuvée is never taken — first claimant keeps it. See
+`docs/architecture-referentiel.md` §5.
+
 **Multi-source fusion.** Identification (`scan-code-barres`, `identifier-vin`, `scan-etiquette`) does
 **not** stop at the first hit: `views._cascade_multi` queries *every* enabled source and
 `ingest.upsert_multi` merges them — the first hit anchors the canonical cuvée, the rest are recorded as

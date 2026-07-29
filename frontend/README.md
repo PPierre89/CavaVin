@@ -35,7 +35,7 @@ frontend/
 │   ├── main.tsx           # Point d'entrée (AuthProvider + ToastProvider)
 │   ├── api.ts             # Client fetch JWT (Bearer) : refresh auto sur 401, pagination
 │   ├── auth.tsx           # AuthProvider — JWT (login/register) stocké en localStorage
-│   ├── data.tsx           # DataProvider — état global (caves, emplacements, bouteilles, cuvées)
+│   ├── data.tsx           # DataProvider — état global privé (caves, emplacements, bouteilles, rangements, mouvements)
 │   ├── toast.tsx          # ToastProvider — notifications de confirmation/erreur
 │   ├── types.ts           # Types TS reflétant les payloads de l'API
 │   ├── ui.tsx             # Tokens & primitives UI partagés (Logo, classes de boutons/inputs…)
@@ -52,9 +52,19 @@ frontend/
 ## Conventions
 
 - **Toute requête API passe par `api.ts`** (`api()` / `apiAllPages()`) : le token JWT est injecté,
-  rafraîchi automatiquement sur `401`, et les erreurs sont normalisées (`ApiError`, `errMsg`).
+  rafraîchi automatiquement sur `401`, et les erreurs sont normalisées (`ApiError`, `errMsg`). Le
+  rafraîchissement est **mutualisé** (un seul appel en vol, même si plusieurs requêtes parallèles
+  expirent ensemble) et **conserve le jeton de refresh tourné** par le serveur
+  (`ROTATE_REFRESH_TOKENS`) : la session glisse avec l'usage au lieu d'expirer au bout de 7 jours.
 - **État global dans `data.tsx`** (`DataProvider` / `useData`), authentification dans `auth.tsx`
-  (`AuthProvider` / `useAuth`).
+  (`AuthProvider` / `useAuth`). Les chargements concurrents sont numérotés : une réponse périmée
+  (changement rapide de cave) n'écrase jamais une plus récente.
+- **Le SPA ne charge jamais le catalogue mutualisé en masse.** `DataProvider` ne détient que des
+  données privées ; les attributs de cuvée dont les écrans de stock ont besoin (couleur, appellation,
+  région, pays, classification, valeur marché) sont servis **sur chaque ligne de stock**
+  (`/api/bouteilles/`), et l'autocomplétion du formulaire d'ajout interroge `/api/cuvees/?search=`
+  côté serveur. Le catalogue est communautaire, donc croissant : toute copie cliente serait à la fois
+  coûteuse et silencieusement tronquée par la pagination.
 - **Tailwind v4** avec des tokens de thème personnalisés en oklch (`bg-wine`, `text-gold`,
   `border-line`, `bg-surface`, `glass`, `rounded-card`…) : réutiliser ces tokens plutôt que des
   valeurs brutes.
