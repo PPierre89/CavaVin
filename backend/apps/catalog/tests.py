@@ -4681,3 +4681,47 @@ class CataloguePortableTests(TestCase):
         with self.assertRaises(CommandError) as ctx:
             call_command("charger_catalogue", etranger, stdout=StringIO())
         self.assertIn("catalogue CavaVin", str(ctx.exception))
+
+    def test_projection_recopiee_quand_le_fichier_n_a_pas_d_observations(self):
+        """Un fichier allégé de ses relevés doit rester utile : sans cette
+        recopie, la cuvée chargée serait réduite à son identité."""
+        import sqlite3
+
+        chemin = self._fichier(cuvees=[("Grand Vin", "ROUGE", "xwines:1")])
+        cx = sqlite3.connect(chemin)
+        cx.execute("ALTER TABLE catalog_cuvee ADD COLUMN region TEXT")
+        cx.execute("ALTER TABLE catalog_cuvee ADD COLUMN accords TEXT")
+        cx.execute(
+            "UPDATE catalog_cuvee SET region='Bordeaux', accords=?",
+            (json.dumps([{"nom": "Bœuf", "emoji": "🥩", "confiance": None}]),),
+        )
+        cx.commit()
+        cx.close()
+
+        call_command("charger_catalogue", chemin, stdout=StringIO())
+
+        cuvee = Cuvee.objects.get()
+        self.assertEqual(cuvee.region, "Bordeaux")
+        self.assertEqual(cuvee.accords[0]["nom"], "Bœuf")  # colonne JSON ré-hydratée
+
+    def test_export_sans_observations(self):
+        import sqlite3
+
+        source = self._fichier(
+            cuvees=[("Grand Vin", "ROUGE", "xwines:1")],
+            observations=[(1, "xwines", "2026-01-05 10:00:00", "0.60", {"region": "Bordeaux"})],
+        )
+        destination = os.path.join(self.dossier, "leger.sqlite3")
+
+        from apps.catalog.catalogue_portable import exporter
+
+        resultat = exporter(source, destination, sans_observations=True)
+
+        self.assertEqual(resultat.observations, 0)
+        cx = sqlite3.connect(destination)
+        try:
+            self.assertEqual(
+                cx.execute("SELECT COUNT(*) FROM catalog_sourceobservation").fetchone()[0], 0)
+            self.assertEqual(cx.execute("SELECT COUNT(*) FROM catalog_cuvee").fetchone()[0], 1)
+        finally:
+            cx.close()

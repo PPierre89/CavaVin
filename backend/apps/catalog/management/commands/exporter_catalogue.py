@@ -26,11 +26,19 @@ class Command(BaseCommand):
             "--source", default=None,
             help="Base à exporter (défaut : la base courante).",
         )
+        parser.add_argument(
+            "--sans-observations", action="store_true",
+            help=(
+                "Retirer les relevés bruts : c'est le levier de taille du fichier "
+                "(les payloads en pèsent l'essentiel). La fiche voyage alors par sa "
+                "projection, exacte mais sans provenance ni ré-arbitrage."
+            ),
+        )
 
-    def handle(self, *args, destination, source, **options):
+    def handle(self, *args, destination, source, sans_observations, **options):
         source = source or str(settings.DATABASES["default"]["NAME"])
         try:
-            resultat = exporter(source, destination)
+            resultat = exporter(source, destination, sans_observations=sans_observations)
         except CataloguePortableError as exc:
             raise CommandError(str(exc)) from exc
         self.stdout.write(self.style.SUCCESS(str(resultat)))

@@ -57,6 +57,17 @@ _TABLES_CATALOGUE = (
 
 _LOT = 500
 
+# Champs de fiche recopiés depuis le fichier quand la cuvée cible ne les porte
+# pas encore (cf. _completer_projection). Ce sont ceux que la consolidation
+# projette ; les identités en sont exclues, elles ont leur propre traitement.
+_CHAMPS_PROJETES = (
+    "region", "pays", "classification", "description", "elaborate", "corps",
+    "acidite", "degre_alcool", "image_url", "note_moyenne", "nb_notes",
+    "prix_min", "prix_max", "devise", "accords", "scores", "prix_marchands",
+)
+# Parmi eux, ceux stockés en JSON : SQLite les rend en texte.
+_CHAMPS_JSON = frozenset({"accords", "scores", "prix_marchands"})
+
 
 class CataloguePortableError(ImportFichierError):
     """Fichier de catalogue illisible ou de schéma inattendu."""
@@ -123,13 +134,22 @@ def _verifier_schema(connexion: sqlite3.Connection) -> None:
 # Export
 # --------------------------------------------------------------------------- #
 
-def exporter(source: str, destination: str) -> ResultatExport:
+def exporter(
+    source: str, destination: str, *, sans_observations: bool = False
+) -> ResultatExport:
     """Copie ``source`` en ne gardant que le catalogue mutualisé.
 
     Procède par copie du fichier puis **purge** des tables hors catalogue, plutôt
     que par recréation : le schéma et les index restent exactement ceux de
     l'application, donc le fichier produit est lisible par n'importe quelle
     installation à la même migration. Un `VACUUM` final récupère la place.
+
+    ``sans_observations`` retire les relevés bruts. C'est le levier de taille du
+    fichier : les ``payload_brut`` pèsent l'essentiel du catalogue, souvent plus
+    des trois quarts. Le prix en est la provenance et la ré-arbitrabilité — la
+    fiche voyage alors par sa projection (cf. ``_completer_projection``), qui est
+    exacte mais figée. À réserver au transport ; pour archiver, garder les
+    observations.
     """
     if not Path(source).exists():
         raise CataloguePortableError(f"Base source introuvable : {source}")
@@ -153,6 +173,8 @@ def exporter(source: str, destination: str) -> ResultatExport:
             if table == "django_migrations":
                 continue  # nécessaire pour que la cible reconnaisse le schéma.
             connexion.execute(f'DELETE FROM "{table}"')  # noqa: S608 - nom issu du schéma
+        if sans_observations:
+            connexion.execute("DELETE FROM catalog_sourceobservation")
         connexion.commit()
         resultat = ResultatExport(
             chemin=destination,
@@ -301,10 +323,49 @@ def _charger_cuvee(ligne, domaines, cepages, observations, resultat) -> None:
     if noms and cuvee.cepages.count() == 0:
         cuvee.cepages.set([Cepage.objects.get_or_create(nom=n)[0] for n in noms])
 
+    _completer_projection(cuvee, ligne)
     resultat.observations += _rejouer_observations(cuvee, observations.get(ligne["id"], []))
     # La fiche est arbitrée par la politique de *cette* installation, pas figée
-    # par celle qui a produit le fichier.
+    # par celle qui a produit le fichier. Elle passe donc *après* la projection
+    # recopiée : là où le fichier porte des observations, elles font autorité.
     consolider(cuvee)
+
+
+def _completer_projection(cuvee: Cuvee, ligne) -> None:
+    """Recopie les champs de fiche du fichier, uniquement là où la cible est vide.
+
+    Sans cela, un fichier **allégé de ses observations** — le cas dès qu'on veut
+    un catalogue transportable de taille raisonnable, les payloads bruts en
+    constituant l'essentiel — produirait des cuvées réduites à leur identité :
+    ni région, ni cépages décrits, ni accords. La projection du fichier sert donc
+    de repli.
+
+    Deux garde-fous : on ne remplace jamais une valeur déjà présente chez le
+    destinataire, et la consolidation s'exécute ensuite — si le fichier porte des
+    observations, ce sont elles qui arbitrent, pas cette recopie.
+    """
+    a_ecrire = []
+    for champ in _CHAMPS_PROJETES:
+        try:
+            valeur = ligne[champ]
+        except (IndexError, KeyError):
+            continue  # fichier produit par une version antérieure du schéma.
+        if valeur in (None, "", b"") or getattr(cuvee, champ) not in (None, "", [], {}):
+            continue
+        setattr(cuvee, champ, _json_si_besoin(champ, valeur))
+        a_ecrire.append(champ)
+    if a_ecrire:
+        cuvee.save(update_fields=a_ecrire)
+
+
+def _json_si_besoin(champ: str, valeur):
+    """Les colonnes JSON reviennent de SQLite en texte : on les ré-hydrate."""
+    if champ in _CHAMPS_JSON and isinstance(valeur, str):
+        try:
+            return json.loads(valeur)
+        except ValueError:
+            return []
+    return valeur
 
 
 def _horodatage(brut) -> object:
