@@ -369,6 +369,21 @@ respecte les conventions (`makemigrations` commité, tests, commits conventionne
   qu'aucune source ne contredit ; les cépages (M2M) restent gérés par
   `enrich_cuvee_from_wineapi` (arbitrage inter-canaux à affiner).
 
+  *Complément — `couleur` et `appellation` entrent dans l'arbitrage.* Ces deux
+  champs relèvent de l'identité, que le §5 range sous la politique « confiance
+  d'abord », mais ils échappaient à la consolidation : `ingest.upsert_cuvee` les
+  écrivait **une seule fois, à la création**, et plus rien ne les corrigeait. Une
+  cuvée née d'un canal qui ignore l'appellation la gardait vide même après le
+  relevé d'un canal qui la connaît, et une `couleur` posée à `AUTRE` faute de
+  mieux restait `AUTRE`. Ils rejoignent `_CHAMPS_PROFIL`, avec une règle propre à
+  la couleur : `AUTRE` est une **absence** (fourre-tout attribué dès qu'on ne
+  sait pas), pas une affirmation — sans quoi un canal très sûr *sur l'identité*
+  effacerait le rouge lu sur l'étiquette ; et une valeur hors nomenclature est
+  écartée, l'observation conservant ce que le canal a affirmé sans le garde-fou
+  de `upsert_cuvee` (Django ne vérifie pas `choices` à l'enregistrement). Sur une
+  base existante, `manage.py reconsolider` applique la nouvelle politique sans
+  re-solliciter aucune source.
+
 - **Phase 3 — LWIN comme canal du référentiel (refactor). ✅ *Faite.***
   Le code LWIN devient une **identité canonique** de la cuvée : clé de
   déduplication (entre relevés LWIN et avec les cuvées wineapi qui portent un

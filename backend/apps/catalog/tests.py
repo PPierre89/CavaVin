@@ -3852,15 +3852,20 @@ class ApparierLwinCommandTests(TestCase):
         self.assertIn("[simulation]", sortie)
         self.assertIn("1 appariées", sortie)
 
-    def test_appellation_existante_n_est_jamais_ecrasee(self):
-        self.cuvee.appellation = "Margaux (saisi à la main)"
+    def test_appellation_passe_par_la_consolidation(self):
+        """L'appellation n'est pas écrite en direct : elle est *affirmée* par le
+        relevé LWIN, puis arbitrée comme tout champ consolidé. Une valeur que
+        plus aucune source n'affirme est donc ré-arbitrée — c'est la règle
+        commune à `region`, `description` ou `classification`, pas une exception
+        de l'appariement."""
+        self.cuvee.appellation = "Saisie antérieure"
         self.cuvee.save(update_fields=["appellation"])
 
         self._lancer()
 
         self.cuvee.refresh_from_db()
-        self.assertEqual(self.cuvee.appellation, "Margaux (saisi à la main)")
-        self.assertEqual(self.cuvee.lwin_code, "1011247")  # l'identité, elle, est posée
+        self.assertEqual(self.cuvee.appellation, "Margaux")
+        self.assertEqual(self.cuvee.provenance["appellation"]["canal"], "lwin")
 
     def test_code_deja_revendique_reste_au_premier_arrive(self):
         """Le code LWIN porte une contrainte d'unicité : le premier arrivé le
@@ -3928,3 +3933,77 @@ class ApparierLwinCommandTests(TestCase):
         )
         sortie = self._lancer(limite=1)
         self.assertIn("1 cuvées examinées", sortie)
+
+
+class ConsolidationIdentiteTests(TestCase):
+    """`couleur` et `appellation` sont désormais arbitrés, pas figés à la création."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Dom", region="")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine, nom="C", couleur=Cuvee.Couleur.AUTRE
+        )
+
+    def _observer(self, canal, confiance, **champs):
+        enregistrer_observation(
+            self.cuvee, canal=canal, champs=champs, confiance=confiance
+        )
+
+    def test_appellation_corrigee_par_le_canal_le_plus_sur(self):
+        """Le cas qui motive le changement : une cuvée créée sans appellation par
+        un canal qui l'ignore la gardait vide à jamais."""
+        self._observer("xwines", 0.60, appellation="")
+        self._observer("lwin", 0.95, appellation="Margaux")
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.appellation, "Margaux")
+        self.assertEqual(self.cuvee.provenance["appellation"]["canal"], "lwin")
+
+    def test_couleur_autre_ne_prime_jamais_sur_une_couleur_connue(self):
+        """`AUTRE` est une absence d'information : même affirmée par le canal le
+        plus fiable, elle ne doit pas effacer le rouge lu sur l'étiquette."""
+        self._observer("claude", 0.75, couleur="ROUGE")
+        self._observer("lwin", 0.95, couleur=Cuvee.Couleur.AUTRE)
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.couleur, "ROUGE")
+        self.assertEqual(self.cuvee.provenance["couleur"]["canal"], "claude")
+
+    def test_couleur_autre_est_relevee_par_un_canal_qui_sait(self):
+        self._observer("lwin", 0.90, couleur="BLANC")
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.couleur, "BLANC")
+
+    def test_couleur_hors_nomenclature_est_ignoree(self):
+        """Une observation garde la couleur telle que le canal l'a affirmée, sans
+        le garde-fou de `upsert_cuvee` : la projeter sans revalider remettrait en
+        base une couleur inexistante (Django ne vérifie pas `choices` au save)."""
+        self.cuvee.couleur = Cuvee.Couleur.ROUGE
+        self.cuvee.save(update_fields=["couleur"])
+        self._observer("claude", 0.99, couleur="MAUVE")
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.couleur, Cuvee.Couleur.ROUGE)
+
+    def test_aucune_source_ne_laisse_la_valeur_en_place(self):
+        """La consolidation ne supprime jamais une valeur qu'aucune source ne
+        contredit (règle générale, vérifiée sur les deux nouveaux champs)."""
+        self.cuvee.couleur = Cuvee.Couleur.ROSE
+        self.cuvee.appellation = "Bandol"
+        self.cuvee.save(update_fields=["couleur", "appellation"])
+        self._observer("wineapi", 0.70, description="Un vin.")
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.couleur, Cuvee.Couleur.ROSE)
+        self.assertEqual(self.cuvee.appellation, "Bandol")

@@ -125,6 +125,24 @@ Three modules hold the domain rules as pure functions — no DB access, unit-tes
 - `wine_profile.py` (`normalize_detail`) — the **single source of truth** mapping a wineapi.io
   `GET /wines/{id}` payload onto `Cuvee` fields, reused by both the provider and `ingest`.
 
+### Consolidation — `couleur` and `appellation` are arbitrated, not frozen at creation
+Both used to be written **once**, by `ingest.upsert_cuvee`, and never revisited: a wine created by a
+channel that ignores appellations kept an empty one forever, and a `couleur` set to `AUTRE` for want of
+better stayed `AUTRE` even after a channel that had actually read the label said otherwise. They are now
+in `consolidation._CHAMPS_PROFIL` (confidence first, then recency — the policy §5 gives identity).
+
+`couleur` carries its own rule in `_valeur_affirmee`, and both halves matter:
+- **`AUTRE` counts as an absence, never an assertion.** It is `Cuvee.Couleur`'s catch-all, handed out
+  whenever nothing is known (unknown wineapi type, no keyword matched, X-Wines dessert/port, a
+  `ReferenceLwin` default). Treating it as a value would let a channel that is very confident *about
+  identity* — LWIN above all — erase a red asserted by one that actually read the label.
+- **A colour outside the nomenclature is dropped.** An observation stores what the channel asserted,
+  bypassing `upsert_cuvee`'s fallback to `AUTRE`; projecting it unchecked would put a non-existent
+  colour back in the database, since Django does not enforce `choices` on `save()`.
+
+After changing arbitration policy or channel confidences, replay with `manage.py reconsolider` — no
+source is re-queried, it only re-reads observations already in the database.
+
 ### External enrichment (pluggable providers)
 `backend/apps/catalog/enrichment/` defines `EnrichmentProvider` (abstract) returning
 `NormalizedWine`. Providers implement `lookup_by_barcode` / `lookup_by_text` / `lookup_by_image`.
@@ -280,12 +298,12 @@ wine of the same estate) and far faster. Three things hold it together:
   cleanly. 90 is the best compromise found, hence `--seuil` / `--seuil-producteur` and `--simuler`.
   Quote before/after numbers if you retune them.
 
-`lwin_code` is written directly (identity, unique constraint — first claimant keeps it, same rule as
-`ingest._completer_identites`), and so is `appellation`, which is **not** in
-`consolidation._CHAMPS_PROFIL` and is therefore never re-arbitrated; only `classification` goes
-through the observation + consolidation path. The observation deliberately does not assert `region`:
-LWIN's is coarse (`Bordeaux`) where a bulk import's is often finer, and LWIN's higher confidence would
-overwrite the better value with the worse one.
+`lwin_code` is the **only** field written directly (identity, unique constraint — first claimant keeps
+it, same rule as `ingest._completer_identites`). Everything else LWIN contributes — `appellation`,
+`classification`, `couleur` — is asserted in the observation and placed by consolidation, so it carries
+provenance and stays re-arbitrable. The observation deliberately does **not** assert `region`: LWIN's is
+coarse (`Bordeaux`) where a bulk import's is often finer, and LWIN's higher confidence would overwrite
+the better value with the worse one.
 
 ### Measuring recognition quality — use it before touching OCR/matching thresholds
 `manage.py evaluer_reconnaissance` (logic in `catalog/evaluation.py`) is how a change to the OCR

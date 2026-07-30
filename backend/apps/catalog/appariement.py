@@ -234,19 +234,30 @@ def _par_lots(pks: list[int], taille: int = 500):
 def _observer(cuvee: Cuvee, ref: dict, score: float) -> None:
     """Dépose le relevé LWIN de l'appariement, puis re-consolide la fiche.
 
-    On n'affirme ici que ce que LWIN sait **mieux** que le canal qui a garni la
-    cuvée : la classification. En particulier on n'affirme **pas** `region` —
-    LWIN la donne large (« Bordeaux ») là où l'import en masse la donne souvent
-    plus fine, et une confiance LWIN supérieure écraserait la meilleure valeur
-    par la moins bonne. L'appellation, elle, n'est pas encore un champ consolidé
-    (cf. `consolidation._CHAMPS_PROFIL`) : elle est posée directement par
-    l'appelant, seulement si elle manque.
+    On n'affirme que ce que LWIN sait **mieux** que le canal qui a garni la
+    cuvée : l'appellation (sa `sous_region`), la classification et la couleur.
+    En particulier on n'affirme **pas** `region` — LWIN la donne large
+    (« Bordeaux ») là où l'import en masse la donne souvent plus fine, et une
+    confiance LWIN supérieure écraserait la meilleure valeur par la moins bonne.
+
+    Ces champs passent par l'observation plutôt que par une écriture directe :
+    `appellation` et `couleur` sont désormais consolidés
+    (`consolidation._CHAMPS_PROFIL`), donc `consolider` ci-dessous ré-arbitrerait
+    de toute façon toute valeur posée à la main juste avant — et la provenance
+    resterait muette sur son origine.
     """
     enregistrer_observation(
         cuvee,
         canal=CANAL,
         payload_brut={"lwin": ref, "appariement": {"score": score}},
-        champs={"classification": ref.get("classification", "")},
+        champs={
+            "classification": ref.get("classification", ""),
+            # `sous_region` porte l'AOC (« Margaux ») ; à défaut, la région reste
+            # la meilleure approximation disponible.
+            "appellation": ref.get("sous_region") or ref.get("region") or "",
+            # `AUTRE` sera ignoré par la consolidation (absence, pas affirmation).
+            "couleur": ref.get("couleur", ""),
+        },
         confiance=score,
     )
     consolider(cuvee)
@@ -314,15 +325,12 @@ def apparier_lwin(
 
 
 def _appliquer(cuvee: Cuvee, ref: dict, score: float) -> None:
-    """Pose l'identité LWIN et l'appellation sur la cuvée, puis observe."""
-    champs = ["lwin_code"]
+    """Pose l'identité LWIN sur la cuvée, puis dépose le relevé.
+
+    Seul `lwin_code` est écrit ici : c'est une **identité** canonique (contrainte
+    unique, clé de déduplication), pas un champ arbitrable — même traitement que
+    dans `ingest.upsert_cuvee`. Tout le reste de l'apport LWIN (appellation,
+    classification, couleur) passe par l'observation et la consolidation."""
     cuvee.lwin_code = ref["lwin"]
-    # L'appellation est ce que LWIN apporte de plus précieux au catalogue :
-    # `sous_region` porte l'AOC (« Margaux ») là où l'import en masse ne connaît
-    # que la région (« Bordeaux »). On ne remplace jamais une valeur existante.
-    appellation = ref.get("sous_region") or ref.get("region") or ""
-    if appellation and not cuvee.appellation:
-        cuvee.appellation = appellation[:255]
-        champs.append("appellation")
-    cuvee.save(update_fields=champs)
+    cuvee.save(update_fields=["lwin_code"])
     _observer(cuvee, ref, score)
