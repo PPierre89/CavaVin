@@ -137,6 +137,26 @@ docker compose exec app python manage.py import_lwin /chemin/LWINdatabase.xlsx  
 Le même import est aussi disponible **par upload** depuis le panneau d'administration (section
 « Référentiel LWIN »), sans accès shell au conteneur.
 
+**Remplir le catalogue d'un coup — X-Wines.** Là où LWIN apporte des *identités* de vins (pour la
+correspondance floue), le jeu de données ouvert **X-Wines** (~100 000 vins de 62 pays, licence Open
+Database, publié avec l'article <https://doi.org/10.3390/bdcc7010020>) apporte de vraies **fiches** :
+cépages, accords mets-vins, degré, corps, acidité, région, pays et site du domaine. Un import, aucune
+clé d'API, aucun quota — le catalogue partagé et l'autocomplétion de l'écran d'ajout sont garnis dès
+la première utilisation.
+
+```bash
+# Fichier XWines_*_wines.csv : https://www.kaggle.com/datasets/rogerioxavier/x-wines-slim-version
+#                    version complète : https://github.com/rogerioxavier/X-Wines
+docker compose exec app python manage.py import_xwines /chemin/XWines_Full_100K_wines.csv
+```
+
+Idempotent et **reprenable** : une seconde passe saute les vins déjà connus (comptez ~12 min pour les
+100 000 vins). `--limite N` pour un essai, `--rafraichir` pour re-déposer un relevé à la sortie d'une
+nouvelle version du jeu de données. Chaque ligne traverse le chemin commun (observation horodatée puis
+consolidation), donc un vin déjà décrit par Claude ou wineapi est **complété**, jamais dupliqué.
+Les jeux de données examinés puis écartés — et pourquoi (licences `NC`/`SA`/`ND`, données scrapées)
+— sont documentés dans [`docs/datasets-kaggle.md`](docs/datasets-kaggle.md).
+
 Le référentiel importé alimente aussi la **recherche dynamique** (`GET /api/recherche-vins/?q=`) :
 suggestions au fil de la frappe (préfixes, tolérance aux fautes, millésime et couleur compris dans
 la requête — « palmer rouge 199 »), branchées sur le champ de recherche de l'écran d'ajout ;

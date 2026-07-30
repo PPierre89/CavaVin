@@ -61,6 +61,9 @@ python manage.py createsuperuser        # accounts also via /api/auth/register/
 python manage.py makemigrations         # after any model change — commit the migration
 python manage.py test                   # Django test suite
 
+# Fill the referential from the open X-Wines dataset (idempotent, resumable, ~12 min for 100k)
+python manage.py import_xwines /path/XWines_Full_100K_wines.csv [--limite N] [--rafraichir]
+
 # Coverage (config from .coveragerc; CI enforces fail_under = 85, actual ~92%)
 coverage run manage.py test && coverage report
 ```
@@ -157,6 +160,19 @@ The cascade in `registry.py` tries enabled providers in order:
   label in frame), all under the `TESSERACT_TIMEOUT` total budget. Never raises `EnrichmentError`;
   inert without the imported dump or the binary. Keeps identification working with zero API keys.
 - **Vivino** — permanently disabled stub (no public API; scraping violates ToS — do not implement).
+- **X-Wines** — not a live provider but a **bulk offline channel**: `manage.py import_xwines` loads
+  the open X-Wines dataset (~100k wines / 62 countries, ODbL, published with the 2023 BDCC paper)
+  straight into the shared catalog. It is what makes a fresh install useful with zero API keys —
+  LWIN gives identities for fuzzy matching, X-Wines gives *fiches* (grapes, food pairings, ABV,
+  body, acidity, region, country, winery website). Each row is mapped to a **wineapi-shaped detail**
+  (same trick as Claude) so `wine_profile.normalize_detail` + `ingest.upsert_cuvee` are reused
+  as-is: observation, provenance and consolidation all behave normally. Channel confidence is
+  `0.60`, below wineapi — it is a frozen 2022 snapshot and must not outrank a live channel; it
+  carries no market data at all, which is why that is safe. The import is idempotent and
+  **resumable** (a row whose `xwines:` reference is already in the catalog is skipped on one
+  indexed query), so re-running is nearly free. `docs/datasets-kaggle.md` records the datasets
+  surveyed and why the famous ones (winemag 130k, Vivino dumps) are refused — `NC`/`SA`/`ND`
+  licences and scraped origin, consistent with the Vivino/CellarTracker stance below.
 - **CellarTracker** — permanently disabled stub, same rationale: no public reference API; `/wines.asp` is
   an HTML community page and scraping it violates their ToS. Their only official programmatic access
   (`xlquery.asp`) returns the *authenticated user's own* cellar/notes — a personal export, not a
@@ -179,9 +195,17 @@ the first key present is what made a barcode scan of an already-known wine blow 
 claimed by another cuvée is never taken — first claimant keeps it. See
 `docs/architecture-referentiel.md` §5.
 
-When a reading carries **no** strong identity — which is every LLM identification, since Claude
-returns neither a barcode nor an external reference — the fallback key is `(domaine, nom_normalise)`,
-**not** the raw name. `Cuvee.nom_normalise` is derived in `save()` (lowercase, no accents, no
+The `(domaine, nom_normalise)` fallback then runs **whenever no strong identity matched** — including
+when the reading carries a brand-new one. "An unknown external reference is decisive, so create" only
+holds while creating is legal, and `unique_cuvee_nom_par_domaine` says a producer has one cuvée of a
+given name: creating anyway raises IntegrityError, i.e. the same 500-on-scan class of bug already
+fixed for the external reference. Attaching the reading to the existing cuvée (and grafting the new
+identity onto it) is the only outcome the constraint allows — and the right one, since two references
+describing the same (producer, name) describe the same wine.
+
+That fallback key is `(domaine, nom_normalise)`, **not** the raw name — which matters most for the
+readings carrying **no** strong identity at all, i.e. every LLM identification, since Claude returns
+neither a barcode nor an external reference. `Cuvee.nom_normalise` is derived in `save()` (lowercase, no accents, no
 punctuation) and carries a partial unique constraint. An LLM never returns the same string twice, so
 comparing raw names let "Grand Vin", "Grand vin" and "Grand Vin " become three cuvées of the same
 wine in the *shared* catalog. Two consequences to preserve: the constraint sits on a derived field

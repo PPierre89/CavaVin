@@ -35,6 +35,12 @@ _CONFIANCE_CANAL = {
     # Vinou : catalogue producteur (données saisies par les domaines), couverture
     # de niche mais identité directe (nom, domaine, gtin) — confiance modérée.
     "vinou": 0.65,
+    # X-Wines : jeu de données académique ouvert, importé hors ligne en masse
+    # (cf. xwines_import). Identité et profil œnologique solides et revus, mais
+    # c'est un *instantané* figé (collecte 2022) : il ne doit pas primer sur un
+    # canal interrogé en direct. Il ne porte d'ailleurs aucune donnée de marché,
+    # là où la consolidation arbitre déjà par récence.
+    "xwines": 0.60,
 }
 _CONFIANCE_DEFAUT = 0.50
 
@@ -233,7 +239,7 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
       1. code-barres  (chemin US 01)
       2. référence externe wineapi  (chemin US 04)
       3. code LWIN  (réconcilie les relevés LWIN entre eux et avec les autres canaux)
-    puis, si le relevé n'en porte aucune, le repli (domaine, nom).
+    puis, si aucune ne désigne une cuvée connue, le repli (domaine, nom_normalise).
 
     Un code-barres inconnu **ne conclut pas** : un vin déjà connu par sa référence
     wineapi doit être retrouvé quand le relevé courant apporte *en plus* un
@@ -275,16 +281,28 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
         cuvee = Cuvee.objects.filter(**{champ: valeur}).order_by("pk").first()
         if cuvee is not None or champ != "code_barres":
             break  # seul un code-barres inconnu autorise à essayer la clé suivante.
-    if cuvee is None and not identites:
+    if cuvee is None:
         # Repli sur la forme *normalisée* du nom : une comparaison brute laissait
         # « Grand Vin » et « Grand vin » cohabiter (cf. Cuvee.nom_normalise).
-        cuvee = (
-            Cuvee.objects.filter(
-                domaine=domaine, nom_normalise=normaliser_nom(wine.cuvee_nom)
+        #
+        # Ce repli s'applique **même quand le relevé porte une identité forte
+        # inédite**. La règle « une référence externe inconnue est décisive, on
+        # crée » (docs/architecture-referentiel.md §5) ne vaut que tant que la
+        # création est possible : or `unique_cuvee_nom_par_domaine` pose qu'un
+        # producteur n'a qu'une cuvée d'un nom donné. Créer malgré tout viole
+        # cette contrainte — IntegrityError, donc 500 sur le scan, exactement la
+        # classe de bug corrigée pour la référence externe. Rattacher le relevé à
+        # la cuvée existante (et lui greffer l'identité neuve via
+        # `_completer_identites`) est le seul dénouement cohérent avec la
+        # contrainte, et c'est aussi le bon : deux références externes qui
+        # décrivent le même (producteur, nom) décrivent le même vin.
+        nom_normalise = normaliser_nom(wine.cuvee_nom)
+        if nom_normalise:  # la contrainte est partielle : un nom vide n'identifie rien.
+            cuvee = (
+                Cuvee.objects.filter(domaine=domaine, nom_normalise=nom_normalise)
+                .order_by("pk")
+                .first()
             )
-            .order_by("pk")
-            .first()
-        )
 
     created = cuvee is None
     if created:
