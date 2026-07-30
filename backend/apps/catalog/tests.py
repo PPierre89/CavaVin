@@ -34,7 +34,10 @@ from .enrichment.grapeminds import GrapeMindsProvider
 from .enrichment.vinou import VinouProvider
 from .enrichment.vinou import _JWT_CACHE_KEY as VINOU_JWT_KEY
 from .enrichment.wineapi import WineApiProvider
-from . import apogee, quotas, sommellerie, wine_profile
+from . import (
+    apogee, appariement, marchand_import, quotas, sommellerie, tabular,
+    vivino_import, wine_profile, xwines_import,
+)
 from .runtime_config import definir_source_activee, set_parametre, source_activee
 from .consolidation import consolider
 from .ingest import (
@@ -442,12 +445,16 @@ class ConsolidationTests(TestCase):
         self.assertEqual(self.cuvee.provenance["region"]["canal"], "lwin")
 
     def test_marche_prend_le_releve_le_plus_recent(self):
-        """Pour un champ de marché, la récence prime (même si moins fiable)."""
+        """Pour un champ de marché, la récence prime (même si moins fiable).
+
+        Entre canaux **légitimes** : le scraping, lui, forme un étage inférieur
+        où la récence ne le fait pas remonter (cf.
+        ``ConsolidationMarcheScrapingTests``)."""
         ancien = enregistrer_observation(
-            self.cuvee, canal="wineapi", champs={"prix_min": 20}, confiance=0.70
+            self.cuvee, canal="claude", champs={"prix_min": 20}, confiance=0.90
         )
-        recent = enregistrer_observation(
-            self.cuvee, canal="scrape:x", champs={"prix_min": 35}, confiance=0.40
+        enregistrer_observation(
+            self.cuvee, canal="wineapi", champs={"prix_min": 35}, confiance=0.50
         )
         # Force un ordre temporel déterministe.
         SourceObservation.objects.filter(pk=ancien.pk).update(
@@ -456,7 +463,7 @@ class ConsolidationTests(TestCase):
         consolider(self.cuvee)
         self.cuvee.refresh_from_db()
         self.assertEqual(self.cuvee.prix_min, 35)
-        self.assertEqual(self.cuvee.provenance["prix_min"]["canal"], "scrape:x")
+        self.assertEqual(self.cuvee.provenance["prix_min"]["canal"], "wineapi")
 
     def test_ne_supprime_pas_une_valeur_qu_aucune_source_ne_contredit(self):
         """Une valeur héritée reste si aucune observation ne l'affirme/contredit."""
@@ -3401,3 +3408,1078 @@ class DedupNomMigrationTests(TransactionTestCase):
             sum(Bouteille.objects.filter(cuvee=survivante).values_list("quantite", flat=True)), 5
         )
         self.assertEqual(NoteDegustation.objects.filter(cuvee=survivante).count(), 1)
+
+
+class XWinesMappingTests(SimpleTestCase):
+    """Mapping pur d'une ligne X-Wines — aucune base de données."""
+
+    # Ligne réelle du dump (XWines_Test_100_wines.csv), en-têtes en majuscules
+    # comme les rend `tabular.lignes`.
+    _LIGNE = {
+        "WINEID": "101847",
+        "WINENAME": "Dona Antonia Porto Reserva Tawny",
+        "TYPE": "Dessert/Port",
+        "ELABORATE": "Assemblage/Blend",
+        "GRAPES": "['Touriga Nacional', 'Touriga Franca', 'Tinta Barroca']",
+        "HARMONIZE": "['Appetizer', 'Sweet Dessert', 'Blue Cheese']",
+        "ABV": "20.0",
+        "BODY": "Very full-bodied",
+        "ACIDITY": "High",
+        "CODE": "PT",
+        "COUNTRY": "Portugal",
+        "REGIONID": "1031",
+        "REGIONNAME": "Porto",
+        "WINERYID": "10674",
+        "WINERYNAME": "Porto Ferreira",
+        "WEBSITE": "https://sogrape.com/pt/brand/porto-ferreira",
+        "VINTAGES": "[2021, 2020, 'N.V.']",
+    }
+
+    def test_detail_au_format_wineapi(self):
+        """Le détail produit passe tel quel dans `wine_profile.normalize_detail`,
+        qui est le seul mapping vers les colonnes de la cuvée."""
+        detail = xwines_import.detail_depuis_ligne(self._LIGNE)
+        champs = wine_profile.normalize_detail(detail)
+
+        self.assertEqual(champs["region"], "Porto")
+        self.assertEqual(champs["pays"], "Portugal")
+        self.assertEqual(champs["corps"], "Very full-bodied")
+        self.assertEqual(champs["acidite"], "High")
+        self.assertEqual(champs["degre_alcool"], 20.0)
+        self.assertEqual(champs["elaborate"], "Assemblage/Blend")
+        self.assertEqual(
+            champs["cepages"], ["Touriga Nacional", "Touriga Franca", "Tinta Barroca"]
+        )
+        self.assertEqual(
+            [a["nom"] for a in champs["accords"]],
+            ["Appetizer", "Sweet Dessert", "Blue Cheese"],
+        )
+        # X-Wines ne pondère pas ses accords : pas de confiance inventée.
+        self.assertTrue(all(a["confiance"] is None for a in champs["accords"]))
+        # Aucune donnée de marché : le canal ne doit rien affirmer sur les prix.
+        self.assertIsNone(champs["prix_min"])
+        self.assertIsNone(champs["note_moyenne"])
+
+    def test_millesimes_conserves_dans_le_brut(self):
+        """La liste des millésimes n'a pas d'équivalent au modèle (une cuvée est
+        indépendante du millésime) : elle survit dans le payload brut."""
+        detail = xwines_import.detail_depuis_ligne(self._LIGNE)
+        self.assertEqual(detail["vintages"], ["2021", "2020", "N.V."])
+
+    def test_couleurs(self):
+        for type_xwines, attendu in [
+            ("Red", "ROUGE"),
+            ("White", "BLANC"),
+            ("Rosé", "ROSE"),
+            ("Sparkling", "BULLES"),
+            # Un vin de dessert / porto n'a pas de couleur dans notre
+            # nomenclature : AUTRE plutôt qu'un rouge affirmé à tort.
+            ("Dessert", "AUTRE"),
+            ("Dessert/Port", "AUTRE"),
+            ("", "AUTRE"),
+        ]:
+            with self.subTest(type_xwines):
+                self.assertEqual(xwines_import.couleur_depuis_type(type_xwines), attendu)
+
+    def test_listes_malformees_ne_cassent_pas_la_ligne(self):
+        """Le dump est communautaire : une cellule illisible vaut liste vide, la
+        ligne reste importable."""
+        ligne = dict(self._LIGNE, GRAPES="['Merlot'", HARMONIZE="", ABV="n/c")
+        detail = xwines_import.detail_depuis_ligne(ligne)
+        self.assertEqual(detail["grapes"], [])
+        self.assertEqual(detail["pairings"], [])
+        self.assertNotIn("alcoholContent", detail)
+
+    def test_ligne_sans_identite_est_rejetee(self):
+        """Sans producteur ni nom il n'y a aucune clé de déduplication : la ligne
+        est écartée plutôt que de polluer le catalogue mutualisé."""
+        self.assertIsNone(
+            xwines_import.detail_depuis_ligne(dict(self._LIGNE, WINERYNAME=""))
+        )
+        self.assertIsNone(xwines_import.wine_depuis_ligne(dict(self._LIGNE, WINENAME="")))
+
+    def test_reference_externe_prefixee_par_le_canal(self):
+        """`reference_externe_id` est mono-source : sans préfixe, l'id X-Wines
+        « 101847 » se confondrait avec le wineapi.io « 101847 »."""
+        wine = xwines_import.wine_depuis_ligne(self._LIGNE)
+        self.assertEqual(wine.reference_externe_id, "xwines:101847")
+        self.assertEqual(wine.source, "xwines")
+
+
+class ImportXWinesCommandTests(TestCase):
+    """Commande import_xwines : remplissage du référentiel, idempotence, reprise."""
+
+    _COLONNES = [
+        "WineID", "WineName", "Type", "Elaborate", "Grapes", "Harmonize", "ABV",
+        "Body", "Acidity", "Code", "Country", "RegionID", "RegionName",
+        "WineryID", "WineryName", "Website", "Vintages",
+    ]
+    _MARGAUX = (
+        '1,Grand Vin,Red,Assemblage/Blend,"[\'Merlot\', \'Cabernet Sauvignon\']",'
+        '"[\'Beef\', \'Lamb\']",13.5,Full-bodied,Medium,FR,France,10,Bordeaux,'
+        '20,Chateau Margaux,https://chateau-margaux.com,"[2015, 2016]"\n'
+    )
+
+    def _fichier(self, lignes: list[str]) -> str:
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8") as f:
+            f.write(",".join(self._COLONNES) + "\n" + "".join(lignes))
+            return f.name
+
+    def _importer(self, lignes: list[str], **options) -> str:
+        chemin = self._fichier(lignes)
+        try:
+            sortie = StringIO()
+            call_command("import_xwines", chemin, stdout=sortie, **options)
+            return sortie.getvalue()
+        finally:
+            os.unlink(chemin)
+
+    def test_import_remplit_le_referentiel(self):
+        self._importer([self._MARGAUX])
+
+        cuvee = Cuvee.objects.get()
+        self.assertEqual(cuvee.nom, "Grand Vin")
+        self.assertEqual(cuvee.couleur, "ROUGE")
+        self.assertEqual(cuvee.region, "Bordeaux")
+        self.assertEqual(cuvee.pays, "France")
+        self.assertEqual(cuvee.corps, "Full-bodied")
+        self.assertEqual(float(cuvee.degre_alcool), 13.5)
+        self.assertEqual(
+            sorted(c.nom for c in cuvee.cepages.all()), ["Cabernet Sauvignon", "Merlot"]
+        )
+        self.assertEqual([a["nom"] for a in cuvee.accords], ["Beef", "Lamb"])
+        # Le producteur est renseigné, là où les canaux d'identification le
+        # créent avec une région vide.
+        self.assertEqual(cuvee.domaine.nom, "Chateau Margaux")
+        self.assertEqual(cuvee.domaine.region, "Bordeaux")
+        self.assertEqual(cuvee.domaine.pays, "France")
+        self.assertEqual(cuvee.domaine.site_web, "https://chateau-margaux.com")
+
+    def test_observation_et_provenance_portent_le_canal(self):
+        """Le relevé traverse le chemin commun : observation horodatée puis
+        consolidation, comme n'importe quel canal."""
+        self._importer([self._MARGAUX])
+
+        observation = SourceObservation.objects.get()
+        self.assertEqual(observation.canal, "xwines")
+        self.assertEqual(float(observation.confiance), 0.60)
+        # Rien du dump n'est perdu : les millésimes, sans équivalent au modèle,
+        # restent lisibles dans le brut de l'observation.
+        self.assertEqual(
+            observation.payload_brut["wineapi_detail"]["vintages"], ["2015", "2016"]
+        )
+
+        cuvee = Cuvee.objects.get()
+        self.assertEqual(cuvee.provenance["region"]["canal"], "xwines")
+
+    def test_reimport_est_gratuit_et_ne_doublonne_pas(self):
+        """Une seconde passe saute les vins déjà connus (import reprenable)."""
+        self._importer([self._MARGAUX])
+        sortie = self._importer([self._MARGAUX])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertEqual(SourceObservation.objects.count(), 1)  # aucun relevé re-déposé
+        self.assertIn("1 déjà présentes", sortie)
+
+    def test_rafraichir_redepose_une_observation(self):
+        self._importer([self._MARGAUX])
+        self._importer([self._MARGAUX], rafraichir=True)
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertEqual(SourceObservation.objects.count(), 2)
+
+    def test_cuvee_deja_connue_est_completee_pas_dupliquee(self):
+        """Un vin déjà au catalogue (identifié par un autre canal, donc sans
+        référence X-Wines) est retrouvé par (domaine, nom) : X-Wines lui greffe
+        sa référence et son profil au lieu de créer un doublon."""
+        domaine = Domaine.objects.create(nom="Chateau Margaux", region="Bordeaux")
+        existante = Cuvee.objects.create(
+            domaine=domaine, nom="grand vin", couleur=Cuvee.Couleur.ROUGE
+        )
+
+        self._importer([self._MARGAUX])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        existante.refresh_from_db()
+        self.assertEqual(existante.reference_externe_id, "xwines:1")
+        self.assertEqual(existante.corps, "Full-bodied")
+
+    def test_limite_et_lignes_inexploitables(self):
+        sortie = self._importer(
+            [
+                self._MARGAUX,
+                ',Sans Producteur,Red,,[],[],,,,FR,France,10,Bordeaux,20,,,[]\n',
+                '3,Autre Vin,White,,[],[],,,,FR,France,10,Loire,21,Domaine X,,[]\n',
+            ],
+            limite=2,
+        )
+        self.assertIn("2 lignes lues", sortie)
+        self.assertEqual(Cuvee.objects.count(), 1)  # la ligne sans producteur est écartée
+
+    def test_schema_inattendu_leve_une_erreur(self):
+        chemin = self._fichier([])
+        with open(chemin, "w", encoding="utf-8") as f:
+            f.write("a,b,c\n1,2,3\n")
+        try:
+            with self.assertRaises(CommandError) as ctx:
+                call_command("import_xwines", chemin, stdout=StringIO())
+            self.assertIn("WineName", str(ctx.exception))
+        finally:
+            os.unlink(chemin)
+
+    def test_fichier_absent_leve_une_erreur(self):
+        with self.assertRaises(CommandError):
+            call_command("import_xwines", "/chemin/inexistant.csv")
+
+    def test_conflit_de_region_du_domaine_n_interrompt_pas_l_import(self):
+        """Renseigner la région d'un producteur peut heurter la contrainte
+        unique (nom, région) si une fiche régionale existe déjà : le vin est
+        importé quand même, une région manquante n'ayant rien de bloquant."""
+        sans_region = Domaine.objects.create(nom="Chateau Margaux", region="")
+        Domaine.objects.create(nom="Chateau Margaux", region="Bordeaux")
+        Cuvee.objects.create(
+            domaine=sans_region, nom="Grand Vin", couleur=Cuvee.Couleur.ROUGE,
+            reference_externe_id="xwines:1",
+        )
+
+        self._importer([self._MARGAUX], rafraichir=True)
+
+        sans_region.refresh_from_db()
+        self.assertEqual(sans_region.region, "")  # non renseignée, mais pas d'échec
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertEqual(Cuvee.objects.get().corps, "Full-bodied")  # profil bien posé
+
+    def test_une_ligne_en_conflit_ne_fait_pas_echouer_l_import(self):
+        """Un import de 100 000 lignes ne doit pas mourir sur une ligne : un
+        conflit d'identité résiduel se compte, il n'interrompt pas."""
+        autre = self._MARGAUX.replace("1,Grand Vin", "2,Second Vin")
+        reel = xwines_import.upsert_cuvee
+        appels = {"n": 0}
+
+        def _upsert(wine):
+            appels["n"] += 1
+            if appels["n"] == 1:
+                raise IntegrityError("conflit simulé")
+            return reel(wine)
+
+        with patch.object(xwines_import, "upsert_cuvee", _upsert):
+            sortie = self._importer([self._MARGAUX, autre])
+
+        self.assertIn("1 ignorées", sortie)
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertEqual(Cuvee.objects.get().nom, "Second Vin")
+
+    def test_ecriture_par_lots_et_progression(self):
+        """L'import commit par lots (un fsync SQLite par vin domine sinon le
+        temps d'import) et rend compte de l'avancement à chaque lot."""
+        lignes = [
+            self._MARGAUX.replace("1,Grand Vin", f"{i},Vin {i}") for i in range(1, 6)
+        ]
+        etapes = []
+        chemin = self._fichier(lignes)
+        try:
+            xwines_import.importer_xwines(
+                chemin, lot=2, progression=lambda r: etapes.append(r.crees)
+            )
+        finally:
+            os.unlink(chemin)
+
+        self.assertEqual(Cuvee.objects.count(), 5)
+        self.assertEqual(etapes, [2, 4, 5])
+
+
+class RepliNomAvantCreationTests(TestCase):
+    """`upsert_cuvee` : une identité forte inédite ne doit pas faire créer une
+    cuvée qui violerait `unique_cuvee_nom_par_domaine`."""
+
+    def test_reference_externe_inedite_rejoint_la_cuvee_de_meme_nom(self):
+        domaine = Domaine.objects.create(nom="Chateau Margaux", region="Bordeaux")
+        existante = Cuvee.objects.create(
+            domaine=domaine, nom="Grand Vin", couleur=Cuvee.Couleur.ROUGE
+        )
+
+        cuvee, created = upsert_cuvee(
+            NormalizedWine(
+                domaine_nom="Chateau Margaux",
+                cuvee_nom="grand  vin",  # même nom normalisé
+                couleur="ROUGE",
+                reference_externe_id="w-42",
+                source="wineapi",
+            )
+        )
+
+        self.assertFalse(created)
+        self.assertEqual(cuvee.pk, existante.pk)
+        # L'identité neuve est greffée sur la cuvée existante.
+        self.assertEqual(cuvee.reference_externe_id, "w-42")
+        self.assertEqual(Cuvee.objects.count(), 1)
+
+    def test_nom_vide_ne_rejoint_rien(self):
+        """La contrainte de nom est partielle : un nom vide n'identifie rien et
+        ne doit pas agréger des vins distincts."""
+        domaine = Domaine.objects.create(nom="Domaine X", region="")
+        Cuvee.objects.create(domaine=domaine, nom="", couleur=Cuvee.Couleur.ROUGE)
+
+        cuvee, created = upsert_cuvee(
+            NormalizedWine(
+                domaine_nom="Domaine X", cuvee_nom="", couleur="ROUGE",
+                reference_externe_id="w-99", source="wineapi",
+            )
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(Cuvee.objects.count(), 2)
+
+
+class ChoisirReferenceTests(SimpleTestCase):
+    """Choix d'une référence LWIN pour une cuvée — fonction pure, orientée précision."""
+
+    def _ref(self, lwin, vin, **extra):
+        base = {
+            "lwin": lwin, "producteur": "Chateau Margaux", "vin": vin,
+            "region": "Bordeaux", "sous_region": "Margaux",
+            "classification": "1er Cru", "couleur": "ROUGE",
+        }
+        base.update(extra)
+        return base
+
+    def test_apparie_le_bon_vin_du_domaine(self):
+        ref, score, motif = appariement.choisir_reference(
+            "Grand Vin", "ROUGE",
+            [self._ref("1", "Pavillon Rouge"), self._ref("2", "Grand Vin")],
+        )
+        self.assertEqual(motif, "apparie")
+        self.assertEqual(ref["lwin"], "2")
+        self.assertEqual(score, 1.0)
+
+    def test_un_vin_plus_long_ne_s_apparie_pas_au_plus_court(self):
+        """Le piège de l'appariement : « Origem Merlot » ne doit pas atterrir sur
+        « Origem », l'autre vin du même domaine, sous prétexte que tous les
+        tokens de celui-ci sont retrouvés (défaut de `token_set_ratio`)."""
+        ref, _, motif = appariement.choisir_reference(
+            "Origem Merlot", "ROUGE", [self._ref("1", "Origem")]
+        )
+        self.assertEqual(motif, "silence")
+        self.assertIsNone(ref)
+
+    def test_deux_vins_homonymes_sont_une_ambiguite(self):
+        """Même nom de vin sous deux appellations différentes : le score ne peut
+        pas les départager, on s'abstient plutôt que de polluer le catalogue."""
+        ref, _, motif = appariement.choisir_reference(
+            "Reserve", "ROUGE",
+            [self._ref("1", "Reserve", sous_region="Margaux"),
+             self._ref("2", "Reserve", sous_region="Pauillac")],
+        )
+        self.assertEqual(motif, "ambigu")
+        self.assertIsNone(ref)
+
+    def test_meme_vin_sous_deux_codes_se_confirme(self):
+        """Le dump contient le même vin sous plusieurs codes LWIN : ce n'est pas
+        une ambiguïté, les deux références se confirment."""
+        ref, _, motif = appariement.choisir_reference(
+            "Grand Vin", "ROUGE", [self._ref("1", "Grand Vin"), self._ref("2", "Grand Vin")]
+        )
+        self.assertEqual(motif, "apparie")
+        self.assertEqual(ref["lwin"], "1")  # départage stable sur le code
+
+    def test_couleur_contradictoire_ecarte_la_reference(self):
+        ref, _, motif = appariement.choisir_reference(
+            "Grand Vin", "BLANC", [self._ref("1", "Grand Vin", couleur="ROUGE")]
+        )
+        self.assertEqual(motif, "silence")
+        self.assertIsNone(ref)
+
+    def test_couleur_inconnue_ne_contredit_rien(self):
+        """`AUTRE` est une absence d'information (tous les portos importés de
+        X-Wines), pas une couleur : elle ne doit pas bloquer l'appariement."""
+        ref, _, motif = appariement.choisir_reference(
+            "Grand Vin", "AUTRE", [self._ref("1", "Grand Vin", couleur="ROUGE")]
+        )
+        self.assertEqual(motif, "apparie")
+        self.assertEqual(ref["lwin"], "1")
+
+    def test_reference_sans_nom_de_vin(self):
+        """Une référence au niveau du producteur n'identifie une cuvée que si
+        celle-ci porte le nom du domaine."""
+        refs = [self._ref("1", "", producteur="Chateau Margaux")]
+        _, _, motif = appariement.choisir_reference("Grand Vin", "ROUGE", refs)
+        self.assertEqual(motif, "silence")
+        ref, _, motif = appariement.choisir_reference("Chateau Margaux", "ROUGE", refs)
+        self.assertEqual(motif, "apparie")
+        self.assertEqual(ref["lwin"], "1")
+
+    def test_nom_vide_ou_aucune_reference(self):
+        self.assertEqual(appariement.choisir_reference("", "ROUGE", [])[2], "silence")
+        self.assertEqual(appariement.choisir_reference("Grand Vin", "ROUGE", [])[2], "silence")
+
+
+class ApparierLwinCommandTests(TestCase):
+    """Commande apparier_lwin : réconciliation catalogue <-> référentiel LWIN."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Chateau Margaux", region="Bordeaux")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine, nom="Grand Vin", couleur=Cuvee.Couleur.ROUGE
+        )
+        ReferenceLwin.objects.create(
+            lwin="1011247", producteur="Chateau Margaux", vin="Grand Vin",
+            pays="France", region="Bordeaux", sous_region="Margaux",
+            couleur="ROUGE", classification="1er Cru Classe",
+        )
+
+    def _lancer(self, **options) -> str:
+        sortie = StringIO()
+        call_command("apparier_lwin", stdout=sortie, **options)
+        return sortie.getvalue()
+
+    def test_appariement_pose_identite_et_appellation(self):
+        self._lancer()
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.lwin_code, "1011247")
+        # L'apport décisif de LWIN : l'AOC, que l'import en masse ne connaît pas.
+        self.assertEqual(self.cuvee.appellation, "Margaux")
+        # La classification passe par la consolidation, comme tout champ de profil.
+        self.assertEqual(self.cuvee.classification, "1er Cru Classe")
+        self.assertEqual(self.cuvee.provenance["classification"]["canal"], "lwin")
+
+    def test_observation_deposee_avec_le_score(self):
+        self._lancer()
+
+        observation = SourceObservation.objects.get(canal="lwin")
+        self.assertEqual(float(observation.confiance), 1.0)
+        self.assertEqual(observation.payload_brut["lwin"]["lwin"], "1011247")
+
+    def test_simuler_n_ecrit_rien(self):
+        sortie = self._lancer(simuler=True)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.lwin_code, "")
+        self.assertEqual(SourceObservation.objects.count(), 0)
+        self.assertIn("[simulation]", sortie)
+        self.assertIn("1 appariées", sortie)
+
+    def test_appellation_passe_par_la_consolidation(self):
+        """L'appellation n'est pas écrite en direct : elle est *affirmée* par le
+        relevé LWIN, puis arbitrée comme tout champ consolidé. Une valeur que
+        plus aucune source n'affirme est donc ré-arbitrée — c'est la règle
+        commune à `region`, `description` ou `classification`, pas une exception
+        de l'appariement."""
+        self.cuvee.appellation = "Saisie antérieure"
+        self.cuvee.save(update_fields=["appellation"])
+
+        self._lancer()
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.appellation, "Margaux")
+        self.assertEqual(self.cuvee.provenance["appellation"]["canal"], "lwin")
+
+    def test_code_deja_revendique_reste_au_premier_arrive(self):
+        """Le code LWIN porte une contrainte d'unicité : le premier arrivé le
+        garde (même règle que `ingest._completer_identites`)."""
+        autre = Cuvee.objects.create(
+            domaine=self.domaine, nom="Autre Vin", couleur=Cuvee.Couleur.ROUGE,
+            lwin_code="1011247",
+        )
+
+        sortie = self._lancer()
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.lwin_code, "")
+        self.assertEqual(Cuvee.objects.get(pk=autre.pk).lwin_code, "1011247")
+        self.assertIn("1 codes déjà pris", sortie)
+
+    def test_seconde_passe_n_examine_que_le_reste(self):
+        self._lancer()
+        sortie = self._lancer()
+
+        self.assertIn("0 cuvées examinées", sortie)
+        self.assertEqual(SourceObservation.objects.filter(canal="lwin").count(), 1)
+
+    def test_producteur_ecrit_autrement_est_rapproche(self):
+        """Le repli flou rattrape une graphie différente du producteur, à
+        condition qu'un token au moins soit commun."""
+        domaine = Domaine.objects.create(nom="Chateau  Margaux SA", region="")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="Pavillon Rouge", couleur=Cuvee.Couleur.ROUGE
+        )
+        ReferenceLwin.objects.create(
+            lwin="1011248", producteur="Chateau Margaux", vin="Pavillon Rouge",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+        )
+
+        self._lancer()
+
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.lwin_code, "1011248")
+
+    def test_producteur_inconnu_du_dump_reste_silencieux(self):
+        domaine = Domaine.objects.create(nom="Bodega Inconnue", region="")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="Tinto Joven", couleur=Cuvee.Couleur.ROUGE
+        )
+
+        self._lancer()
+
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.lwin_code, "")
+
+    def test_referentiel_vide_et_seuils_invalides(self):
+        ReferenceLwin.objects.all().delete()
+        with self.assertRaises(CommandError):
+            self._lancer()
+        ReferenceLwin.objects.create(lwin="1", producteur="X", vin="Y")
+        with self.assertRaises(CommandError):
+            self._lancer(seuil=1.5)
+        with self.assertRaises(CommandError):
+            self._lancer(seuil_producteur=0)
+
+    def test_limite(self):
+        Cuvee.objects.create(
+            domaine=self.domaine, nom="Pavillon Rouge", couleur=Cuvee.Couleur.ROUGE
+        )
+        sortie = self._lancer(limite=1)
+        self.assertIn("1 cuvées examinées", sortie)
+
+
+class ConsolidationIdentiteTests(TestCase):
+    """`couleur` et `appellation` sont désormais arbitrés, pas figés à la création."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Dom", region="")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine, nom="C", couleur=Cuvee.Couleur.AUTRE
+        )
+
+    def _observer(self, canal, confiance, **champs):
+        enregistrer_observation(
+            self.cuvee, canal=canal, champs=champs, confiance=confiance
+        )
+
+    def test_appellation_corrigee_par_le_canal_le_plus_sur(self):
+        """Le cas qui motive le changement : une cuvée créée sans appellation par
+        un canal qui l'ignore la gardait vide à jamais."""
+        self._observer("xwines", 0.60, appellation="")
+        self._observer("lwin", 0.95, appellation="Margaux")
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.appellation, "Margaux")
+        self.assertEqual(self.cuvee.provenance["appellation"]["canal"], "lwin")
+
+    def test_couleur_autre_ne_prime_jamais_sur_une_couleur_connue(self):
+        """`AUTRE` est une absence d'information : même affirmée par le canal le
+        plus fiable, elle ne doit pas effacer le rouge lu sur l'étiquette."""
+        self._observer("claude", 0.75, couleur="ROUGE")
+        self._observer("lwin", 0.95, couleur=Cuvee.Couleur.AUTRE)
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.couleur, "ROUGE")
+        self.assertEqual(self.cuvee.provenance["couleur"]["canal"], "claude")
+
+    def test_couleur_autre_est_relevee_par_un_canal_qui_sait(self):
+        self._observer("lwin", 0.90, couleur="BLANC")
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.couleur, "BLANC")
+
+    def test_couleur_hors_nomenclature_est_ignoree(self):
+        """Une observation garde la couleur telle que le canal l'a affirmée, sans
+        le garde-fou de `upsert_cuvee` : la projeter sans revalider remettrait en
+        base une couleur inexistante (Django ne vérifie pas `choices` au save)."""
+        self.cuvee.couleur = Cuvee.Couleur.ROUGE
+        self.cuvee.save(update_fields=["couleur"])
+        self._observer("claude", 0.99, couleur="MAUVE")
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.couleur, Cuvee.Couleur.ROUGE)
+
+    def test_aucune_source_ne_laisse_la_valeur_en_place(self):
+        """La consolidation ne supprime jamais une valeur qu'aucune source ne
+        contredit (règle générale, vérifiée sur les deux nouveaux champs)."""
+        self.cuvee.couleur = Cuvee.Couleur.ROSE
+        self.cuvee.appellation = "Bandol"
+        self.cuvee.save(update_fields=["couleur", "appellation"])
+        self._observer("wineapi", 0.70, description="Un vin.")
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.couleur, Cuvee.Couleur.ROSE)
+        self.assertEqual(self.cuvee.appellation, "Bandol")
+
+
+class MarchandMappingTests(SimpleTestCase):
+    """Mapping pur d'une ligne de catalogue marchand — aucune base de données."""
+
+    def _ligne(self, titre, **extra):
+        base = {
+            "TITLE": titre, "TYPE": "Red", "GRAPE": "Merlot",
+            "SECONDARY GRAPE VARIETIES": "", "DESCRIPTION": "Un vin.",
+            "ABV": "ABV 13.50%", "COUNTRY": "France", "REGION": "Bordeaux",
+            "APPELLATION": "Margaux",
+        }
+        base.update(extra)
+        return base
+
+    def test_produits_non_vinicoles_ecartes(self):
+        """Le fichier est un catalogue de boissons, pas un référentiel de vins."""
+        self.assertFalse(marchand_import.est_du_vin(
+            "The Macallan Sherry Oak 12 Year Old Single Malt Whisky 70cl", "Brown"))
+        self.assertFalse(marchand_import.est_du_vin("VIVIR Tequila Blanco", "White"))
+        self.assertFalse(marchand_import.est_du_vin("Panaché de Noël", "Mixed"))
+        self.assertTrue(marchand_import.est_du_vin("Oyster Bay Sauvignon Blanc", "White"))
+
+    def test_producteur_par_guillemets(self):
+        self.assertEqual(
+            marchand_import.decomposer_titre(
+                "Louis Roederer 'Cristal' Champagne 2015", self._ligne("")),
+            ("Louis Roederer", "Cristal"),
+        )
+
+    def test_apostrophe_d_elision_n_est_pas_un_guillemet(self):
+        """Le piège du fichier : l'apostrophe délimite la cuvée *et* marque
+        l'élision française. « Caves d'Esclans 'Whispering Angel' » donnait la
+        cuvée « Esclans 'Whispering Angel » avec une capture naïve."""
+        self.assertEqual(
+            marchand_import.decomposer_titre(
+                "Caves d'Esclans 'Whispering Angel' Rosé 2022", self._ligne("")),
+            ("Caves d'Esclans", "Whispering Angel"),
+        )
+        # Une apostrophe purement d'élision ne délimite rien.
+        self.assertIsNone(
+            marchand_import.decomposer_titre("The Guv'nor", self._ligne("", GRAPE=""))
+        )
+
+    def test_apostrophe_interne_a_la_cuvee_est_conservee(self):
+        self.assertEqual(
+            marchand_import.decomposer_titre(
+                "Bread & Butter 'Winemaker's Selection' Chardonnay 2021",
+                self._ligne("", GRAPE="Chardonnay")),
+            ("Bread & Butter", "Winemaker's Selection"),
+        )
+
+    def test_producteur_par_cepage(self):
+        self.assertEqual(
+            marchand_import.decomposer_titre(
+                "Oyster Bay Sauvignon Blanc 2022, Marlborough",
+                self._ligne("", GRAPE="Sauvignon Blanc", REGION="Marlborough")),
+            ("Oyster Bay", "Sauvignon Blanc"),
+        )
+
+    def test_suffixe_geographique_retire(self):
+        """Une virgule restante n'introduit qu'un complément géographique."""
+        self.assertEqual(
+            marchand_import.decomposer_titre(
+                "Ravenswood Zinfandel 2020, Lodi",
+                self._ligne("", GRAPE="Zinfandel", REGION="California")),
+            ("Ravenswood", "Zinfandel"),
+        )
+
+    def test_titre_non_scindable_est_ignore(self):
+        """Sans producteur isolable il n'y a pas de clé de déduplication : mieux
+        vaut ignorer la ligne que semer des doublons dans le catalogue partagé."""
+        self.assertIsNone(marchand_import.decomposer_titre(
+            "Louis Latour Mâcon-Lugny 2021/22", self._ligne("", GRAPE="Chardonnay")))
+
+    def test_couleurs(self):
+        for type_, titre, attendu in [
+            ("Red", "X", "ROUGE"), ("White", "X", "BLANC"), ("Rosé", "X", "ROSE"),
+            # Le catalogue n'a pas de type « Sparkling » : un champagne est « White ».
+            ("White", "Louis Roederer Cristal Champagne", "BULLES"),
+            ("Tawny", "X", "AUTRE"), ("Orange", "X", "AUTRE"),
+        ]:
+            with self.subTest(type_=type_, titre=titre):
+                self.assertEqual(marchand_import.couleur_depuis_type(type_, titre), attendu)
+
+    def test_degre(self):
+        self.assertEqual(marchand_import.degre_depuis_abv("ABV 14.00%"), 14.0)
+        self.assertEqual(marchand_import.degre_depuis_abv("13,5"), 13.5)
+        self.assertIsNone(marchand_import.degre_depuis_abv(""))
+        self.assertIsNone(marchand_import.degre_depuis_abv("ABV n/c"))
+        self.assertIsNone(marchand_import.degre_depuis_abv("ABV 250%"))
+
+    def test_aucune_donnee_de_marche(self):
+        """Le prix est le tarif de détail du marchand — et les champs de marché
+        s'arbitrent à la récence, donc un tarif scrapé primerait sur wineapi."""
+        detail = marchand_import.detail_depuis_ligne(
+            self._ligne("Louis Roederer 'Cristal' Champagne", PRICE="£199.99 per bottle"))
+        champs = wine_profile.normalize_detail(detail)
+        self.assertIsNone(champs["prix_min"])
+        self.assertIsNone(champs["note_moyenne"])
+        self.assertEqual(champs["prix_marchands"], [])
+
+
+class ImportCatalogueMarchandTests(TestCase):
+    """Commande import_catalogue_marchand : canal de scraping, confiance basse."""
+
+    _COLONNES = [
+        "Title", "Description", "Price", "Capacity", "Grape",
+        "Secondary Grape Varieties", "Closure", "Country", "Unit",
+        "Characteristics", "Per bottle / case / each", "Type", "ABV", "Region",
+        "Style", "Vintage", "Appellation",
+    ]
+    _CRISTAL = (
+        "Louis Roederer 'Cristal' Champagne 2015,Un champagne.,£199.99 per bottle,75CL,"
+        "Chardonnay,Pinot Noir,Natural Cork,France,10.5,Brioche,per bottle,White,"
+        "ABV 12.00%,Champagne,Rich,2015,Reims\n"
+    )
+
+    def _fichier(self, lignes: list[str]) -> str:
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8") as f:
+            f.write(",".join(self._COLONNES) + "\n" + "".join(lignes))
+            return f.name
+
+    def _importer(self, lignes: list[str], **options) -> str:
+        chemin = self._fichier(lignes)
+        try:
+            sortie = StringIO()
+            call_command("import_catalogue_marchand", chemin, stdout=sortie, **options)
+            return sortie.getvalue()
+        finally:
+            os.unlink(chemin)
+
+    def test_import_pose_appellation_et_profil(self):
+        self._importer([self._CRISTAL])
+
+        cuvee = Cuvee.objects.get()
+        self.assertEqual(cuvee.domaine.nom, "Louis Roederer")
+        self.assertEqual(cuvee.nom, "Cristal")
+        self.assertEqual(cuvee.couleur, "BULLES")  # « Champagne » prime sur le type White
+        self.assertEqual(cuvee.appellation, "Reims")  # l'apport propre de ce canal
+        self.assertEqual(float(cuvee.degre_alcool), 12.0)
+        self.assertEqual(
+            sorted(c.nom for c in cuvee.cepages.all()), ["Chardonnay", "Pinot Noir"]
+        )
+
+    def test_canal_de_scraping_a_confiance_basse(self):
+        """Le nom de canal préfixé `scrape:` vaut 0,40 via ingest._confiance_pour :
+        cette source arbitre après toutes les autres."""
+        self._importer([self._CRISTAL])
+
+        observation = SourceObservation.objects.get()
+        self.assertEqual(observation.canal, "scrape:marchand")
+        self.assertEqual(float(observation.confiance), 0.40)
+
+    def test_n_ecrase_jamais_une_source_plus_fiable(self):
+        """Garde-fou central de ce canal : il comble des trous, il ne dégrade rien."""
+        domaine = Domaine.objects.create(nom="Louis Roederer", region="Champagne")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="Cristal", couleur=Cuvee.Couleur.BULLES
+        )
+        enregistrer_observation(
+            cuvee, canal="lwin", confiance=0.95, champs={"appellation": "Champagne AOC"}
+        )
+        consolider(cuvee)
+
+        self._importer([self._CRISTAL])
+
+        cuvee.refresh_from_db()
+        self.assertEqual(Cuvee.objects.count(), 1)  # complétée, pas dupliquée
+        self.assertEqual(cuvee.appellation, "Champagne AOC")  # LWIN garde la main
+        self.assertEqual(cuvee.provenance["appellation"]["canal"], "lwin")
+
+    def test_comble_une_appellation_manquante(self):
+        """L'inverse : là où aucune source n'affirme rien, le canal remplit."""
+        domaine = Domaine.objects.create(nom="Louis Roederer", region="")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="Cristal", couleur=Cuvee.Couleur.BULLES
+        )
+
+        self._importer([self._CRISTAL])
+
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.appellation, "Reims")
+        self.assertEqual(cuvee.provenance["appellation"]["canal"], "scrape:marchand")
+
+    def test_aucun_prix_n_est_importe(self):
+        self._importer([self._CRISTAL])
+
+        cuvee = Cuvee.objects.get()
+        self.assertIsNone(cuvee.prix_min)
+        self.assertEqual(cuvee.prix_marchands, [])
+
+    def test_lignes_ecartees_sont_comptees(self):
+        whisky = (
+            "The Macallan Sherry Oak 12 Year Old Single Malt Whisky 70cl,Un whisky.,"
+            "£75.00 each,70CL,,,Natural Cork,Scotland,28,Oak,each,Brown,ABV 40.00%,"
+            "Speyside,Rich,NV,\n"
+        )
+        insecable = (
+            "Louis Latour Mâcon-Lugny 2021/22,Un vin.,£14.99 per bottle,75CL,Chardonnay,,"
+            "Natural Cork,France,9.8,Citron,per bottle,White,ABV 13.00%,Burgundy,Crisp,2021,\n"
+        )
+        sortie = self._importer([self._CRISTAL, whisky, insecable])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertIn("1 non vinicoles", sortie)
+        self.assertIn("1 sans producteur identifiable", sortie)
+
+    def test_reimport_est_gratuit(self):
+        self._importer([self._CRISTAL])
+        sortie = self._importer([self._CRISTAL])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertEqual(SourceObservation.objects.count(), 1)
+        self.assertIn("1 déjà présentes", sortie)
+
+    def test_schema_inattendu_et_fichier_absent(self):
+        chemin = self._fichier([])
+        with open(chemin, "w", encoding="utf-8") as f:
+            f.write("a,b\n1,2\n")
+        try:
+            with self.assertRaises(CommandError) as ctx:
+                call_command("import_catalogue_marchand", chemin, stdout=StringIO())
+            self.assertIn("Title", str(ctx.exception))
+        finally:
+            os.unlink(chemin)
+        with self.assertRaises(CommandError):
+            call_command("import_catalogue_marchand", "/chemin/inexistant.csv")
+
+
+class VivinoMappingTests(SimpleTestCase):
+    """Mapping pur des exports scrapés — table d'alias, aucune base de données."""
+
+    def test_alias_couvrent_les_quatre_schemas(self):
+        """Un seul lecteur pour quatre en-têtes différents : c'est toute
+        l'astuce du module."""
+        for ligne, producteur, nom in [
+            ({"NAME_DOMAIN": "Premius", "PRODUCT_NAME": "Bordeaux Rosé 2021"},
+             "Premius", "Bordeaux Rosé"),
+            ({"WINERY": "Baron de Ley", "WINE": "Rosado de Lágrima 2020"},
+             "Baron de Ley", "Rosado de Lágrima"),
+            ({"WINERY_NAME": "TerraNoble", "WINE_NAME": "Reserva Especial Carménère"},
+             "TerraNoble", "Reserva Especial Carménère"),
+        ]:
+            with self.subTest(ligne=ligne):
+                self.assertEqual(vivino_import.identite(ligne), (producteur, nom))
+
+    def test_millesime_et_non_millesime_retires_du_nom(self):
+        """Ces exports collent le millésime au nom : sans nettoyage, chaque
+        millésime créerait une cuvée distincte alors que `Cuvee` en est
+        indépendante."""
+        self.assertEqual(vivino_import.nom_de_cuvee("Rosado de Lágrima 2020"), "Rosado de Lágrima")
+        self.assertEqual(vivino_import.nom_de_cuvee("Sweet White N.V."), "Sweet White")
+        self.assertEqual(vivino_import.nom_de_cuvee("Bordeaux 2015"), "Bordeaux")
+
+    def test_producteur_deduit_quand_la_colonne_manque(self):
+        """wine.com n'a pas de colonne producteur : le cépage sépare le
+        producteur du reste du libellé."""
+        ligne = {
+            "NAMES": "00 Wines VGW Chardonnay 2017",
+            "COUNTRYS": "Chardonnay from Willamette Valley, Oregon",
+        }
+        self.assertEqual(vivino_import.identite(ligne), ("00 Wines VGW", "Chardonnay"))
+
+    def test_descripteur_winecom_n_est_pas_un_pays(self):
+        """L'en-tête « Countrys » de wine.com contient en réalité
+        « <cépage> from <région> » : on ne doit pas le lire comme un pays."""
+        ligne = {"NAMES": "00 Wines VGW Chardonnay 2017",
+                 "COUNTRYS": "Chardonnay from Willamette Valley, Oregon"}
+        detail = vivino_import.detail_depuis_ligne(ligne)
+        self.assertEqual(detail["region"]["name"], "Willamette Valley, Oregon")
+        self.assertEqual(detail["region"]["country"], "")
+        self.assertEqual([g["name"] for g in detail["grapes"]], ["Chardonnay"])
+
+    def test_ligne_sans_identite_est_ecartee(self):
+        self.assertIsNone(vivino_import.identite({"PRODUCT_NAME": "Bordeaux 2015"}))
+        self.assertIsNone(vivino_import.identite({"NAME_DOMAIN": "Premius"}))
+
+    def test_couleurs(self):
+        for ligne, attendu in [
+            ({"TYPE": "Red"}, "ROUGE"),
+            ({"WINE_TYPE": "White"}, "BLANC"),
+            ({"COLOR_WINE": "White Wine"}, "BLANC"),   # suffixe « Wine » toléré
+            ({"TYPE": "Rose"}, "ROSE"),
+            # Aucun de ces exports n'a de type « effervescent » : le nom tranche.
+            ({"TYPE": "White", "WINE_NAME": "Brut Champagne"}, "BULLES"),
+        ]:
+            with self.subTest(ligne=ligne):
+                self.assertEqual(vivino_import.couleur_de_ligne(ligne), attendu)
+
+    def test_note_nulle_signifie_non_notee(self):
+        """« 0.0 » chez wine.com veut dire « pas encore notée », pas « nulle »."""
+        base = {"WINERY": "Dom", "WINE": "C"}
+        self.assertNotIn("averageRating", vivino_import.detail_depuis_ligne(
+            dict(base, RATINGS="0.0", RATINGSNUM="0")))
+        detail = vivino_import.detail_depuis_ligne(dict(base, RATING="4.2", REVIEWS="42"))
+        self.assertEqual(detail["averageRating"], 4.2)
+        self.assertEqual(detail["ratingsCount"], 42)
+
+    def test_prix_et_devise(self):
+        detail = vivino_import.detail_depuis_ligne(
+            {"WINERY": "Dom", "WINE": "C", "PRICES": "79.99$"}, devise="USD")
+        self.assertEqual(detail["priceRange"], {"min": 79.99, "max": 79.99, "currency": "USD"})
+
+    def test_canal_hors_scraping_refuse(self):
+        """C'est le préfixe « scrape: » qui garantit la confiance basse : sans
+        lui, ces données arbitreraient à égalité avec wineapi ou Claude."""
+        with self.assertRaises(vivino_import.VivinoImportError):
+            vivino_import.importer_vivino("/peu/importe.csv", canal="vivino")
+
+
+class EncodageTabulaireTests(SimpleTestCase):
+    """Détection d'encodage : un export UTF-16 lu en UTF-8 ne lève rien, il
+    produit silencieusement des en-têtes truffés d'octets nuls."""
+
+    def test_utf16_detecte_par_le_bom(self):
+        contenu = "Winery,Wine\nBaron de Ley,Rosado 2020\n"
+        for encodage, attendu in (("utf-16", "utf-16"), ("utf-8", "utf-8-sig")):
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".csv", delete=False, encoding=encodage
+            ) as f:
+                f.write(contenu)
+                chemin = f.name
+            try:
+                self.assertEqual(tabular.encodage(chemin), attendu)
+                lignes = list(tabular.lignes(chemin))
+                self.assertEqual(lignes[0]["WINERY"], "Baron de Ley")
+            finally:
+                os.unlink(chemin)
+
+
+class ConsolidationMarcheScrapingTests(TestCase):
+    """Le scraping ne prend jamais prix ni notes à une source légitime."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Dom", region="")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine, nom="C", couleur=Cuvee.Couleur.ROUGE
+        )
+
+    def test_scraping_plus_recent_ne_prime_pas_sur_wineapi(self):
+        """Le cœur du garde-fou : « le plus récent gagne » suppose des
+        provenances comparables. Un import de scraping date tous ses relevés du
+        jour et raflerait sinon le marché à un canal légitime."""
+        enregistrer_observation(
+            self.cuvee, canal="wineapi", confiance=0.85,
+            champs={"note_moyenne": 4.5, "prix_min": 30},
+        )
+        enregistrer_observation(  # déposé après, donc plus récent
+            self.cuvee, canal="scrape:vivino", confiance=0.40,
+            champs={"note_moyenne": 2.0, "prix_min": 5},
+        )
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(float(self.cuvee.note_moyenne), 4.5)
+        self.assertEqual(float(self.cuvee.prix_min), 30)
+        self.assertEqual(self.cuvee.provenance["note_moyenne"]["canal"], "wineapi")
+
+    def test_scraping_comble_quand_aucune_source_legitime(self):
+        enregistrer_observation(
+            self.cuvee, canal="scrape:vivino", confiance=0.40,
+            champs={"note_moyenne": 3.8, "prix_min": 12},
+        )
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(float(self.cuvee.note_moyenne), 3.8)
+        self.assertEqual(self.cuvee.provenance["note_moyenne"]["canal"], "scrape:vivino")
+
+    def test_entre_relevés_scrapes_la_recence_reprend_ses_droits(self):
+        enregistrer_observation(
+            self.cuvee, canal="scrape:vivino", confiance=0.40, champs={"prix_min": 12})
+        enregistrer_observation(
+            self.cuvee, canal="scrape:winecom", confiance=0.40, champs={"prix_min": 15})
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(float(self.cuvee.prix_min), 15)
+
+
+class ImportVivinoCommandTests(TestCase):
+    """Commande import_vivino : canal de scraping, idempotence, garde-fous."""
+
+    _COLONNES = ["Name_domain", "Product_name", "Region", "Country",
+                 "Average_rating", "Number_of_rates", "Price", "Type"]
+    _PREMIUS = "Premius,Bordeaux Rosé 2021,Bordeaux,France,3.6,228,4.09,Rose\n"
+
+    def _importer(self, lignes: list[str], colonnes=None, encodage="utf-8", **options) -> str:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".csv", delete=False, encoding=encodage
+        ) as f:
+            f.write(",".join(colonnes or self._COLONNES) + "\n" + "".join(lignes))
+            chemin = f.name
+        try:
+            sortie = StringIO()
+            call_command("import_vivino", chemin, stdout=sortie, **options)
+            return sortie.getvalue()
+        finally:
+            os.unlink(chemin)
+
+    def test_import_cree_la_cuvee(self):
+        self._importer([self._PREMIUS])
+
+        cuvee = Cuvee.objects.get()
+        self.assertEqual(cuvee.domaine.nom, "Premius")
+        self.assertEqual(cuvee.nom, "Bordeaux Rosé")  # millésime retiré
+        self.assertEqual(cuvee.couleur, "ROSE")
+        self.assertEqual(cuvee.region, "Bordeaux")
+        self.assertEqual(float(cuvee.note_moyenne), 3.6)
+        self.assertEqual(float(cuvee.prix_min), 4.09)
+        self.assertEqual(cuvee.devise, "EUR")
+
+    def test_canal_de_scraping_a_confiance_basse(self):
+        self._importer([self._PREMIUS])
+
+        observation = SourceObservation.objects.get()
+        self.assertEqual(observation.canal, "scrape:vivino")
+        self.assertEqual(float(observation.confiance), 0.40)
+
+    def test_canal_hors_scraping_refuse(self):
+        with self.assertRaises(CommandError):
+            self._importer([self._PREMIUS], canal="vivino")
+
+    def test_millesimes_multiples_ne_font_qu_une_cuvee(self):
+        """Deux millésimes du même vin sont la même cuvée : c'est ce qui rend
+        l'empreinte (producteur, nom) stable en l'absence d'identifiant."""
+        sortie = self._importer([
+            self._PREMIUS,
+            "Premius,Bordeaux Rosé 2020,Bordeaux,France,3.5,180,3.99,Rose\n",
+        ])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        # Dans un même lot, le raccourci « déjà présente » ne voit pas encore la
+        # ligne précédente (rien n'est écrit avant le vidage) : c'est
+        # `upsert_cuvee` qui fusionne, et la ligne compte comme mise à jour. D'un
+        # lot à l'autre, en revanche, le raccourci joue.
+        self.assertIn("1 cuvées créées, 1 mises à jour", sortie)
+
+    def test_reimport_est_gratuit(self):
+        self._importer([self._PREMIUS])
+        sortie = self._importer([self._PREMIUS])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertEqual(SourceObservation.objects.count(), 1)
+        self.assertIn("1 déjà présentes", sortie)
+
+    def test_fichier_utf16_lu_correctement(self):
+        """Cas réel du fichier wine.com : UTF-16 sans que rien ne le signale."""
+        self._importer([self._PREMIUS], encodage="utf-16")
+
+        self.assertEqual(Cuvee.objects.get().domaine.nom, "Premius")
+
+    def test_ligne_sans_identite_comptee(self):
+        sortie = self._importer([
+            self._PREMIUS, ",Bordeaux Blanc 2019,Bordeaux,France,3.2,10,5.00,White\n",
+        ])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertIn("1 sans identité exploitable", sortie)
+
+    def test_schema_inattendu_et_fichier_absent(self):
+        with self.assertRaises(CommandError):
+            self._importer(["1,2\n"], colonnes=["alpha", "beta"])
+        with self.assertRaises(CommandError):
+            call_command("import_vivino", "/chemin/inexistant.csv", stdout=StringIO())

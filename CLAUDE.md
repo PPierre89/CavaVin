@@ -61,6 +61,18 @@ python manage.py createsuperuser        # accounts also via /api/auth/register/
 python manage.py makemigrations         # after any model change — commit the migration
 python manage.py test                   # Django test suite
 
+# Fill the referential from the open X-Wines dataset (idempotent, resumable, ~12 min for 100k)
+python manage.py import_xwines /path/XWines_Full_100K_wines.csv [--limite N] [--rafraichir]
+
+# Reconcile the catalog with the imported LWIN dump (lwin_code + appellation + classification)
+python manage.py apparier_lwin --simuler   # measure first — it writes to the shared catalog
+
+# Appoint: merchant catalogue, scraping channel (confidence 0.40) — appellations only
+python manage.py import_catalogue_marchand /path/WineDataset.csv
+
+# Scraped rating/price exports (Vivino, wine.com) — channel MUST be scrape:*
+python manage.py import_vivino /path/export.csv [--canal scrape:winecom] [--devise USD]
+
 # Coverage (config from .coveragerc; CI enforces fail_under = 85, actual ~92%)
 coverage run manage.py test && coverage report
 ```
@@ -119,6 +131,24 @@ Three modules hold the domain rules as pure functions — no DB access, unit-tes
 - `wine_profile.py` (`normalize_detail`) — the **single source of truth** mapping a wineapi.io
   `GET /wines/{id}` payload onto `Cuvee` fields, reused by both the provider and `ingest`.
 
+### Consolidation — `couleur` and `appellation` are arbitrated, not frozen at creation
+Both used to be written **once**, by `ingest.upsert_cuvee`, and never revisited: a wine created by a
+channel that ignores appellations kept an empty one forever, and a `couleur` set to `AUTRE` for want of
+better stayed `AUTRE` even after a channel that had actually read the label said otherwise. They are now
+in `consolidation._CHAMPS_PROFIL` (confidence first, then recency — the policy §5 gives identity).
+
+`couleur` carries its own rule in `_valeur_affirmee`, and both halves matter:
+- **`AUTRE` counts as an absence, never an assertion.** It is `Cuvee.Couleur`'s catch-all, handed out
+  whenever nothing is known (unknown wineapi type, no keyword matched, X-Wines dessert/port, a
+  `ReferenceLwin` default). Treating it as a value would let a channel that is very confident *about
+  identity* — LWIN above all — erase a red asserted by one that actually read the label.
+- **A colour outside the nomenclature is dropped.** An observation stores what the channel asserted,
+  bypassing `upsert_cuvee`'s fallback to `AUTRE`; projecting it unchecked would put a non-existent
+  colour back in the database, since Django does not enforce `choices` on `save()`.
+
+After changing arbitration policy or channel confidences, replay with `manage.py reconsolider` — no
+source is re-queried, it only re-reads observations already in the database.
+
 ### External enrichment (pluggable providers)
 `backend/apps/catalog/enrichment/` defines `EnrichmentProvider` (abstract) returning
 `NormalizedWine`. Providers implement `lookup_by_barcode` / `lookup_by_text` / `lookup_by_image`.
@@ -157,6 +187,46 @@ The cascade in `registry.py` tries enabled providers in order:
   label in frame), all under the `TESSERACT_TIMEOUT` total budget. Never raises `EnrichmentError`;
   inert without the imported dump or the binary. Keeps identification working with zero API keys.
 - **Vivino** — permanently disabled stub (no public API; scraping violates ToS — do not implement).
+- **X-Wines** — not a live provider but a **bulk offline channel**: `manage.py import_xwines` loads
+  the open X-Wines dataset (~100k wines / 62 countries, ODbL, published with the 2023 BDCC paper)
+  straight into the shared catalog. It is what makes a fresh install useful with zero API keys —
+  LWIN gives identities for fuzzy matching, X-Wines gives *fiches* (grapes, food pairings, ABV,
+  body, acidity, region, country, winery website). Each row is mapped to a **wineapi-shaped detail**
+  (same trick as Claude) so `wine_profile.normalize_detail` + `ingest.upsert_cuvee` are reused
+  as-is: observation, provenance and consolidation all behave normally. Channel confidence is
+  `0.60`, below wineapi — it is a frozen 2022 snapshot and must not outrank a live channel; it
+  carries no market data at all, which is why that is safe. The import is idempotent and
+  **resumable** (a row whose `xwines:` reference is already in the catalog is skipped on one
+  indexed query), so re-running is nearly free. `docs/datasets-kaggle.md` records the datasets
+  surveyed and why the famous ones (winemag 130k, Vivino dumps) are refused — `NC`/`SA`/`ND`
+  licences and scraped origin, consistent with the Vivino/CellarTracker stance below.
+- **Catalogue marchand** (`scrape:marchand`) — second bulk offline channel, retained *under
+  reservation*: `manage.py import_catalogue_marchand` loads the `elvinrustam/wine-dataset` CSV
+  (1 290 rows, CC0) for the one thing nothing else carries — the **appellation** (179 distinct
+  values). It is a UK retailer's drinks list, not a referential: prices in £, own-label products,
+  whisky in the file, and the CC0 was applied by the uploader rather than the source — the same
+  reasoning that rejects `mysarahmadbhat/wine-tasting`. It therefore enters through the **scraping
+  frame** (architecture review, Phase 5). The channel name's `scrape:` prefix earns it `0.40` from
+  `ingest._confiance_pour` automatically, below every other source, so **it fills gaps and can
+  degrade nothing** — that is what makes it acceptable. Three guards go with it: no market data at
+  all (the price is the merchant's retail tariff, and market fields arbitrate by *recency*, so a
+  scraped price would outrank a legitimate wineapi one), non-wine products dropped, and a row whose
+  producer cannot be isolated from the title is skipped (no producer ⇒ no `(domaine, nom_normalise)`
+  dedup key ⇒ duplicates in a mutualised catalog). The apostrophe is the subtle part: it delimits the
+  cuvée *and* marks French elision, so a cuvée quote must open after whitespace and close before
+  whitespace/comma — otherwise "Caves d'Esclans 'Whispering Angel'" yields the cuvée
+  "Esclans 'Whispering Angel". See `docs/datasets-kaggle.md` §5.
+- **Exports scrapés Vivino / wine.com** (`scrape:vivino`, `scrape:winecom`) — `manage.py
+  import_vivino` loads the rating/price exports circulating on Kaggle (~68k rows across four files)
+  through one alias table, since they are the same shape under different headers. **These are
+  imported on an explicit maintainer decision and are in tension with the repo's own rule**: the data
+  comes from Vivino/wine.com, whose ToS forbid extraction, which is exactly why `VivinoProvider`
+  stays a permanently disabled stub. `docs/datasets-kaggle.md` §6 records the discrepancy rather than
+  hiding it — do not silently generalise it into a licence to add more scraped sources. The command
+  **refuses** any channel not prefixed `scrape:`, since that prefix is what buys the 0.40 confidence.
+  Quirks handled: UTF-16 (wine.com, detected by BOM in `tabular.encodage`), no producer column
+  (derived from the label, grape as separator), a `Countrys` header that actually holds
+  "<grape> from <region>", vintages glued to the wine name, and `0.0` meaning "unrated".
 - **CellarTracker** — permanently disabled stub, same rationale: no public reference API; `/wines.asp` is
   an HTML community page and scraping it violates their ToS. Their only official programmatic access
   (`xlquery.asp`) returns the *authenticated user's own* cellar/notes — a personal export, not a
@@ -179,9 +249,17 @@ the first key present is what made a barcode scan of an already-known wine blow 
 claimed by another cuvée is never taken — first claimant keeps it. See
 `docs/architecture-referentiel.md` §5.
 
-When a reading carries **no** strong identity — which is every LLM identification, since Claude
-returns neither a barcode nor an external reference — the fallback key is `(domaine, nom_normalise)`,
-**not** the raw name. `Cuvee.nom_normalise` is derived in `save()` (lowercase, no accents, no
+The `(domaine, nom_normalise)` fallback then runs **whenever no strong identity matched** — including
+when the reading carries a brand-new one. "An unknown external reference is decisive, so create" only
+holds while creating is legal, and `unique_cuvee_nom_par_domaine` says a producer has one cuvée of a
+given name: creating anyway raises IntegrityError, i.e. the same 500-on-scan class of bug already
+fixed for the external reference. Attaching the reading to the existing cuvée (and grafting the new
+identity onto it) is the only outcome the constraint allows — and the right one, since two references
+describing the same (producer, name) describe the same wine.
+
+That fallback key is `(domaine, nom_normalise)`, **not** the raw name — which matters most for the
+readings carrying **no** strong identity at all, i.e. every LLM identification, since Claude returns
+neither a barcode nor an external reference. `Cuvee.nom_normalise` is derived in `save()` (lowercase, no accents, no
 punctuation) and carries a partial unique constraint. An LLM never returns the same string twice, so
 comparing raw names let "Grand Vin", "Grand vin" and "Grand Vin " become three cuvées of the same
 wine in the *shared* catalog. Two consequences to preserve: the constraint sits on a derived field
@@ -226,6 +304,39 @@ prerequisites (key present…) with a runtime toggle `source_activee(name, defau
 is reached (`Parametre QUOTA_<SOURCE>`; default 250 for GrapeMinds, unlimited otherwise; `0` = unlimited).
 Counting/enforcement is best-effort — it never breaks an identification. The staff panel drives all this
 via `GET/PUT /api/admin-panel/sources/` (on/off + cap + usage), alongside the existing API-key overrides.
+
+### Pairing the catalog with LWIN (`appariement.py`, `manage.py apparier_lwin`)
+`ReferenceLwin` and `Cuvee` each hold what the other lacks: LWIN knows the **sub-region** — i.e. the
+appellation (`Margaux`, where a bulk import only knows `Bordeaux`) — and the classification; the
+catalog holds grapes, pairings and profile. `apparier_lwin` reconciles them offline: it sets
+`lwin_code`, `appellation` and `classification` on cuvées that have none. The payoff is concrete —
+`RechercheVinsView` (the add-flow autocomplete) searches LWIN and enriches suggestions by joining
+`Cuvee.lwin_code`, so bulk-imported wines are invisible there until paired.
+
+It deliberately does **not** reuse `enrichment.lwin._classement`: that engine matches *unstructured*
+input (OCR soup) against the whole referential, whereas here both sides are structured — match
+producer to producer, then wine to wine within that producer. More precise (no catching a different
+wine of the same estate) and far faster. Three things hold it together:
+- **Precision-first, like the provider.** The catalog is mutualised, so a wrong pairing propagates to
+  everyone; a doubt is a silence and the cuvée is left alone. Scoring uses `token_sort_ratio`, which
+  penalises tokens unexplained on *either* side — `token_set_ratio` would happily pair "Origem Merlot"
+  with the estate's other wine "Origem". Two references describing the same wine (the dump holds
+  duplicates) confirm each other; two describing *different* wines within the ambiguity margin abort.
+- **A token postings index, not a full scan.** Comparing each producer against ~50k dump producers
+  costs ~16 ms each (~27 min for 100k cuvées, measured); restricting candidates to producers sharing a
+  rare token brings it to ~1.2 ms (~2 min), and lets the common case — no shared token at all —
+  conclude silence with zero comparisons.
+- **Thresholds are knobs, not truths.** Measured on realistic pairs, legitimate producer variants score
+  86.5–90.9 and *distinct* producers 66.7–86.7: the ranges **overlap**, so no threshold separates them
+  cleanly. 90 is the best compromise found, hence `--seuil` / `--seuil-producteur` and `--simuler`.
+  Quote before/after numbers if you retune them.
+
+`lwin_code` is the **only** field written directly (identity, unique constraint — first claimant keeps
+it, same rule as `ingest._completer_identites`). Everything else LWIN contributes — `appellation`,
+`classification`, `couleur` — is asserted in the observation and placed by consolidation, so it carries
+provenance and stays re-arbitrable. The observation deliberately does **not** assert `region`: LWIN's is
+coarse (`Bordeaux`) where a bulk import's is often finer, and LWIN's higher confidence would overwrite
+the better value with the worse one.
 
 ### Measuring recognition quality — use it before touching OCR/matching thresholds
 `manage.py evaluer_reconnaissance` (logic in `catalog/evaluation.py`) is how a change to the OCR

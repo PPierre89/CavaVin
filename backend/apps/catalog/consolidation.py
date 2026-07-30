@@ -29,9 +29,16 @@ from .models import Cuvee, SourceObservation
 # Champs de profil (stables) : arbitrés à la confiance, puis à la récence.
 # `lwin_code` est volontairement absent : c'est une identité canonique gérée par
 # ``ingest`` (clé de déduplication, contrainte unique), pas un champ arbitré.
+#
+# `couleur` et `appellation` en font partie bien qu'ils tiennent de l'identité :
+# la revue (§5) range l'identité sous la même politique « confiance d'abord ».
+# Ils étaient auparavant écrits **une seule fois, à la création** par
+# ``ingest.upsert_cuvee``, donc jamais corrigés : un vin créé sans appellation
+# par un canal qui l'ignore la gardait vide même après le relevé d'un canal qui
+# la connaît, et une couleur posée à `AUTRE` faute de mieux restait `AUTRE`.
 _CHAMPS_PROFIL = (
     "region", "pays", "classification", "description", "elaborate", "corps",
-    "acidite", "degre_alcool", "image_url",
+    "acidite", "degre_alcool", "image_url", "appellation", "couleur",
 )
 # Champs de marché (volatils) : arbitrés à la récence, puis à la confiance.
 _CHAMPS_MARCHE = (
@@ -40,9 +47,32 @@ _CHAMPS_MARCHE = (
 )
 
 
+# Seules ces valeurs comptent comme une couleur *affirmée* (cf. _valeur_affirmee).
+_COULEURS_AFFIRMABLES = frozenset(Cuvee.Couleur.values) - {Cuvee.Couleur.AUTRE}
+
+
 def _valeur_affirmee(obs: SourceObservation, champ: str):
-    """Valeur du champ affirmée par l'observation, ou ``None`` si vide/absente."""
+    """Valeur du champ affirmée par l'observation, ou ``None`` si vide/absente.
+
+    ``couleur`` obéit à une règle propre, à deux motifs :
+
+    1. ``AUTRE`` est une **absence**, pas une affirmation. C'est le fourre-tout
+       de ``Cuvee.Couleur``, attribué dès qu'on ne sait pas : type inconnu de
+       wineapi (``couleur_from_type``), aucun mot-clé reconnu (``guess_couleur``),
+       vin de dessert ou porto de X-Wines, défaut d'une ``ReferenceLwin``. Le
+       traiter comme une valeur laisserait un canal très sûr *sur l'identité* —
+       LWIN en tête — effacer le rouge affirmé par un canal qui, lui, a lu
+       l'étiquette : l'écrasement d'une bonne valeur par une moins bonne que la
+       revue reproche à l'arbitrage implicite (D2).
+    2. Une observation conserve la couleur **telle que le canal l'a affirmée**,
+       sans passer par le garde-fou de ``ingest.upsert_cuvee`` (qui, lui, replie
+       une valeur hors nomenclature sur ``AUTRE``). Projeter l'observation sans
+       revalider réintroduirait donc en base une couleur inexistante : Django ne
+       vérifie pas ``choices`` à l'enregistrement.
+    """
     valeur = (obs.champs or {}).get(champ)
+    if champ == "couleur":
+        return valeur if valeur in _COULEURS_AFFIRMABLES else None
     return valeur if valeur not in (None, "", []) else None
 
 
@@ -51,9 +81,25 @@ def _clef_profil(obs: SourceObservation):
     return (obs.confiance, obs.releve_le, obs.pk)
 
 
+def _est_scraping(obs: SourceObservation) -> bool:
+    """Le relevé vient-il d'un canal de scraping (cf. ingest._confiance_pour) ?"""
+    return (obs.canal or "").startswith("scrape")
+
+
 def _clef_marche(obs: SourceObservation):
-    """Priorité marché : récence d'abord, confiance puis pk pour départager."""
-    return (obs.releve_le, obs.confiance, obs.pk)
+    """Priorité marché : sources légitimes d'abord, puis récence, puis confiance.
+
+    La règle « le plus récent gagne » suppose des provenances **comparables** :
+    entre deux canaux interrogés en direct, un prix d'aujourd'hui vaut mieux qu'un
+    prix de l'an dernier. Elle ne tient plus face à un import de scraping, qui
+    daterait tous ses relevés du jour de l'import et raflerait donc prix et notes
+    à un canal légitime — la confiance basse du canal n'y changerait rien,
+    puisqu'elle n'arbitre ici qu'à égalité de date.
+
+    Le scraping forme donc un **étage inférieur** : il n'alimente prix et notes
+    que là où aucune source légitime ne s'est exprimée. À l'intérieur de chaque
+    étage, la récence reprend ses droits."""
+    return (not _est_scraping(obs), obs.releve_le, obs.confiance, obs.pk)
 
 
 def _arbitrer(cuvee: Cuvee, provenance: dict, observations, champ: str, clef) -> None:

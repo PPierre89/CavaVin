@@ -137,6 +137,72 @@ docker compose exec app python manage.py import_lwin /chemin/LWINdatabase.xlsx  
 Le même import est aussi disponible **par upload** depuis le panneau d'administration (section
 « Référentiel LWIN »), sans accès shell au conteneur.
 
+**Remplir le catalogue d'un coup — X-Wines.** Là où LWIN apporte des *identités* de vins (pour la
+correspondance floue), le jeu de données ouvert **X-Wines** (~100 000 vins de 62 pays, licence Open
+Database, publié avec l'article <https://doi.org/10.3390/bdcc7010020>) apporte de vraies **fiches** :
+cépages, accords mets-vins, degré, corps, acidité, région, pays et site du domaine. Un import, aucune
+clé d'API, aucun quota — le catalogue partagé et l'autocomplétion de l'écran d'ajout sont garnis dès
+la première utilisation.
+
+```bash
+# Fichier XWines_*_wines.csv : https://www.kaggle.com/datasets/rogerioxavier/x-wines-slim-version
+#                    version complète : https://github.com/rogerioxavier/X-Wines
+docker compose exec app python manage.py import_xwines /chemin/XWines_Full_100K_wines.csv
+```
+
+Idempotent et **reprenable** : une seconde passe saute les vins déjà connus (comptez ~12 min pour les
+100 000 vins). `--limite N` pour un essai, `--rafraichir` pour re-déposer un relevé à la sortie d'une
+nouvelle version du jeu de données. Chaque ligne traverse le chemin commun (observation horodatée puis
+consolidation), donc un vin déjà décrit par Claude ou wineapi est **complété**, jamais dupliqué.
+Les jeux de données examinés puis écartés — et pourquoi (licences `NC`/`SA`/`ND`, données scrapées)
+— sont documentés dans [`docs/datasets-kaggle.md`](docs/datasets-kaggle.md).
+
+**Relier les deux référentiels — `apparier_lwin`.** LWIN et le catalogue portent chacun ce qui manque
+à l'autre : LWIN connaît la **sous-région**, c'est-à-dire l'appellation (« Margaux » là où l'import en
+masse ne donne que « Bordeaux ») et la classification ; le catalogue porte cépages, accords et profil.
+La commande les réconcilie hors ligne — elle pose le code LWIN, l'appellation et la classification sur
+les cuvées qui n'en ont pas :
+
+```bash
+docker compose exec app python manage.py apparier_lwin --simuler   # bilan, sans rien écrire
+docker compose exec app python manage.py apparier_lwin
+```
+
+Effet direct : la recherche dynamique ci-dessus enrichit ses suggestions en joignant le code LWIN de la
+cuvée. Sans appariement, les vins importés en masse n'y apparaissent pas ; avec, chaque suggestion
+remonte leurs cépages, leur note et leurs accords.
+
+**Appoint d'appellations — `import_catalogue_marchand`.** Le jeu
+[`elvinrustam/wine-dataset`](https://www.kaggle.com/datasets/elvinrustam/wine-dataset) (1 290 vins,
+CC0) est le seul de la veille à porter une colonne *appellation*. C'est un catalogue de caviste, pas
+un référentiel : il entre donc par un canal de **scraping** (`scrape:marchand`) dont la confiance
+(0,40) le place derrière toutes les autres sources — il comble des trous, il n'écrase jamais rien.
+Les prix ne sont pas repris, les produits non vinicoles sont écartés, et une ligne dont le producteur
+n'est pas isolable est ignorée. Voir [`docs/datasets-kaggle.md`](docs/datasets-kaggle.md) §5 pour les
+mesures et les réserves.
+
+```bash
+docker compose exec app python manage.py import_catalogue_marchand /chemin/WineDataset.csv
+```
+
+**Exports de notes scrapés (Vivino, wine.com).** `manage.py import_vivino` ingère les exports de
+notes et de prix qui circulent sur Kaggle (~68 000 lignes, quatre schémas différents lus par une même
+table d'alias). Ces données proviennent de sites dont les CGU interdisent l'extraction — le dépôt
+refuse d'ailleurs d'implémenter Vivino comme fournisseur — et sont importées **sur décision explicite**
+du mainteneur : voir [`docs/datasets-kaggle.md`](docs/datasets-kaggle.md) §6, qui documente cet écart,
+les licences de chaque source et les garde-fous. La commande **exige** un canal préfixé `scrape:`.
+
+```bash
+docker compose exec app python manage.py import_vivino /chemin/export.csv
+docker compose exec app python manage.py import_vivino /chemin/vivno_dataset.csv \
+    --canal scrape:winecom --devise USD
+```
+
+L'appariement est **orienté précision** — le catalogue est mutualisé, une erreur se propage à tous —
+donc un doute produit un simple silence, sans gravité. Deux seuils le règlent (`--seuil` pour le nom du
+vin, `--seuil-producteur` pour le domaine) : la graphie des domaines variant d'un dump à l'autre,
+lancez d'abord `--simuler` pour mesurer le taux d'appariement avant d'écrire.
+
 Le référentiel importé alimente aussi la **recherche dynamique** (`GET /api/recherche-vins/?q=`) :
 suggestions au fil de la frappe (préfixes, tolérance aux fautes, millésime et couleur compris dans
 la requête — « palmer rouge 199 »), branchées sur le champ de recherche de l'écran d'ajout ;
