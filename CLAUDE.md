@@ -64,6 +64,9 @@ python manage.py test                   # Django test suite
 # Fill the referential from the open X-Wines dataset (idempotent, resumable, ~12 min for 100k)
 python manage.py import_xwines /path/XWines_Full_100K_wines.csv [--limite N] [--rafraichir]
 
+# Reconcile the catalog with the imported LWIN dump (lwin_code + appellation + classification)
+python manage.py apparier_lwin --simuler   # measure first — it writes to the shared catalog
+
 # Coverage (config from .coveragerc; CI enforces fail_under = 85, actual ~92%)
 coverage run manage.py test && coverage report
 ```
@@ -250,6 +253,39 @@ prerequisites (key present…) with a runtime toggle `source_activee(name, defau
 is reached (`Parametre QUOTA_<SOURCE>`; default 250 for GrapeMinds, unlimited otherwise; `0` = unlimited).
 Counting/enforcement is best-effort — it never breaks an identification. The staff panel drives all this
 via `GET/PUT /api/admin-panel/sources/` (on/off + cap + usage), alongside the existing API-key overrides.
+
+### Pairing the catalog with LWIN (`appariement.py`, `manage.py apparier_lwin`)
+`ReferenceLwin` and `Cuvee` each hold what the other lacks: LWIN knows the **sub-region** — i.e. the
+appellation (`Margaux`, where a bulk import only knows `Bordeaux`) — and the classification; the
+catalog holds grapes, pairings and profile. `apparier_lwin` reconciles them offline: it sets
+`lwin_code`, `appellation` and `classification` on cuvées that have none. The payoff is concrete —
+`RechercheVinsView` (the add-flow autocomplete) searches LWIN and enriches suggestions by joining
+`Cuvee.lwin_code`, so bulk-imported wines are invisible there until paired.
+
+It deliberately does **not** reuse `enrichment.lwin._classement`: that engine matches *unstructured*
+input (OCR soup) against the whole referential, whereas here both sides are structured — match
+producer to producer, then wine to wine within that producer. More precise (no catching a different
+wine of the same estate) and far faster. Three things hold it together:
+- **Precision-first, like the provider.** The catalog is mutualised, so a wrong pairing propagates to
+  everyone; a doubt is a silence and the cuvée is left alone. Scoring uses `token_sort_ratio`, which
+  penalises tokens unexplained on *either* side — `token_set_ratio` would happily pair "Origem Merlot"
+  with the estate's other wine "Origem". Two references describing the same wine (the dump holds
+  duplicates) confirm each other; two describing *different* wines within the ambiguity margin abort.
+- **A token postings index, not a full scan.** Comparing each producer against ~50k dump producers
+  costs ~16 ms each (~27 min for 100k cuvées, measured); restricting candidates to producers sharing a
+  rare token brings it to ~1.2 ms (~2 min), and lets the common case — no shared token at all —
+  conclude silence with zero comparisons.
+- **Thresholds are knobs, not truths.** Measured on realistic pairs, legitimate producer variants score
+  86.5–90.9 and *distinct* producers 66.7–86.7: the ranges **overlap**, so no threshold separates them
+  cleanly. 90 is the best compromise found, hence `--seuil` / `--seuil-producteur` and `--simuler`.
+  Quote before/after numbers if you retune them.
+
+`lwin_code` is written directly (identity, unique constraint — first claimant keeps it, same rule as
+`ingest._completer_identites`), and so is `appellation`, which is **not** in
+`consolidation._CHAMPS_PROFIL` and is therefore never re-arbitrated; only `classification` goes
+through the observation + consolidation path. The observation deliberately does not assert `region`:
+LWIN's is coarse (`Bordeaux`) where a bulk import's is often finer, and LWIN's higher confidence would
+overwrite the better value with the worse one.
 
 ### Measuring recognition quality — use it before touching OCR/matching thresholds
 `manage.py evaluer_reconnaissance` (logic in `catalog/evaluation.py`) is how a change to the OCR

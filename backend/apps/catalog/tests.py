@@ -34,7 +34,7 @@ from .enrichment.grapeminds import GrapeMindsProvider
 from .enrichment.vinou import VinouProvider
 from .enrichment.vinou import _JWT_CACHE_KEY as VINOU_JWT_KEY
 from .enrichment.wineapi import WineApiProvider
-from . import apogee, quotas, sommellerie, wine_profile, xwines_import
+from . import apogee, appariement, quotas, sommellerie, wine_profile, xwines_import
 from .runtime_config import definir_source_activee, set_parametre, source_activee
 from .consolidation import consolider
 from .ingest import (
@@ -3722,3 +3722,209 @@ class RepliNomAvantCreationTests(TestCase):
 
         self.assertTrue(created)
         self.assertEqual(Cuvee.objects.count(), 2)
+
+
+class ChoisirReferenceTests(SimpleTestCase):
+    """Choix d'une référence LWIN pour une cuvée — fonction pure, orientée précision."""
+
+    def _ref(self, lwin, vin, **extra):
+        base = {
+            "lwin": lwin, "producteur": "Chateau Margaux", "vin": vin,
+            "region": "Bordeaux", "sous_region": "Margaux",
+            "classification": "1er Cru", "couleur": "ROUGE",
+        }
+        base.update(extra)
+        return base
+
+    def test_apparie_le_bon_vin_du_domaine(self):
+        ref, score, motif = appariement.choisir_reference(
+            "Grand Vin", "ROUGE",
+            [self._ref("1", "Pavillon Rouge"), self._ref("2", "Grand Vin")],
+        )
+        self.assertEqual(motif, "apparie")
+        self.assertEqual(ref["lwin"], "2")
+        self.assertEqual(score, 1.0)
+
+    def test_un_vin_plus_long_ne_s_apparie_pas_au_plus_court(self):
+        """Le piège de l'appariement : « Origem Merlot » ne doit pas atterrir sur
+        « Origem », l'autre vin du même domaine, sous prétexte que tous les
+        tokens de celui-ci sont retrouvés (défaut de `token_set_ratio`)."""
+        ref, _, motif = appariement.choisir_reference(
+            "Origem Merlot", "ROUGE", [self._ref("1", "Origem")]
+        )
+        self.assertEqual(motif, "silence")
+        self.assertIsNone(ref)
+
+    def test_deux_vins_homonymes_sont_une_ambiguite(self):
+        """Même nom de vin sous deux appellations différentes : le score ne peut
+        pas les départager, on s'abstient plutôt que de polluer le catalogue."""
+        ref, _, motif = appariement.choisir_reference(
+            "Reserve", "ROUGE",
+            [self._ref("1", "Reserve", sous_region="Margaux"),
+             self._ref("2", "Reserve", sous_region="Pauillac")],
+        )
+        self.assertEqual(motif, "ambigu")
+        self.assertIsNone(ref)
+
+    def test_meme_vin_sous_deux_codes_se_confirme(self):
+        """Le dump contient le même vin sous plusieurs codes LWIN : ce n'est pas
+        une ambiguïté, les deux références se confirment."""
+        ref, _, motif = appariement.choisir_reference(
+            "Grand Vin", "ROUGE", [self._ref("1", "Grand Vin"), self._ref("2", "Grand Vin")]
+        )
+        self.assertEqual(motif, "apparie")
+        self.assertEqual(ref["lwin"], "1")  # départage stable sur le code
+
+    def test_couleur_contradictoire_ecarte_la_reference(self):
+        ref, _, motif = appariement.choisir_reference(
+            "Grand Vin", "BLANC", [self._ref("1", "Grand Vin", couleur="ROUGE")]
+        )
+        self.assertEqual(motif, "silence")
+        self.assertIsNone(ref)
+
+    def test_couleur_inconnue_ne_contredit_rien(self):
+        """`AUTRE` est une absence d'information (tous les portos importés de
+        X-Wines), pas une couleur : elle ne doit pas bloquer l'appariement."""
+        ref, _, motif = appariement.choisir_reference(
+            "Grand Vin", "AUTRE", [self._ref("1", "Grand Vin", couleur="ROUGE")]
+        )
+        self.assertEqual(motif, "apparie")
+        self.assertEqual(ref["lwin"], "1")
+
+    def test_reference_sans_nom_de_vin(self):
+        """Une référence au niveau du producteur n'identifie une cuvée que si
+        celle-ci porte le nom du domaine."""
+        refs = [self._ref("1", "", producteur="Chateau Margaux")]
+        _, _, motif = appariement.choisir_reference("Grand Vin", "ROUGE", refs)
+        self.assertEqual(motif, "silence")
+        ref, _, motif = appariement.choisir_reference("Chateau Margaux", "ROUGE", refs)
+        self.assertEqual(motif, "apparie")
+        self.assertEqual(ref["lwin"], "1")
+
+    def test_nom_vide_ou_aucune_reference(self):
+        self.assertEqual(appariement.choisir_reference("", "ROUGE", [])[2], "silence")
+        self.assertEqual(appariement.choisir_reference("Grand Vin", "ROUGE", [])[2], "silence")
+
+
+class ApparierLwinCommandTests(TestCase):
+    """Commande apparier_lwin : réconciliation catalogue <-> référentiel LWIN."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Chateau Margaux", region="Bordeaux")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine, nom="Grand Vin", couleur=Cuvee.Couleur.ROUGE
+        )
+        ReferenceLwin.objects.create(
+            lwin="1011247", producteur="Chateau Margaux", vin="Grand Vin",
+            pays="France", region="Bordeaux", sous_region="Margaux",
+            couleur="ROUGE", classification="1er Cru Classe",
+        )
+
+    def _lancer(self, **options) -> str:
+        sortie = StringIO()
+        call_command("apparier_lwin", stdout=sortie, **options)
+        return sortie.getvalue()
+
+    def test_appariement_pose_identite_et_appellation(self):
+        self._lancer()
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.lwin_code, "1011247")
+        # L'apport décisif de LWIN : l'AOC, que l'import en masse ne connaît pas.
+        self.assertEqual(self.cuvee.appellation, "Margaux")
+        # La classification passe par la consolidation, comme tout champ de profil.
+        self.assertEqual(self.cuvee.classification, "1er Cru Classe")
+        self.assertEqual(self.cuvee.provenance["classification"]["canal"], "lwin")
+
+    def test_observation_deposee_avec_le_score(self):
+        self._lancer()
+
+        observation = SourceObservation.objects.get(canal="lwin")
+        self.assertEqual(float(observation.confiance), 1.0)
+        self.assertEqual(observation.payload_brut["lwin"]["lwin"], "1011247")
+
+    def test_simuler_n_ecrit_rien(self):
+        sortie = self._lancer(simuler=True)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.lwin_code, "")
+        self.assertEqual(SourceObservation.objects.count(), 0)
+        self.assertIn("[simulation]", sortie)
+        self.assertIn("1 appariées", sortie)
+
+    def test_appellation_existante_n_est_jamais_ecrasee(self):
+        self.cuvee.appellation = "Margaux (saisi à la main)"
+        self.cuvee.save(update_fields=["appellation"])
+
+        self._lancer()
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.appellation, "Margaux (saisi à la main)")
+        self.assertEqual(self.cuvee.lwin_code, "1011247")  # l'identité, elle, est posée
+
+    def test_code_deja_revendique_reste_au_premier_arrive(self):
+        """Le code LWIN porte une contrainte d'unicité : le premier arrivé le
+        garde (même règle que `ingest._completer_identites`)."""
+        autre = Cuvee.objects.create(
+            domaine=self.domaine, nom="Autre Vin", couleur=Cuvee.Couleur.ROUGE,
+            lwin_code="1011247",
+        )
+
+        sortie = self._lancer()
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.lwin_code, "")
+        self.assertEqual(Cuvee.objects.get(pk=autre.pk).lwin_code, "1011247")
+        self.assertIn("1 codes déjà pris", sortie)
+
+    def test_seconde_passe_n_examine_que_le_reste(self):
+        self._lancer()
+        sortie = self._lancer()
+
+        self.assertIn("0 cuvées examinées", sortie)
+        self.assertEqual(SourceObservation.objects.filter(canal="lwin").count(), 1)
+
+    def test_producteur_ecrit_autrement_est_rapproche(self):
+        """Le repli flou rattrape une graphie différente du producteur, à
+        condition qu'un token au moins soit commun."""
+        domaine = Domaine.objects.create(nom="Chateau  Margaux SA", region="")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="Pavillon Rouge", couleur=Cuvee.Couleur.ROUGE
+        )
+        ReferenceLwin.objects.create(
+            lwin="1011248", producteur="Chateau Margaux", vin="Pavillon Rouge",
+            region="Bordeaux", sous_region="Margaux", couleur="ROUGE",
+        )
+
+        self._lancer()
+
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.lwin_code, "1011248")
+
+    def test_producteur_inconnu_du_dump_reste_silencieux(self):
+        domaine = Domaine.objects.create(nom="Bodega Inconnue", region="")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="Tinto Joven", couleur=Cuvee.Couleur.ROUGE
+        )
+
+        self._lancer()
+
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.lwin_code, "")
+
+    def test_referentiel_vide_et_seuils_invalides(self):
+        ReferenceLwin.objects.all().delete()
+        with self.assertRaises(CommandError):
+            self._lancer()
+        ReferenceLwin.objects.create(lwin="1", producteur="X", vin="Y")
+        with self.assertRaises(CommandError):
+            self._lancer(seuil=1.5)
+        with self.assertRaises(CommandError):
+            self._lancer(seuil_producteur=0)
+
+    def test_limite(self):
+        Cuvee.objects.create(
+            domaine=self.domaine, nom="Pavillon Rouge", couleur=Cuvee.Couleur.ROUGE
+        )
+        sortie = self._lancer(limite=1)
+        self.assertIn("1 cuvées examinées", sortie)

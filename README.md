@@ -157,6 +157,26 @@ consolidation), donc un vin déjà décrit par Claude ou wineapi est **complét�
 Les jeux de données examinés puis écartés — et pourquoi (licences `NC`/`SA`/`ND`, données scrapées)
 — sont documentés dans [`docs/datasets-kaggle.md`](docs/datasets-kaggle.md).
 
+**Relier les deux référentiels — `apparier_lwin`.** LWIN et le catalogue portent chacun ce qui manque
+à l'autre : LWIN connaît la **sous-région**, c'est-à-dire l'appellation (« Margaux » là où l'import en
+masse ne donne que « Bordeaux ») et la classification ; le catalogue porte cépages, accords et profil.
+La commande les réconcilie hors ligne — elle pose le code LWIN, l'appellation et la classification sur
+les cuvées qui n'en ont pas :
+
+```bash
+docker compose exec app python manage.py apparier_lwin --simuler   # bilan, sans rien écrire
+docker compose exec app python manage.py apparier_lwin
+```
+
+Effet direct : la recherche dynamique ci-dessus enrichit ses suggestions en joignant le code LWIN de la
+cuvée. Sans appariement, les vins importés en masse n'y apparaissent pas ; avec, chaque suggestion
+remonte leurs cépages, leur note et leurs accords.
+
+L'appariement est **orienté précision** — le catalogue est mutualisé, une erreur se propage à tous —
+donc un doute produit un simple silence, sans gravité. Deux seuils le règlent (`--seuil` pour le nom du
+vin, `--seuil-producteur` pour le domaine) : la graphie des domaines variant d'un dump à l'autre,
+lancez d'abord `--simuler` pour mesurer le taux d'appariement avant d'écrire.
+
 Le référentiel importé alimente aussi la **recherche dynamique** (`GET /api/recherche-vins/?q=`) :
 suggestions au fil de la frappe (préfixes, tolérance aux fautes, millésime et couleur compris dans
 la requête — « palmer rouge 199 »), branchées sur le champ de recherche de l'écran d'ajout ;

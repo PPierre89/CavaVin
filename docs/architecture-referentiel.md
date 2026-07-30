@@ -379,6 +379,20 @@ respecte les conventions (`makemigrations` commité, tests, commits conventionne
   `lwin_code` est posé à la création (garde-fou d'unicité) et sorti des champs
   enrichis/consolidés (identité, pas attribut). → traite D4.
 
+  *Complément — la réconciliation en masse.* Poser le code LWIN à
+  l'identification ne relie que les vins effectivement scannés : une cuvée
+  arrivée par l'amorçage en masse (§8) n'en portait aucun, et le silo LWIN
+  restait donc largement inexploité — le défaut D4 subsistait à l'échelle du
+  catalogue. `manage.py apparier_lwin` (code : `apps/catalog/appariement.py`)
+  ferme l'écart hors ligne : il rapproche producteur à producteur puis vin à
+  vin, pose `lwin_code` et l'`appellation` (la `sous_region` LWIN, que ni
+  X-Wines ni le LLM ne donnent) et laisse la `classification` passer par
+  l'observation et la consolidation. Orienté **précision** (un mauvais
+  appariement se propage à tout le catalogue mutualisé) : un doute est un
+  silence, et `--simuler` permet de mesurer avant d'écrire. C'est aussi ce qui
+  rend les vins importés visibles de `GET /api/recherche-vins/`, qui joint
+  `Cuvee.lwin_code` pour enrichir ses suggestions.
+
 - **Phase 4 — `MillesimeReference` (feat). ✅ *Faite.***
   Modèle `MillesimeReference` (`region_cle`, `annee`, `note`, `source` ;
   `unique(region_cle, annee)`), semé depuis `apogee.MILLESIMES` (migration `0012`)
