@@ -73,6 +73,10 @@ python manage.py import_catalogue_marchand /path/WineDataset.csv
 # Scraped rating/price exports (Vivino, wine.com) — channel MUST be scrape:*
 python manage.py import_vivino /path/export.csv [--canal scrape:winecom] [--devise USD]
 
+# Ship a prebuilt catalog between installs (no private data crosses)
+python manage.py exporter_catalogue /data/catalogue.sqlite3
+python manage.py charger_catalogue /data/catalogue.sqlite3
+
 # Coverage (config from .coveragerc; CI enforces fail_under = 85, actual ~92%)
 coverage run manage.py test && coverage report
 ```
@@ -304,6 +308,23 @@ prerequisites (key present…) with a runtime toggle `source_activee(name, defau
 is reached (`Parametre QUOTA_<SOURCE>`; default 250 for GrapeMinds, unlimited otherwise; `0` = unlimited).
 Counting/enforcement is best-effort — it never breaks an identification. The staff panel drives all this
 via `GET/PUT /api/admin-panel/sources/` (on/off + cap + usage), alongside the existing API-key overrides.
+
+### Portable catalog (`catalogue_portable.py`, `exporter_catalogue` / `charger_catalogue`)
+Filling the referential costs tens of minutes of imports plus fetching the datasets; a fresh install
+should not have to repeat it. `exporter_catalogue` produces a SQLite file holding **only** the shared
+catalog, `charger_catalogue` merges it into an existing base. Three invariants:
+- **The privacy split is the structuring constraint.** Shared catalog and private data (caves,
+  bouteilles, carnet) live in the *same* SQLite file, so shipping a whole base would overwrite the
+  recipient's cellar. Export therefore purges every non-`catalog` table (including `auth_user`,
+  `Parametre` and `AppelSource` — API keys and quota counters are per-install), and loading writes
+  **only** catalog tables.
+- **Identity resolution is shared, not reimplemented.** Both `upsert_cuvee` and the loader call
+  `ingest.resoudre_identite`; letting them drift would reopen the duplicate door the unique
+  constraints close.
+- **Loading replays observations, it does not freeze a projection.** Each `SourceObservation` is
+  re-deposited and `consolider` runs on the target, so every field is arbitrated by the *recipient's*
+  policy and keeps its provenance. `releve_le` is preserved (SQLite returns it as a string; parsing it
+  is what makes reload-dedup work at all, and stops market fields being re-dated to the load).
 
 ### Pairing the catalog with LWIN (`appariement.py`, `manage.py apparier_lwin`)
 `ReferenceLwin` and `Cuvee` each hold what the other lacks: LWIN knows the **sub-region** — i.e. the
