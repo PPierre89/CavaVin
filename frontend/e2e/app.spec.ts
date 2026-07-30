@@ -464,8 +464,10 @@ test("le panneau d'administration est réservé au staff et liste les comptes", 
   await page.getByRole('button', { name: "Panneau d'administration" }).click()
 
   await expect(page.getByRole('heading', { name: 'Administration' })).toBeVisible()
-  // Aperçu chiffré + état des sources d'enrichissement.
-  await expect(page.getByText('Catalogue mutualisé')).toBeVisible()
+  // Aperçu chiffré + état des sources d'enrichissement. On vise le *titre* de la
+  // carte : « catalogue mutualisé » est le terme métier et apparaît aussi dans
+  // le texte d'autres sections, ce qu'un getByText large ne départage pas.
+  await expect(page.getByRole('heading', { name: 'Catalogue mutualisé' })).toBeVisible()
   await expect(page.getByText('v1.2.3')).toBeVisible()
   // Sources d'identification : on/off + quota mensuel.
   await expect(page.getByText("Sources d'identification")).toBeVisible()
@@ -475,7 +477,10 @@ test("le panneau d'administration est réservé au staff et liste les comptes", 
   await expect(page.getByText('Clé API Claude (Anthropic)')).toBeVisible()
   await expect(page.getByText('••••wxyz')).toBeVisible()
   // Section d'import du référentiel LWIN.
-  await expect(page.getByText('Référentiel LWIN')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Référentiel LWIN' })).toBeVisible()
+  // Chargement d'un catalogue pré-construit (traité en tâche de fond).
+  await expect(page.getByRole('heading', { name: 'Catalogue pré-construit' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Charger le catalogue' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Importer le référentiel' })).toBeVisible()
   // Liste des comptes : l'autre utilisateur y figure et est actionnable.
   await expect(page.getByText('bob', { exact: true })).toBeVisible()
