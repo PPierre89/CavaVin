@@ -34,7 +34,10 @@ from .enrichment.grapeminds import GrapeMindsProvider
 from .enrichment.vinou import VinouProvider
 from .enrichment.vinou import _JWT_CACHE_KEY as VINOU_JWT_KEY
 from .enrichment.wineapi import WineApiProvider
-from . import apogee, appariement, quotas, sommellerie, wine_profile, xwines_import
+from . import (
+    apogee, appariement, marchand_import, quotas, sommellerie, wine_profile,
+    xwines_import,
+)
 from .runtime_config import definir_source_activee, set_parametre, source_activee
 from .consolidation import consolider
 from .ingest import (
@@ -4007,3 +4010,231 @@ class ConsolidationIdentiteTests(TestCase):
         self.cuvee.refresh_from_db()
         self.assertEqual(self.cuvee.couleur, Cuvee.Couleur.ROSE)
         self.assertEqual(self.cuvee.appellation, "Bandol")
+
+
+class MarchandMappingTests(SimpleTestCase):
+    """Mapping pur d'une ligne de catalogue marchand — aucune base de données."""
+
+    def _ligne(self, titre, **extra):
+        base = {
+            "TITLE": titre, "TYPE": "Red", "GRAPE": "Merlot",
+            "SECONDARY GRAPE VARIETIES": "", "DESCRIPTION": "Un vin.",
+            "ABV": "ABV 13.50%", "COUNTRY": "France", "REGION": "Bordeaux",
+            "APPELLATION": "Margaux",
+        }
+        base.update(extra)
+        return base
+
+    def test_produits_non_vinicoles_ecartes(self):
+        """Le fichier est un catalogue de boissons, pas un référentiel de vins."""
+        self.assertFalse(marchand_import.est_du_vin(
+            "The Macallan Sherry Oak 12 Year Old Single Malt Whisky 70cl", "Brown"))
+        self.assertFalse(marchand_import.est_du_vin("VIVIR Tequila Blanco", "White"))
+        self.assertFalse(marchand_import.est_du_vin("Panaché de Noël", "Mixed"))
+        self.assertTrue(marchand_import.est_du_vin("Oyster Bay Sauvignon Blanc", "White"))
+
+    def test_producteur_par_guillemets(self):
+        self.assertEqual(
+            marchand_import.decomposer_titre(
+                "Louis Roederer 'Cristal' Champagne 2015", self._ligne("")),
+            ("Louis Roederer", "Cristal"),
+        )
+
+    def test_apostrophe_d_elision_n_est_pas_un_guillemet(self):
+        """Le piège du fichier : l'apostrophe délimite la cuvée *et* marque
+        l'élision française. « Caves d'Esclans 'Whispering Angel' » donnait la
+        cuvée « Esclans 'Whispering Angel » avec une capture naïve."""
+        self.assertEqual(
+            marchand_import.decomposer_titre(
+                "Caves d'Esclans 'Whispering Angel' Rosé 2022", self._ligne("")),
+            ("Caves d'Esclans", "Whispering Angel"),
+        )
+        # Une apostrophe purement d'élision ne délimite rien.
+        self.assertIsNone(
+            marchand_import.decomposer_titre("The Guv'nor", self._ligne("", GRAPE=""))
+        )
+
+    def test_apostrophe_interne_a_la_cuvee_est_conservee(self):
+        self.assertEqual(
+            marchand_import.decomposer_titre(
+                "Bread & Butter 'Winemaker's Selection' Chardonnay 2021",
+                self._ligne("", GRAPE="Chardonnay")),
+            ("Bread & Butter", "Winemaker's Selection"),
+        )
+
+    def test_producteur_par_cepage(self):
+        self.assertEqual(
+            marchand_import.decomposer_titre(
+                "Oyster Bay Sauvignon Blanc 2022, Marlborough",
+                self._ligne("", GRAPE="Sauvignon Blanc", REGION="Marlborough")),
+            ("Oyster Bay", "Sauvignon Blanc"),
+        )
+
+    def test_suffixe_geographique_retire(self):
+        """Une virgule restante n'introduit qu'un complément géographique."""
+        self.assertEqual(
+            marchand_import.decomposer_titre(
+                "Ravenswood Zinfandel 2020, Lodi",
+                self._ligne("", GRAPE="Zinfandel", REGION="California")),
+            ("Ravenswood", "Zinfandel"),
+        )
+
+    def test_titre_non_scindable_est_ignore(self):
+        """Sans producteur isolable il n'y a pas de clé de déduplication : mieux
+        vaut ignorer la ligne que semer des doublons dans le catalogue partagé."""
+        self.assertIsNone(marchand_import.decomposer_titre(
+            "Louis Latour Mâcon-Lugny 2021/22", self._ligne("", GRAPE="Chardonnay")))
+
+    def test_couleurs(self):
+        for type_, titre, attendu in [
+            ("Red", "X", "ROUGE"), ("White", "X", "BLANC"), ("Rosé", "X", "ROSE"),
+            # Le catalogue n'a pas de type « Sparkling » : un champagne est « White ».
+            ("White", "Louis Roederer Cristal Champagne", "BULLES"),
+            ("Tawny", "X", "AUTRE"), ("Orange", "X", "AUTRE"),
+        ]:
+            with self.subTest(type_=type_, titre=titre):
+                self.assertEqual(marchand_import.couleur_depuis_type(type_, titre), attendu)
+
+    def test_degre(self):
+        self.assertEqual(marchand_import.degre_depuis_abv("ABV 14.00%"), 14.0)
+        self.assertEqual(marchand_import.degre_depuis_abv("13,5"), 13.5)
+        self.assertIsNone(marchand_import.degre_depuis_abv(""))
+        self.assertIsNone(marchand_import.degre_depuis_abv("ABV n/c"))
+        self.assertIsNone(marchand_import.degre_depuis_abv("ABV 250%"))
+
+    def test_aucune_donnee_de_marche(self):
+        """Le prix est le tarif de détail du marchand — et les champs de marché
+        s'arbitrent à la récence, donc un tarif scrapé primerait sur wineapi."""
+        detail = marchand_import.detail_depuis_ligne(
+            self._ligne("Louis Roederer 'Cristal' Champagne", PRICE="£199.99 per bottle"))
+        champs = wine_profile.normalize_detail(detail)
+        self.assertIsNone(champs["prix_min"])
+        self.assertIsNone(champs["note_moyenne"])
+        self.assertEqual(champs["prix_marchands"], [])
+
+
+class ImportCatalogueMarchandTests(TestCase):
+    """Commande import_catalogue_marchand : canal de scraping, confiance basse."""
+
+    _COLONNES = [
+        "Title", "Description", "Price", "Capacity", "Grape",
+        "Secondary Grape Varieties", "Closure", "Country", "Unit",
+        "Characteristics", "Per bottle / case / each", "Type", "ABV", "Region",
+        "Style", "Vintage", "Appellation",
+    ]
+    _CRISTAL = (
+        "Louis Roederer 'Cristal' Champagne 2015,Un champagne.,£199.99 per bottle,75CL,"
+        "Chardonnay,Pinot Noir,Natural Cork,France,10.5,Brioche,per bottle,White,"
+        "ABV 12.00%,Champagne,Rich,2015,Reims\n"
+    )
+
+    def _fichier(self, lignes: list[str]) -> str:
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8") as f:
+            f.write(",".join(self._COLONNES) + "\n" + "".join(lignes))
+            return f.name
+
+    def _importer(self, lignes: list[str], **options) -> str:
+        chemin = self._fichier(lignes)
+        try:
+            sortie = StringIO()
+            call_command("import_catalogue_marchand", chemin, stdout=sortie, **options)
+            return sortie.getvalue()
+        finally:
+            os.unlink(chemin)
+
+    def test_import_pose_appellation_et_profil(self):
+        self._importer([self._CRISTAL])
+
+        cuvee = Cuvee.objects.get()
+        self.assertEqual(cuvee.domaine.nom, "Louis Roederer")
+        self.assertEqual(cuvee.nom, "Cristal")
+        self.assertEqual(cuvee.couleur, "BULLES")  # « Champagne » prime sur le type White
+        self.assertEqual(cuvee.appellation, "Reims")  # l'apport propre de ce canal
+        self.assertEqual(float(cuvee.degre_alcool), 12.0)
+        self.assertEqual(
+            sorted(c.nom for c in cuvee.cepages.all()), ["Chardonnay", "Pinot Noir"]
+        )
+
+    def test_canal_de_scraping_a_confiance_basse(self):
+        """Le nom de canal préfixé `scrape:` vaut 0,40 via ingest._confiance_pour :
+        cette source arbitre après toutes les autres."""
+        self._importer([self._CRISTAL])
+
+        observation = SourceObservation.objects.get()
+        self.assertEqual(observation.canal, "scrape:marchand")
+        self.assertEqual(float(observation.confiance), 0.40)
+
+    def test_n_ecrase_jamais_une_source_plus_fiable(self):
+        """Garde-fou central de ce canal : il comble des trous, il ne dégrade rien."""
+        domaine = Domaine.objects.create(nom="Louis Roederer", region="Champagne")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="Cristal", couleur=Cuvee.Couleur.BULLES
+        )
+        enregistrer_observation(
+            cuvee, canal="lwin", confiance=0.95, champs={"appellation": "Champagne AOC"}
+        )
+        consolider(cuvee)
+
+        self._importer([self._CRISTAL])
+
+        cuvee.refresh_from_db()
+        self.assertEqual(Cuvee.objects.count(), 1)  # complétée, pas dupliquée
+        self.assertEqual(cuvee.appellation, "Champagne AOC")  # LWIN garde la main
+        self.assertEqual(cuvee.provenance["appellation"]["canal"], "lwin")
+
+    def test_comble_une_appellation_manquante(self):
+        """L'inverse : là où aucune source n'affirme rien, le canal remplit."""
+        domaine = Domaine.objects.create(nom="Louis Roederer", region="")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="Cristal", couleur=Cuvee.Couleur.BULLES
+        )
+
+        self._importer([self._CRISTAL])
+
+        cuvee.refresh_from_db()
+        self.assertEqual(cuvee.appellation, "Reims")
+        self.assertEqual(cuvee.provenance["appellation"]["canal"], "scrape:marchand")
+
+    def test_aucun_prix_n_est_importe(self):
+        self._importer([self._CRISTAL])
+
+        cuvee = Cuvee.objects.get()
+        self.assertIsNone(cuvee.prix_min)
+        self.assertEqual(cuvee.prix_marchands, [])
+
+    def test_lignes_ecartees_sont_comptees(self):
+        whisky = (
+            "The Macallan Sherry Oak 12 Year Old Single Malt Whisky 70cl,Un whisky.,"
+            "£75.00 each,70CL,,,Natural Cork,Scotland,28,Oak,each,Brown,ABV 40.00%,"
+            "Speyside,Rich,NV,\n"
+        )
+        insecable = (
+            "Louis Latour Mâcon-Lugny 2021/22,Un vin.,£14.99 per bottle,75CL,Chardonnay,,"
+            "Natural Cork,France,9.8,Citron,per bottle,White,ABV 13.00%,Burgundy,Crisp,2021,\n"
+        )
+        sortie = self._importer([self._CRISTAL, whisky, insecable])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertIn("1 non vinicoles", sortie)
+        self.assertIn("1 sans producteur identifiable", sortie)
+
+    def test_reimport_est_gratuit(self):
+        self._importer([self._CRISTAL])
+        sortie = self._importer([self._CRISTAL])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertEqual(SourceObservation.objects.count(), 1)
+        self.assertIn("1 déjà présentes", sortie)
+
+    def test_schema_inattendu_et_fichier_absent(self):
+        chemin = self._fichier([])
+        with open(chemin, "w", encoding="utf-8") as f:
+            f.write("a,b\n1,2\n")
+        try:
+            with self.assertRaises(CommandError) as ctx:
+                call_command("import_catalogue_marchand", chemin, stdout=StringIO())
+            self.assertIn("Title", str(ctx.exception))
+        finally:
+            os.unlink(chemin)
+        with self.assertRaises(CommandError):
+            call_command("import_catalogue_marchand", "/chemin/inexistant.csv")

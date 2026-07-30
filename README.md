@@ -172,6 +172,19 @@ Effet direct : la recherche dynamique ci-dessus enrichit ses suggestions en joig
 cuvée. Sans appariement, les vins importés en masse n'y apparaissent pas ; avec, chaque suggestion
 remonte leurs cépages, leur note et leurs accords.
 
+**Appoint d'appellations — `import_catalogue_marchand`.** Le jeu
+[`elvinrustam/wine-dataset`](https://www.kaggle.com/datasets/elvinrustam/wine-dataset) (1 290 vins,
+CC0) est le seul de la veille à porter une colonne *appellation*. C'est un catalogue de caviste, pas
+un référentiel : il entre donc par un canal de **scraping** (`scrape:marchand`) dont la confiance
+(0,40) le place derrière toutes les autres sources — il comble des trous, il n'écrase jamais rien.
+Les prix ne sont pas repris, les produits non vinicoles sont écartés, et une ligne dont le producteur
+n'est pas isolable est ignorée. Voir [`docs/datasets-kaggle.md`](docs/datasets-kaggle.md) §5 pour les
+mesures et les réserves.
+
+```bash
+docker compose exec app python manage.py import_catalogue_marchand /chemin/WineDataset.csv
+```
+
 L'appariement est **orienté précision** — le catalogue est mutualisé, une erreur se propage à tous —
 donc un doute produit un simple silence, sans gravité. Deux seuils le règlent (`--seuil` pour le nom du
 vin, `--seuil-producteur` pour le domaine) : la graphie des domaines variant d'un dump à l'autre,

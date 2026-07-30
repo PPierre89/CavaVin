@@ -67,6 +67,9 @@ python manage.py import_xwines /path/XWines_Full_100K_wines.csv [--limite N] [--
 # Reconcile the catalog with the imported LWIN dump (lwin_code + appellation + classification)
 python manage.py apparier_lwin --simuler   # measure first — it writes to the shared catalog
 
+# Appoint: merchant catalogue, scraping channel (confidence 0.40) — appellations only
+python manage.py import_catalogue_marchand /path/WineDataset.csv
+
 # Coverage (config from .coveragerc; CI enforces fail_under = 85, actual ~92%)
 coverage run manage.py test && coverage report
 ```
@@ -194,6 +197,22 @@ The cascade in `registry.py` tries enabled providers in order:
   indexed query), so re-running is nearly free. `docs/datasets-kaggle.md` records the datasets
   surveyed and why the famous ones (winemag 130k, Vivino dumps) are refused — `NC`/`SA`/`ND`
   licences and scraped origin, consistent with the Vivino/CellarTracker stance below.
+- **Catalogue marchand** (`scrape:marchand`) — second bulk offline channel, retained *under
+  reservation*: `manage.py import_catalogue_marchand` loads the `elvinrustam/wine-dataset` CSV
+  (1 290 rows, CC0) for the one thing nothing else carries — the **appellation** (179 distinct
+  values). It is a UK retailer's drinks list, not a referential: prices in £, own-label products,
+  whisky in the file, and the CC0 was applied by the uploader rather than the source — the same
+  reasoning that rejects `mysarahmadbhat/wine-tasting`. It therefore enters through the **scraping
+  frame** (architecture review, Phase 5). The channel name's `scrape:` prefix earns it `0.40` from
+  `ingest._confiance_pour` automatically, below every other source, so **it fills gaps and can
+  degrade nothing** — that is what makes it acceptable. Three guards go with it: no market data at
+  all (the price is the merchant's retail tariff, and market fields arbitrate by *recency*, so a
+  scraped price would outrank a legitimate wineapi one), non-wine products dropped, and a row whose
+  producer cannot be isolated from the title is skipped (no producer ⇒ no `(domaine, nom_normalise)`
+  dedup key ⇒ duplicates in a mutualised catalog). The apostrophe is the subtle part: it delimits the
+  cuvée *and* marks French elision, so a cuvée quote must open after whitespace and close before
+  whitespace/comma — otherwise "Caves d'Esclans 'Whispering Angel'" yields the cuvée
+  "Esclans 'Whispering Angel". See `docs/datasets-kaggle.md` §5.
 - **CellarTracker** — permanently disabled stub, same rationale: no public reference API; `/wines.asp` is
   an HTML community page and scraping it violates their ToS. Their only official programmatic access
   (`xlquery.asp`) returns the *authenticated user's own* cellar/notes — a personal export, not a
