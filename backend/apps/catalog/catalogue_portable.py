@@ -118,10 +118,19 @@ def _connexion(chemin: str) -> sqlite3.Connection:
 
 
 def _verifier_schema(connexion: sqlite3.Connection) -> None:
-    tables = {
-        ligne["name"]
-        for ligne in connexion.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
+    # `sqlite3.connect` ne lit rien : un fichier qui n'est pas une base ne se
+    # trahit qu'à la première requête. C'est donc ici qu'il faut traduire
+    # l'erreur, sinon la commande CLI remonte une trace brute au lieu d'un
+    # message.
+    try:
+        tables = {
+            ligne["name"]
+            for ligne in connexion.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    except sqlite3.DatabaseError as exc:
+        raise CataloguePortableError(
+            f"Fichier illisible : ce n'est pas une base SQLite ({exc})."
+        ) from exc
     manquantes = {"catalog_domaine", "catalog_cuvee"} - tables
     if manquantes:
         raise CataloguePortableError(

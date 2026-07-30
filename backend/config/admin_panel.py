@@ -10,10 +10,14 @@ jamais accès aux données *privées* d'un autre utilisateur (bouteilles, notes)
 conformément à la séparation RGPD du projet.
 """
 
+import logging
 import os
 import tempfile
+import threading
 
 from django.conf import settings
+from django.db import connection
+from django.utils import timezone
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Sum
 from rest_framework import serializers, status, viewsets
@@ -23,9 +27,10 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.catalog.catalogue_portable import charger
 from apps.catalog.enrichment import get_all_providers
 from apps.catalog.lwin_import import LwinImportError, importer_lwin
-from apps.catalog.models import Cepage, Cuvee, Domaine, ReferenceLwin
+from apps.catalog.models import Cepage, Cuvee, Domaine, ReferenceLwin, TacheImport
 from apps.catalog import quotas
 from apps.catalog.runtime_config import (
     CLES_PILOTABLES,
@@ -40,6 +45,8 @@ from apps.cellars.models import Cave, Emplacement
 from apps.inventory.models import Bouteille, MouvementStock, NoteDegustation
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
 
 
 class ApercuView(APIView):
@@ -238,6 +245,103 @@ class ImportLwinView(APIView):
             {"importes": importes, "total": ReferenceLwin.objects.count()},
             status=status.HTTP_200_OK,
         )
+
+
+class TacheImportSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TacheImport
+        fields = [
+            "id", "type_import", "nom_fichier", "etat", "avancement", "message",
+            "demarree_le", "terminee_le",
+        ]
+        read_only_fields = fields
+
+
+def _executer_chargement(tache_id: int, chemin: str) -> None:
+    """Charge un catalogue en tâche de fond, puis consigne le résultat.
+
+    Tourne dans un thread : Django ne referme que la connexion du thread de
+    requête, donc celle-ci doit être fermée à la main en sortie — même piège que
+    la cascade d'identification parallèle (``catalog.views._cascade_multi``).
+    """
+    try:
+        def progression(resultat):
+            TacheImport.objects.filter(pk=tache_id).update(avancement=vars(resultat))
+
+        resultat = charger(chemin, progression=progression)
+        TacheImport.objects.filter(pk=tache_id).update(
+            etat=TacheImport.Etat.TERMINEE,
+            avancement=vars(resultat),
+            terminee_le=timezone.now(),
+        )
+    except Exception as exc:  # noqa: BLE001 - filet volontaire, cf. commentaire
+        # Un échec doit rester *visible* : sans ce filet la tâche resterait « en
+        # cours » indéfiniment et bloquerait toutes les suivantes (un seul import
+        # à la fois).
+        logger.exception("chargement de catalogue interrompu")
+        TacheImport.objects.filter(pk=tache_id).update(
+            etat=TacheImport.Etat.ECHEC,
+            message=str(exc)[:2000],
+            terminee_le=timezone.now(),
+        )
+    finally:
+        try:
+            os.unlink(chemin)
+        except OSError:
+            pass
+        connection.close()
+
+
+class ChargerCatalogueView(APIView):
+    """Upload et chargement d'un catalogue transportable (staff).
+
+    Le fichier est produit par ``manage.py exporter_catalogue`` sur une autre
+    installation. Il ne contient que le catalogue mutualisé : le chargement
+    n'écrit jamais dans les caves, bouteilles ou notes de dégustation.
+
+    Répond **202 sans attendre**. Un chargement dure plusieurs minutes, là où
+    ``gunicorn.conf.py`` coupe un worker à 120 s : une vue synchrone se ferait
+    tuer en plein travail, laissant un import à moitié fait. Le panneau suit
+    l'avancement en interrogeant ``GET`` sur ce même point d'entrée.
+    """
+
+    permission_classes = [IsAdminUser]
+    parser_classes = [MultiPartParser, FormParser]
+
+    # Un catalogue complet avec ses relevés bruts peut peser lourd ; la variante
+    # allégée (``--sans-observations``) tient en quelques dizaines de Mo.
+    TAILLE_MAX = 500 * 1024 * 1024
+
+    def get(self, request):
+        """Dernières tâches d'import, la plus récente d'abord."""
+        return Response(TacheImportSerializer(TacheImport.objects.all()[:10], many=True).data)
+
+    def post(self, request):
+        if TacheImport.une_est_en_cours():
+            return Response(
+                {"detail": "Un import est déjà en cours. Attendez qu'il se termine."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        fichier = request.FILES.get("fichier")
+        if fichier is None:
+            raise ValidationError({"fichier": "Aucun fichier fourni."})
+        if fichier.size > self.TAILLE_MAX:
+            raise ValidationError({"fichier": "Fichier trop volumineux (max 500 Mo)."})
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False)
+        for morceau in fichier.chunks():
+            tmp.write(morceau)
+        tmp.close()
+
+        tache = TacheImport.objects.create(
+            type_import=TacheImport.Type.CATALOGUE,
+            nom_fichier=(fichier.name or "")[:255],
+        )
+        threading.Thread(
+            target=_executer_chargement, args=(tache.pk, tmp.name), daemon=True
+        ).start()
+        return Response(TacheImportSerializer(tache).data, status=status.HTTP_202_ACCEPTED)
 
 
 def _etat_source(provider) -> dict:

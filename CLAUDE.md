@@ -321,6 +321,13 @@ catalog, `charger_catalogue` merges it into an existing base. Three invariants:
 - **Identity resolution is shared, not reimplemented.** Both `upsert_cuvee` and the loader call
   `ingest.resoudre_identite`; letting them drift would reopen the duplicate door the unique
   constraints close.
+- **Long imports cannot be synchronous HTTP.** `gunicorn.conf.py` kills a worker at 120 s (already
+  raised from 30 s for vision calls — never lower it), while loading a catalog takes minutes. The
+  admin endpoint `POST /api/admin-panel/charger-catalogue/` therefore answers **202** and runs the
+  load in a thread tracked by `TacheImport`; the panel polls `GET` on the same route. The worker
+  thread must `connection.close()` (same trap as `views._cascade_multi`) and must record failures,
+  or a crashed task stays `EN_COURS` forever and blocks every later import — only one runs at a
+  time, since SQLite has a single writer.
 - **Loading replays observations, it does not freeze a projection.** Each `SourceObservation` is
   re-deposited and `consolider` runs on the target, so every field is arbitrated by the *recipient's*
   policy and keeps its provenance. `releve_le` is preserved (SQLite returns it as a string; parsing it

@@ -53,6 +53,7 @@ from .models import (
     MillesimeReference,
     ReferenceLwin,
     SourceObservation,
+    TacheImport,
 )
 from .serializers import ScanEtiquetteSerializer
 
@@ -4725,3 +4726,103 @@ class CataloguePortableTests(TestCase):
             self.assertEqual(cx.execute("SELECT COUNT(*) FROM catalog_cuvee").fetchone()[0], 1)
         finally:
             cx.close()
+
+    def test_fichier_corrompu_donne_une_erreur_propre(self):
+        """`sqlite3.connect` ne lit rien : un fichier qui n'est pas une base ne
+        se trahit qu'à la première requête."""
+        chemin = os.path.join(self.dossier, "corrompu.sqlite3")
+        with open(chemin, "wb") as f:
+            f.write(b"ceci n'est pas du SQLite")
+
+        with self.assertRaises(CommandError) as ctx:
+            call_command("charger_catalogue", chemin, stdout=StringIO())
+        self.assertIn("pas une base SQLite", str(ctx.exception))
+
+
+class ChargerCatalogueAdminTests(APITestCase):
+    """Panneau d'admin : upload et chargement d'un catalogue, en tâche de fond."""
+
+    def setUp(self):
+        self.staff = User.objects.create_user("chef", password="x", is_staff=True)
+        self.url = reverse("admin-charger-catalogue")
+        self.dossier = tempfile.mkdtemp()
+
+    def _fichier_upload(self, **kwargs):
+        chemin = _catalogue_fichier(
+            os.path.join(self.dossier, "cat.sqlite3"), privees=False, **kwargs
+        )
+        with open(chemin, "rb") as f:
+            return SimpleUploadedFile("catalogue.sqlite3", f.read())
+
+    def test_reserve_au_staff(self):
+        self.assertEqual(self.client.get(self.url).status_code, status.HTTP_401_UNAUTHORIZED)
+        self.client.force_authenticate(User.objects.create_user("simple", password="x"))
+        self.assertEqual(self.client.get(self.url).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_upload_repond_202_sans_attendre_puis_charge(self):
+        """La vue ne doit pas attendre la fin : un chargement dépasse largement
+        le timeout d'un worker gunicorn."""
+        self.client.force_authenticate(self.staff)
+        fichier = self._fichier_upload(cuvees=[("Grand Vin", "ROUGE", "xwines:1")])
+
+        # Le thread est exécuté de façon synchrone pour rendre le test déterministe.
+        with patch("config.admin_panel.threading.Thread") as thread:
+            thread.side_effect = lambda target, args, daemon: MagicMock(
+                start=lambda: target(*args)
+            )
+            reponse = self.client.post(self.url, {"fichier": fichier}, format="multipart")
+
+        self.assertEqual(reponse.status_code, status.HTTP_202_ACCEPTED)
+        tache = TacheImport.objects.get()
+        self.assertEqual(tache.etat, TacheImport.Etat.TERMINEE)
+        self.assertEqual(tache.avancement["creees"], 1)
+        self.assertEqual(Cuvee.objects.count(), 1)
+
+    def test_un_seul_import_a_la_fois(self):
+        """SQLite n'accepte qu'un écrivain : deux imports simultanés se
+        bloqueraient mutuellement."""
+        self.client.force_authenticate(self.staff)
+        TacheImport.objects.create(etat=TacheImport.Etat.EN_COURS)
+
+        reponse = self.client.post(
+            self.url, {"fichier": self._fichier_upload(cuvees=[("X", "ROUGE", "r:1")])},
+            format="multipart",
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(TacheImport.objects.count(), 1)
+
+    def test_echec_est_visible_et_ne_bloque_pas_les_suivants(self):
+        """Sans filet, la tâche resterait « en cours » pour toujours et
+        interdirait tout import ultérieur."""
+        self.client.force_authenticate(self.staff)
+        illisible = SimpleUploadedFile("pas-une-base.sqlite3", b"ceci n'est pas du SQLite")
+
+        with patch("config.admin_panel.threading.Thread") as thread:
+            thread.side_effect = lambda target, args, daemon: MagicMock(
+                start=lambda: target(*args)
+            )
+            reponse = self.client.post(self.url, {"fichier": illisible}, format="multipart")
+
+        self.assertEqual(reponse.status_code, status.HTTP_202_ACCEPTED)
+        tache = TacheImport.objects.get()
+        self.assertEqual(tache.etat, TacheImport.Etat.ECHEC)
+        self.assertTrue(tache.message)
+        self.assertFalse(TacheImport.une_est_en_cours())
+
+    def test_fichier_absent(self):
+        self.client.force_authenticate(self.staff)
+        reponse = self.client.post(self.url, {}, format="multipart")
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_liste_les_taches_recentes(self):
+        self.client.force_authenticate(self.staff)
+        TacheImport.objects.create(
+            etat=TacheImport.Etat.TERMINEE, nom_fichier="catalogue.sqlite3"
+        )
+
+        reponse = self.client.get(self.url)
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+        self.assertEqual(reponse.data[0]["nom_fichier"], "catalogue.sqlite3")
+        self.assertEqual(reponse.data[0]["etat"], "TERMINEE")

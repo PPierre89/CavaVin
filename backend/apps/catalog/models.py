@@ -385,3 +385,52 @@ class AppelSource(models.Model):
 
     def __str__(self):
         return f"{self.source} {self.mois}: {self.nombre}"
+
+
+class TacheImport(models.Model):
+    """Suivi d'un import de référentiel lancé depuis le panneau d'administration.
+
+    Les imports de catalogue durent de plusieurs minutes à une demi-heure, là où
+    ``gunicorn.conf.py`` coupe un worker à 120 s (valeur déjà relevée pour les
+    appels vision, à ne pas baisser). Une vue synchrone se ferait donc tuer en
+    plein travail : 502 côté navigateur, import à moitié fait côté base. L'upload
+    dépose le fichier, lance le traitement dans un fil d'exécution et répond
+    aussitôt ; cette table est ce que le panneau interroge pour suivre
+    l'avancement.
+
+    Il n'y a ni Celery ni Redis dans ce projet (mono-conteneur, SQLite assumé) :
+    un thread plus cette table sont la forme qui colle à l'architecture.
+    """
+
+    class Etat(models.TextChoices):
+        EN_COURS = "EN_COURS", "En cours"
+        TERMINEE = "TERMINEE", "Terminée"
+        ECHEC = "ECHEC", "Échec"
+
+    class Type(models.TextChoices):
+        CATALOGUE = "CATALOGUE", "Catalogue transportable"
+
+    type_import = models.CharField(max_length=16, choices=Type.choices, default=Type.CATALOGUE)
+    nom_fichier = models.CharField(max_length=255, blank=True, default="")
+    etat = models.CharField(max_length=10, choices=Etat.choices, default=Etat.EN_COURS)
+    # Compte rendu partiel, réécrit à chaque lot : c'est la barre de progression.
+    avancement = models.JSONField(
+        default=dict, blank=True, help_text="Compte rendu partiel {cuvees_lues, creees, ...}."
+    )
+    message = models.TextField(blank=True, default="", help_text="Message d'erreur éventuel.")
+    demarree_le = models.DateTimeField(auto_now_add=True)
+    terminee_le = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-demarree_le"]
+        verbose_name = "tâche d'import"
+        verbose_name_plural = "tâches d'import"
+
+    def __str__(self):
+        return f"{self.get_type_import_display()} — {self.etat}"
+
+    @classmethod
+    def une_est_en_cours(cls) -> bool:
+        """SQLite n'accepte qu'un écrivain : deux imports simultanés se
+        bloqueraient mutuellement. Le panneau en refuse donc un second."""
+        return cls.objects.filter(etat=cls.Etat.EN_COURS).exists()
