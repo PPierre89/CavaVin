@@ -53,6 +53,7 @@ from .models import (
     MillesimeReference,
     ReferenceLwin,
     SourceObservation,
+    TacheImport,
 )
 from .serializers import ScanEtiquetteSerializer
 
@@ -4483,3 +4484,345 @@ class ImportVivinoCommandTests(TestCase):
             self._importer(["1,2\n"], colonnes=["alpha", "beta"])
         with self.assertRaises(CommandError):
             call_command("import_vivino", "/chemin/inexistant.csv", stdout=StringIO())
+
+
+def _catalogue_fichier(chemin, cuvees, observations=(), cepages=(), privees=True):
+    """Fabrique un fichier de catalogue transportable minimal, pour les tests.
+
+    On construit le SQLite à la main plutôt que d'exporter la base de test :
+    celle-ci est en mémoire, et `exporter` travaille sur un fichier."""
+    import sqlite3
+
+    cx = sqlite3.connect(chemin)
+    cx.executescript(
+        """
+        CREATE TABLE catalog_domaine (id INTEGER PRIMARY KEY, nom TEXT, region TEXT, pays TEXT);
+        CREATE TABLE catalog_cepage (id INTEGER PRIMARY KEY, nom TEXT);
+        CREATE TABLE catalog_cuvee (
+            id INTEGER PRIMARY KEY, domaine_id INTEGER, nom TEXT, couleur TEXT,
+            appellation TEXT, code_barres TEXT, reference_externe_id TEXT, lwin_code TEXT
+        );
+        CREATE TABLE catalog_cuvee_cepages (id INTEGER PRIMARY KEY, cuvee_id INT, cepage_id INT);
+        CREATE TABLE catalog_sourceobservation (
+            id INTEGER PRIMARY KEY, cuvee_id INTEGER, canal TEXT, releve_le TEXT,
+            confiance TEXT, payload_brut TEXT, champs TEXT
+        );
+        CREATE TABLE django_migrations (id INTEGER PRIMARY KEY, app TEXT);
+        """
+    )
+    if privees:
+        cx.executescript(
+            "CREATE TABLE inventory_bouteille (id INTEGER PRIMARY KEY, quantite INT);"
+            "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username TEXT);"
+        )
+        cx.execute("INSERT INTO inventory_bouteille VALUES (1, 6)")
+        cx.execute("INSERT INTO auth_user VALUES (1, 'quelqun')")
+    cx.execute("INSERT INTO catalog_domaine VALUES (1, 'Chateau Margaux', 'Bordeaux', 'France')")
+    cx.execute("INSERT INTO django_migrations VALUES (1, 'catalog')")
+    for i, (nom, couleur, ref) in enumerate(cuvees, start=1):
+        cx.execute(
+            "INSERT INTO catalog_cuvee VALUES (?,1,?,?,'','',?,'')", (i, nom, couleur, ref)
+        )
+    for i, nom in enumerate(cepages, start=1):
+        cx.execute("INSERT INTO catalog_cepage VALUES (?,?)", (i, nom))
+        cx.execute("INSERT INTO catalog_cuvee_cepages VALUES (?,1,?)", (i, i))
+    for i, (cuvee_id, canal, date, confiance, champs) in enumerate(observations, start=1):
+        cx.execute(
+            "INSERT INTO catalog_sourceobservation VALUES (?,?,?,?,?,'{}',?)",
+            (i, cuvee_id, canal, date, confiance, json.dumps(champs)),
+        )
+    cx.commit()
+    cx.close()
+    return chemin
+
+
+class CataloguePortableTests(TestCase):
+    """Export / chargement d'un catalogue transportable."""
+
+    def setUp(self):
+        self.dossier = tempfile.mkdtemp()
+
+    def _fichier(self, **kwargs):
+        chemin = os.path.join(self.dossier, "catalogue.sqlite3")
+        return _catalogue_fichier(chemin, **kwargs)
+
+    def test_chargement_cree_les_cuvees(self):
+        chemin = self._fichier(
+            cuvees=[("Grand Vin", "ROUGE", "xwines:1")],
+            cepages=["Merlot"],
+            observations=[(1, "xwines", "2026-01-05 10:00:00", "0.60",
+                           {"region": "Bordeaux", "corps": "Full-bodied"})],
+        )
+        sortie = StringIO()
+        call_command("charger_catalogue", chemin, stdout=sortie)
+
+        cuvee = Cuvee.objects.get()
+        self.assertEqual(cuvee.nom, "Grand Vin")
+        self.assertEqual(cuvee.domaine.nom, "Chateau Margaux")
+        self.assertEqual(cuvee.reference_externe_id, "xwines:1")
+        self.assertEqual([c.nom for c in cuvee.cepages.all()], ["Merlot"])
+        # Le relevé est rejoué puis consolidé par la politique locale.
+        self.assertEqual(cuvee.region, "Bordeaux")
+        self.assertEqual(cuvee.provenance["region"]["canal"], "xwines")
+        self.assertIn("1 créées", sortie.getvalue())
+
+    def test_date_de_releve_preservee(self):
+        """Une observation porte la date de lecture du canal, pas celle du
+        chargement : la consolidation arbitre le marché à la récence."""
+        chemin = self._fichier(
+            cuvees=[("Grand Vin", "ROUGE", "xwines:1")],
+            observations=[(1, "xwines", "2026-01-05 10:00:00", "0.60", {"region": "Bordeaux"})],
+        )
+        call_command("charger_catalogue", chemin, stdout=StringIO())
+
+        observation = SourceObservation.objects.get()
+        self.assertEqual(observation.releve_le.year, 2026)
+        self.assertEqual(observation.releve_le.month, 1)
+        self.assertEqual(observation.releve_le.day, 5)
+
+    def test_cuvee_deja_connue_est_completee_pas_dupliquee(self):
+        domaine = Domaine.objects.create(nom="Chateau Margaux", region="Bordeaux")
+        existante = Cuvee.objects.create(
+            domaine=domaine, nom="grand vin", couleur=Cuvee.Couleur.ROUGE
+        )
+        chemin = self._fichier(cuvees=[("Grand Vin", "ROUGE", "xwines:1")])
+
+        call_command("charger_catalogue", chemin, stdout=StringIO())
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        existante.refresh_from_db()
+        self.assertEqual(existante.reference_externe_id, "xwines:1")
+
+    def test_rechargement_est_sans_effet(self):
+        chemin = self._fichier(
+            cuvees=[("Grand Vin", "ROUGE", "xwines:1")],
+            observations=[(1, "xwines", "2026-01-05 10:00:00", "0.60", {"region": "Bordeaux"})],
+        )
+        call_command("charger_catalogue", chemin, stdout=StringIO())
+        call_command("charger_catalogue", chemin, stdout=StringIO())
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertEqual(SourceObservation.objects.count(), 1)  # aucun relevé fantôme
+
+    def test_aucune_donnee_privee_n_est_touchee(self):
+        """Le fichier contient des tables privées : le chargement ne doit ni les
+        lire ni les écrire dans la base cible."""
+        from apps.cellars.models import Cave
+        from apps.inventory.models import Bouteille
+
+        user = User.objects.create_user("moi", password="x")
+        cave = Cave.objects.create(proprietaire=user, nom="Ma cave")
+        domaine = Domaine.objects.create(nom="Autre", region="")
+        cuvee = Cuvee.objects.create(domaine=domaine, nom="X", couleur=Cuvee.Couleur.ROUGE)
+        Bouteille.objects.create(proprietaire=user, cuvee=cuvee, millesime=2015, quantite=6)
+
+        chemin = self._fichier(cuvees=[("Grand Vin", "ROUGE", "xwines:1")], privees=True)
+        call_command("charger_catalogue", chemin, stdout=StringIO())
+
+        self.assertEqual(User.objects.count(), 1)
+        self.assertEqual(Cave.objects.get().nom, "Ma cave")
+        self.assertEqual(Bouteille.objects.get().quantite, 6)
+
+    def test_export_purge_les_tables_privees(self):
+        import sqlite3
+
+        source = self._fichier(cuvees=[("Grand Vin", "ROUGE", "xwines:1")], privees=True)
+        destination = os.path.join(self.dossier, "export.sqlite3")
+
+        from apps.catalog.catalogue_portable import exporter
+
+        resultat = exporter(source, destination)
+
+        cx = sqlite3.connect(destination)
+        try:
+            self.assertEqual(cx.execute("SELECT COUNT(*) FROM catalog_cuvee").fetchone()[0], 1)
+            # Données privées et comptes : purgés.
+            self.assertEqual(
+                cx.execute("SELECT COUNT(*) FROM inventory_bouteille").fetchone()[0], 0)
+            self.assertEqual(cx.execute("SELECT COUNT(*) FROM auth_user").fetchone()[0], 0)
+            # Le journal des migrations est conservé : la cible doit reconnaître le schéma.
+            self.assertEqual(
+                cx.execute("SELECT COUNT(*) FROM django_migrations").fetchone()[0], 1)
+        finally:
+            cx.close()
+        self.assertEqual(resultat.cuvees, 1)
+
+    def test_commande_export(self):
+        """La commande exporte la base courante ; ici on lui passe --source pour
+        rester indépendant du type de base de test (en mémoire)."""
+        source = self._fichier(cuvees=[("Grand Vin", "ROUGE", "xwines:1")], privees=True)
+        destination = os.path.join(self.dossier, "export-cmd.sqlite3")
+        sortie = StringIO()
+
+        call_command("exporter_catalogue", destination, source=source, stdout=sortie)
+
+        self.assertTrue(os.path.exists(destination))
+        self.assertIn("1 cuvées", sortie.getvalue())
+        self.assertIn("aucune donnée privée", sortie.getvalue())
+
+    def test_export_source_absente(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                "exporter_catalogue",
+                os.path.join(self.dossier, "x.sqlite3"),
+                source="/chemin/inexistant.sqlite3",
+                stdout=StringIO(),
+            )
+
+    def test_fichier_absent_ou_schema_inattendu(self):
+        with self.assertRaises(CommandError):
+            call_command("charger_catalogue", "/chemin/inexistant.sqlite3", stdout=StringIO())
+
+        import sqlite3
+        etranger = os.path.join(self.dossier, "etranger.sqlite3")
+        cx = sqlite3.connect(etranger)
+        cx.execute("CREATE TABLE truc (id INTEGER)")
+        cx.commit()
+        cx.close()
+        with self.assertRaises(CommandError) as ctx:
+            call_command("charger_catalogue", etranger, stdout=StringIO())
+        self.assertIn("catalogue CavaVin", str(ctx.exception))
+
+    def test_projection_recopiee_quand_le_fichier_n_a_pas_d_observations(self):
+        """Un fichier allégé de ses relevés doit rester utile : sans cette
+        recopie, la cuvée chargée serait réduite à son identité."""
+        import sqlite3
+
+        chemin = self._fichier(cuvees=[("Grand Vin", "ROUGE", "xwines:1")])
+        cx = sqlite3.connect(chemin)
+        cx.execute("ALTER TABLE catalog_cuvee ADD COLUMN region TEXT")
+        cx.execute("ALTER TABLE catalog_cuvee ADD COLUMN accords TEXT")
+        cx.execute(
+            "UPDATE catalog_cuvee SET region='Bordeaux', accords=?",
+            (json.dumps([{"nom": "Bœuf", "emoji": "🥩", "confiance": None}]),),
+        )
+        cx.commit()
+        cx.close()
+
+        call_command("charger_catalogue", chemin, stdout=StringIO())
+
+        cuvee = Cuvee.objects.get()
+        self.assertEqual(cuvee.region, "Bordeaux")
+        self.assertEqual(cuvee.accords[0]["nom"], "Bœuf")  # colonne JSON ré-hydratée
+
+    def test_export_sans_observations(self):
+        import sqlite3
+
+        source = self._fichier(
+            cuvees=[("Grand Vin", "ROUGE", "xwines:1")],
+            observations=[(1, "xwines", "2026-01-05 10:00:00", "0.60", {"region": "Bordeaux"})],
+        )
+        destination = os.path.join(self.dossier, "leger.sqlite3")
+
+        from apps.catalog.catalogue_portable import exporter
+
+        resultat = exporter(source, destination, sans_observations=True)
+
+        self.assertEqual(resultat.observations, 0)
+        cx = sqlite3.connect(destination)
+        try:
+            self.assertEqual(
+                cx.execute("SELECT COUNT(*) FROM catalog_sourceobservation").fetchone()[0], 0)
+            self.assertEqual(cx.execute("SELECT COUNT(*) FROM catalog_cuvee").fetchone()[0], 1)
+        finally:
+            cx.close()
+
+    def test_fichier_corrompu_donne_une_erreur_propre(self):
+        """`sqlite3.connect` ne lit rien : un fichier qui n'est pas une base ne
+        se trahit qu'à la première requête."""
+        chemin = os.path.join(self.dossier, "corrompu.sqlite3")
+        with open(chemin, "wb") as f:
+            f.write(b"ceci n'est pas du SQLite")
+
+        with self.assertRaises(CommandError) as ctx:
+            call_command("charger_catalogue", chemin, stdout=StringIO())
+        self.assertIn("pas une base SQLite", str(ctx.exception))
+
+
+class ChargerCatalogueAdminTests(APITestCase):
+    """Panneau d'admin : upload et chargement d'un catalogue, en tâche de fond."""
+
+    def setUp(self):
+        self.staff = User.objects.create_user("chef", password="x", is_staff=True)
+        self.url = reverse("admin-charger-catalogue")
+        self.dossier = tempfile.mkdtemp()
+
+    def _fichier_upload(self, **kwargs):
+        chemin = _catalogue_fichier(
+            os.path.join(self.dossier, "cat.sqlite3"), privees=False, **kwargs
+        )
+        with open(chemin, "rb") as f:
+            return SimpleUploadedFile("catalogue.sqlite3", f.read())
+
+    def test_reserve_au_staff(self):
+        self.assertEqual(self.client.get(self.url).status_code, status.HTTP_401_UNAUTHORIZED)
+        self.client.force_authenticate(User.objects.create_user("simple", password="x"))
+        self.assertEqual(self.client.get(self.url).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_upload_repond_202_sans_attendre_puis_charge(self):
+        """La vue ne doit pas attendre la fin : un chargement dépasse largement
+        le timeout d'un worker gunicorn."""
+        self.client.force_authenticate(self.staff)
+        fichier = self._fichier_upload(cuvees=[("Grand Vin", "ROUGE", "xwines:1")])
+
+        # Le thread est exécuté de façon synchrone pour rendre le test déterministe.
+        with patch("config.admin_panel.threading.Thread") as thread:
+            thread.side_effect = lambda target, args, daemon: MagicMock(
+                start=lambda: target(*args)
+            )
+            reponse = self.client.post(self.url, {"fichier": fichier}, format="multipart")
+
+        self.assertEqual(reponse.status_code, status.HTTP_202_ACCEPTED)
+        tache = TacheImport.objects.get()
+        self.assertEqual(tache.etat, TacheImport.Etat.TERMINEE)
+        self.assertEqual(tache.avancement["creees"], 1)
+        self.assertEqual(Cuvee.objects.count(), 1)
+
+    def test_un_seul_import_a_la_fois(self):
+        """SQLite n'accepte qu'un écrivain : deux imports simultanés se
+        bloqueraient mutuellement."""
+        self.client.force_authenticate(self.staff)
+        TacheImport.objects.create(etat=TacheImport.Etat.EN_COURS)
+
+        reponse = self.client.post(
+            self.url, {"fichier": self._fichier_upload(cuvees=[("X", "ROUGE", "r:1")])},
+            format="multipart",
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(TacheImport.objects.count(), 1)
+
+    def test_echec_est_visible_et_ne_bloque_pas_les_suivants(self):
+        """Sans filet, la tâche resterait « en cours » pour toujours et
+        interdirait tout import ultérieur."""
+        self.client.force_authenticate(self.staff)
+        illisible = SimpleUploadedFile("pas-une-base.sqlite3", b"ceci n'est pas du SQLite")
+
+        with patch("config.admin_panel.threading.Thread") as thread:
+            thread.side_effect = lambda target, args, daemon: MagicMock(
+                start=lambda: target(*args)
+            )
+            reponse = self.client.post(self.url, {"fichier": illisible}, format="multipart")
+
+        self.assertEqual(reponse.status_code, status.HTTP_202_ACCEPTED)
+        tache = TacheImport.objects.get()
+        self.assertEqual(tache.etat, TacheImport.Etat.ECHEC)
+        self.assertTrue(tache.message)
+        self.assertFalse(TacheImport.une_est_en_cours())
+
+    def test_fichier_absent(self):
+        self.client.force_authenticate(self.staff)
+        reponse = self.client.post(self.url, {}, format="multipart")
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_liste_les_taches_recentes(self):
+        self.client.force_authenticate(self.staff)
+        TacheImport.objects.create(
+            etat=TacheImport.Etat.TERMINEE, nom_fichier="catalogue.sqlite3"
+        )
+
+        reponse = self.client.get(self.url)
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+        self.assertEqual(reponse.data[0]["nom_fichier"], "catalogue.sqlite3")
+        self.assertEqual(reponse.data[0]["etat"], "TERMINEE")

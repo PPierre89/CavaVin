@@ -372,6 +372,119 @@ function ImportLwin({ total, onImported }: { total?: number; onImported: () => v
   )
 }
 
+/* ---------- Chargement d'un catalogue transportable (upload SQLite) ---------- *
+ *  Contrairement à l'import LWIN, le traitement dure plusieurs minutes : bien
+ *  au-delà du timeout d'un worker gunicorn. L'API répond donc 202 aussitôt le
+ *  fichier déposé, et l'on suit l'avancement en l'interrogeant.                */
+type TacheImport = {
+  id: number
+  nom_fichier: string
+  etat: 'EN_COURS' | 'TERMINEE' | 'ECHEC'
+  avancement: {
+    cuvees_lues?: number
+    creees?: number
+    completees?: number
+    observations?: number
+  }
+  message: string
+}
+
+function ChargerCatalogue({ onCharge }: { onCharge: () => void }) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [fichier, setFichier] = useState<File | null>(null)
+  const [tache, setTache] = useState<TacheImport | null>(null)
+  const [erreur, setErreur] = useState('')
+
+  const derniere = useCallback(async () => {
+    try {
+      const taches = await api<TacheImport[]>('GET', '/api/admin-panel/charger-catalogue/')
+      setTache(taches[0] ?? null)
+      return taches[0] ?? null
+    } catch {
+      return null
+    }
+  }, [])
+
+  useEffect(() => {
+    void derniere()
+  }, [derniere])
+
+  // Sondage tant qu'un chargement tourne ; il s'arrête de lui-même à la fin.
+  useEffect(() => {
+    if (tache?.etat !== 'EN_COURS') return
+    const minuteur = setInterval(async () => {
+      const a_jour = await derniere()
+      if (a_jour && a_jour.etat !== 'EN_COURS') onCharge()
+    }, 2000)
+    return () => clearInterval(minuteur)
+  }, [tache?.etat, derniere, onCharge])
+
+  const envoyer = async () => {
+    if (!fichier) return
+    setErreur('')
+    try {
+      const form = new FormData()
+      form.append('fichier', fichier)
+      const t = await api<TacheImport>('POST', '/api/admin-panel/charger-catalogue/', form)
+      setTache(t)
+      setFichier(null)
+      if (inputRef.current) inputRef.current.value = ''
+    } catch (e) {
+      setErreur(errMsg(e, 'Échec du chargement du catalogue.'))
+    }
+  }
+
+  const enCours = tache?.etat === 'EN_COURS'
+  const a = tache?.avancement ?? {}
+
+  return (
+    <Card>
+      <CardTitle>Catalogue pré-construit</CardTitle>
+      <p className="text-muted/80 text-xs mb-3">
+        Fichier <code>.sqlite3</code> produit par <code>exporter_catalogue</code> sur une autre
+        installation. Il ne contient que le catalogue mutualisé : vos caves, bouteilles et notes
+        de dégustation ne sont jamais touchées. Un vin déjà connu est complété, pas dupliqué —
+        recharger le même fichier est sans effet.
+      </p>
+      {erreur && <div className="text-sm text-alerte mb-2">{erreur}</div>}
+      {tache && (
+        <div className="text-sm mb-3">
+          {enCours && (
+            <span className="text-gold">
+              Chargement en cours — {a.cuvees_lues ?? 0} cuvées lues, {a.creees ?? 0} créées,{' '}
+              {a.completees ?? 0} complétées…
+            </span>
+          )}
+          {tache.etat === 'TERMINEE' && (
+            <span className="text-vigne">
+              Terminé : {a.creees ?? 0} cuvées créées, {a.completees ?? 0} complétées,{' '}
+              {a.observations ?? 0} relevés repris.
+            </span>
+          )}
+          {tache.etat === 'ECHEC' && (
+            <span className="text-alerte">Échec : {tache.message}</span>
+          )}
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".sqlite3,.db,.sqlite"
+        disabled={enCours}
+        onChange={(e) => setFichier(e.target.files?.[0] ?? null)}
+        className="block w-full text-sm text-muted file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border file:border-line file:bg-transparent file:text-ink file:text-sm"
+      />
+      <button
+        onClick={envoyer}
+        disabled={!fichier || enCours}
+        className={`${primaryCls} disabled:opacity-40`}
+      >
+        {enCours ? 'Chargement en cours…' : 'Charger le catalogue'}
+      </button>
+    </Card>
+  )
+}
+
 export default function AdminScreen() {
   const { username } = useAuth()
   const [apercu, setApercu] = useState<Apercu | null>(null)
@@ -529,6 +642,8 @@ export default function AdminScreen() {
             total={apercu?.catalogue.references_lwin}
             onImported={rafraichirApercu}
           />
+
+          <ChargerCatalogue onCharge={rafraichirApercu} />
 
           <Card>
             <CardTitle>Utilisateurs</CardTitle>

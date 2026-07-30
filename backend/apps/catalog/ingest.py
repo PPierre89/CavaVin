@@ -228,6 +228,51 @@ def _completer_identites(cuvee: Cuvee, identites: list[tuple[str, str]]) -> None
         cuvee.save(update_fields=a_ecrire)
 
 
+def resoudre_identite(
+    domaine: Domaine, identites: list[tuple[str, str]], cuvee_nom: str
+) -> Cuvee | None:
+    """Retrouve la cuvée que désigne un relevé, ou ``None`` s'il faut la créer.
+
+    Point de résolution **unique** du référentiel : `upsert_cuvee` (relevés de
+    canaux) et le chargement d'un catalogue portable
+    (`catalogue_portable.charger`) s'y adossent tous deux. Les faire diverger
+    reviendrait à rouvrir la porte aux doublons que les contraintes d'unicité
+    ferment.
+
+    Les identités fortes sont confrontées dans l'ordre `code_barres` >
+    `reference_externe_id` > `lwin_code`. Ce qui départage n'est pas la force de
+    chaque clé mais la conclusion que son **absence** autorise : un code-barres
+    inconnu n'est pas concluant (un même vin se décline en plusieurs
+    conditionnements) et l'on essaie la clé suivante, alors qu'une référence
+    externe ou un code LWIN inconnus désignent un vin distinct.
+
+    Le repli `(domaine, nom_normalise)` s'applique ensuite **même quand le relevé
+    porte une identité forte inédite**. « Une référence inconnue est décisive,
+    donc on crée » ne vaut que tant que créer est *possible* : or
+    `unique_cuvee_nom_par_domaine` pose qu'un producteur n'a qu'une cuvée d'un nom
+    donné. Créer malgré tout lève une IntegrityError — la classe de bug déjà
+    corrigée pour la référence externe. Rattacher le relevé à la cuvée existante
+    est le seul dénouement compatible avec la contrainte, et c'est aussi le bon :
+    deux références décrivant le même (producteur, nom) décrivent le même vin.
+    """
+    for champ, valeur in identites:
+        cuvee = Cuvee.objects.filter(**{champ: valeur}).order_by("pk").first()
+        if cuvee is not None:
+            return cuvee
+        if champ != "code_barres":
+            break  # seul un code-barres inconnu autorise à essayer la clé suivante.
+
+    # La contrainte de nom est partielle : un nom vide n'identifie rien.
+    nom_normalise = normaliser_nom(cuvee_nom)
+    if not nom_normalise:
+        return None
+    return (
+        Cuvee.objects.filter(domaine=domaine, nom_normalise=nom_normalise)
+        .order_by("pk")
+        .first()
+    )
+
+
 @transaction.atomic
 def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
     """
@@ -276,33 +321,7 @@ def upsert_cuvee(wine: NormalizedWine) -> tuple[Cuvee, bool]:
     # MultipleObjectsReturned (donc 500 sur tous les scans suivants) si un doublon
     # historique subsistait. (Les clés fortes code-barres / référence externe /
     # code LWIN sont désormais contraintes uniques, cf. Phases 0 et 3.)
-    cuvee = None
-    for champ, valeur in identites:
-        cuvee = Cuvee.objects.filter(**{champ: valeur}).order_by("pk").first()
-        if cuvee is not None or champ != "code_barres":
-            break  # seul un code-barres inconnu autorise à essayer la clé suivante.
-    if cuvee is None:
-        # Repli sur la forme *normalisée* du nom : une comparaison brute laissait
-        # « Grand Vin » et « Grand vin » cohabiter (cf. Cuvee.nom_normalise).
-        #
-        # Ce repli s'applique **même quand le relevé porte une identité forte
-        # inédite**. La règle « une référence externe inconnue est décisive, on
-        # crée » (docs/architecture-referentiel.md §5) ne vaut que tant que la
-        # création est possible : or `unique_cuvee_nom_par_domaine` pose qu'un
-        # producteur n'a qu'une cuvée d'un nom donné. Créer malgré tout viole
-        # cette contrainte — IntegrityError, donc 500 sur le scan, exactement la
-        # classe de bug corrigée pour la référence externe. Rattacher le relevé à
-        # la cuvée existante (et lui greffer l'identité neuve via
-        # `_completer_identites`) est le seul dénouement cohérent avec la
-        # contrainte, et c'est aussi le bon : deux références externes qui
-        # décrivent le même (producteur, nom) décrivent le même vin.
-        nom_normalise = normaliser_nom(wine.cuvee_nom)
-        if nom_normalise:  # la contrainte est partielle : un nom vide n'identifie rien.
-            cuvee = (
-                Cuvee.objects.filter(domaine=domaine, nom_normalise=nom_normalise)
-                .order_by("pk")
-                .first()
-            )
+    cuvee = resoudre_identite(domaine, identites, wine.cuvee_nom)
 
     created = cuvee is None
     if created:

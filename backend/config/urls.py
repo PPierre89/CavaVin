@@ -24,6 +24,7 @@ from apps.inventory.views import (
     RangementViewSet,
 )
 from .admin_panel import ApercuView as AdminApercuView
+from .admin_panel import ChargerCatalogueView as AdminChargerCatalogueView
 from .admin_panel import ConfigurationView as AdminConfigurationView
 from .admin_panel import ImportLwinView as AdminImportLwinView
 from .admin_panel import SourcesView as AdminSourcesView
@@ -55,6 +56,11 @@ urlpatterns = [
     path("api/admin-panel/configuration/", AdminConfigurationView.as_view(), name="admin-configuration"),
     path("api/admin-panel/sources/", AdminSourcesView.as_view(), name="admin-sources"),
     path("api/admin-panel/import-lwin/", AdminImportLwinView.as_view(), name="admin-import-lwin"),
+    path(
+        "api/admin-panel/charger-catalogue/",
+        AdminChargerCatalogueView.as_view(),
+        name="admin-charger-catalogue",
+    ),
     path("api/auth/me/", MeView.as_view(), name="me"),
     path("api/auth/", include("rest_framework.urls")),
     path("api/auth/register/", RegisterView.as_view(), name="register"),

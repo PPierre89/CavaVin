@@ -30,7 +30,8 @@ un **conteneur Docker unique** (Django REST + SPA React, SQLite).
 - **Panneau d'administration** (staff) : tableau de bord du déploiement (comptes, catalogue
   mutualisé, stock, activité), état des sources d'enrichissement, gestion des comptes
   (activation, rôle staff, suppression), **paramétrage à chaud des clés d'API** (override en base,
-  prioritaire sur le `.env`, sans redémarrage) et **import du référentiel LWIN** par upload de dump.
+  prioritaire sur le `.env`, sans redémarrage), **import du référentiel LWIN** par upload de dump et
+  **chargement d'un catalogue pré-construit** (traité en tâche de fond, avec avancement).
 - **SPA mobile-first** (thème sombre lie-de-vin/or), authentification JWT à **session glissante**
   (le jeton de rafraîchissement tourne avec l'usage : pas de reconnexion périodique imposée).
 
@@ -102,6 +103,7 @@ carnet) strictement filtrées par propriétaire côté serveur.
 | `GET /api/auth/me/` | Profil du compte connecté (rôle `is_staff`) |
 | `GET /api/admin-panel/apercu/` · `/api/admin-panel/utilisateurs/` | Panneau d'administration (staff) : aperçu + gestion des comptes |
 | `/api/admin-panel/configuration/` · `import-lwin/` | Admin (staff) : clés d'API (override base > .env) + upload du dump LWIN |
+| `/api/admin-panel/charger-catalogue/` | Admin (staff) : upload d'un catalogue pré-construit — répond 202, traite en tâche de fond, `GET` pour l'avancement |
 
 L'identification est assurée en premier par **Claude (Anthropic)** : la vision multimodale lit
 l'étiquette et la sortie, **contrainte par un schéma JSON**, remplit la fiche (couleur, appellation,
@@ -136,6 +138,21 @@ docker compose exec app python manage.py import_lwin /chemin/LWINdatabase.xlsx  
 
 Le même import est aussi disponible **par upload** depuis le panneau d'administration (section
 « Référentiel LWIN »), sans accès shell au conteneur.
+
+**Catalogue pré-construit — sans shell non plus.** `exporter_catalogue` produit un fichier SQLite ne
+contenant *que* le catalogue mutualisé (jamais vos caves, bouteilles ou notes) ; il se dépose ensuite
+depuis le panneau d'administration, section « Catalogue pré-construit ». Une installation neuve part
+donc d'un référentiel garni sans relancer des heures d'imports. Le chargement dure plusieurs minutes :
+l'API répond aussitôt le fichier reçu et traite en tâche de fond, le panneau affichant l'avancement.
+
+```bash
+# sur l'installation qui a déjà le catalogue
+docker compose exec app python manage.py exporter_catalogue /data/catalogue.sqlite3
+# --sans-observations pour un fichier bien plus léger (fiche exacte, mais sans provenance)
+
+# sur la nouvelle installation : upload dans le panneau d'admin, ou en ligne de commande
+docker compose exec app python manage.py charger_catalogue /data/catalogue.sqlite3
+```
 
 **Remplir le catalogue d'un coup — X-Wines.** Là où LWIN apporte des *identités* de vins (pour la
 correspondance floue), le jeu de données ouvert **X-Wines** (~100 000 vins de 62 pays, licence Open
