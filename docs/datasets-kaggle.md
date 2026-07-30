@@ -250,6 +250,26 @@ découlent, et ce sont eux qui bornent le risque :
    du contenu aurait dégradé la fiche de chaque vin déjà enrichi par wineapi.
 3. **Ligne sans producteur ni nom → ignorée**, faute de clé de déduplication.
 
+### Résultat mesuré sur les fichiers réels
+
+| Source | Lignes | Cuvées créées | Rattachées à une cuvée existante | Sans identité |
+|---|---:|---:|---:|---:|
+| `vivinoAllWineExportFrance.csv` | 30 018 | 20 270 | 2 152 | 1 |
+| `vivino_top_ten.csv` | 12 205 | 7 435 | 3 859 | 0 |
+| `vivino_wines_2026.csv` | 10 344 | 8 087 | 1 924 | 0 |
+| `vivno_dataset.csv` (wine.com) | 15 254 | 5 297 | 531 | **9 306** |
+
+**41 089 cuvées et 13 219 domaines** au total, en ~25 min sur SQLite. La colonne
+« rattachées » montre la consolidation multi-sources à l'œuvre : 3 859 vins du
+deuxième fichier désignaient des cuvées que le premier avait déjà créées.
+
+**wine.com perd 61 % de ses lignes**, et c'est assumé : le fichier n'a pas de
+colonne producteur, qu'il faut donc couper du libellé au niveau du cépage. Le
+procédé échoue sur les assemblages et les noms propriétaires (« Opus One », dont
+le descripteur annonce « Red Blend »). Sans producteur il n'existe aucune clé
+`(domaine, nom_normalise)` : la ligne est écartée plutôt que de semer des
+doublons dans un catalogue mutualisé.
+
 ### Particularités traitées
 
 - **UTF-16.** Le fichier wine.com porte un BOM UTF-16 ; lu en UTF-8, il ne lève
