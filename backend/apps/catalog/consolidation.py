@@ -81,9 +81,25 @@ def _clef_profil(obs: SourceObservation):
     return (obs.confiance, obs.releve_le, obs.pk)
 
 
+def _est_scraping(obs: SourceObservation) -> bool:
+    """Le relevé vient-il d'un canal de scraping (cf. ingest._confiance_pour) ?"""
+    return (obs.canal or "").startswith("scrape")
+
+
 def _clef_marche(obs: SourceObservation):
-    """Priorité marché : récence d'abord, confiance puis pk pour départager."""
-    return (obs.releve_le, obs.confiance, obs.pk)
+    """Priorité marché : sources légitimes d'abord, puis récence, puis confiance.
+
+    La règle « le plus récent gagne » suppose des provenances **comparables** :
+    entre deux canaux interrogés en direct, un prix d'aujourd'hui vaut mieux qu'un
+    prix de l'an dernier. Elle ne tient plus face à un import de scraping, qui
+    daterait tous ses relevés du jour de l'import et raflerait donc prix et notes
+    à un canal légitime — la confiance basse du canal n'y changerait rien,
+    puisqu'elle n'arbitre ici qu'à égalité de date.
+
+    Le scraping forme donc un **étage inférieur** : il n'alimente prix et notes
+    que là où aucune source légitime ne s'est exprimée. À l'intérieur de chaque
+    étage, la récence reprend ses droits."""
+    return (not _est_scraping(obs), obs.releve_le, obs.confiance, obs.pk)
 
 
 def _arbitrer(cuvee: Cuvee, provenance: dict, observations, champ: str, clef) -> None:

@@ -60,9 +60,26 @@ def _lignes_xlsx(chemin: str):
     classeur.close()
 
 
+def encodage(chemin: str) -> str:
+    """Encodage d'un CSV, déduit de sa marque d'ordre des octets (BOM).
+
+    Les exports scrapés arrivent parfois en UTF-16 (c'est le défaut de `to_csv`
+    sous Windows/PowerShell). Lu en UTF-8, un tel fichier ne lève pas d'erreur :
+    il produit des en-têtes truffés d'octets nuls et un contenu illisible, que
+    rien en aval ne signale. On tranche donc sur le BOM."""
+    try:
+        with open(chemin, "rb") as fichier:
+            debut = fichier.read(4)
+    except OSError as exc:
+        raise ImportFichierError(f"Impossible d'ouvrir {chemin} : {exc}") from exc
+    if debut[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return "utf-16"
+    return "utf-8-sig"
+
+
 def _lignes_csv(chemin: str, delimiter: str):
     try:
-        fichier = open(chemin, newline="", encoding="utf-8-sig")
+        fichier = open(chemin, newline="", encoding=encodage(chemin))
     except OSError as exc:
         raise ImportFichierError(f"Impossible d'ouvrir {chemin} : {exc}") from exc
     with fichier:

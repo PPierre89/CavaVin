@@ -70,6 +70,9 @@ python manage.py apparier_lwin --simuler   # measure first — it writes to the 
 # Appoint: merchant catalogue, scraping channel (confidence 0.40) — appellations only
 python manage.py import_catalogue_marchand /path/WineDataset.csv
 
+# Scraped rating/price exports (Vivino, wine.com) — channel MUST be scrape:*
+python manage.py import_vivino /path/export.csv [--canal scrape:winecom] [--devise USD]
+
 # Coverage (config from .coveragerc; CI enforces fail_under = 85, actual ~92%)
 coverage run manage.py test && coverage report
 ```
@@ -213,6 +216,17 @@ The cascade in `registry.py` tries enabled providers in order:
   cuvée *and* marks French elision, so a cuvée quote must open after whitespace and close before
   whitespace/comma — otherwise "Caves d'Esclans 'Whispering Angel'" yields the cuvée
   "Esclans 'Whispering Angel". See `docs/datasets-kaggle.md` §5.
+- **Exports scrapés Vivino / wine.com** (`scrape:vivino`, `scrape:winecom`) — `manage.py
+  import_vivino` loads the rating/price exports circulating on Kaggle (~68k rows across four files)
+  through one alias table, since they are the same shape under different headers. **These are
+  imported on an explicit maintainer decision and are in tension with the repo's own rule**: the data
+  comes from Vivino/wine.com, whose ToS forbid extraction, which is exactly why `VivinoProvider`
+  stays a permanently disabled stub. `docs/datasets-kaggle.md` §6 records the discrepancy rather than
+  hiding it — do not silently generalise it into a licence to add more scraped sources. The command
+  **refuses** any channel not prefixed `scrape:`, since that prefix is what buys the 0.40 confidence.
+  Quirks handled: UTF-16 (wine.com, detected by BOM in `tabular.encodage`), no producer column
+  (derived from the label, grape as separator), a `Countrys` header that actually holds
+  "<grape> from <region>", vintages glued to the wine name, and `0.0` meaning "unrated".
 - **CellarTracker** — permanently disabled stub, same rationale: no public reference API; `/wines.asp` is
   an HTML community page and scraping it violates their ToS. Their only official programmatic access
   (`xlquery.asp`) returns the *authenticated user's own* cellar/notes — a personal export, not a

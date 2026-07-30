@@ -5,14 +5,16 @@
 > conditions de licence. Complète `docs/architecture-referentiel.md` (le socle) et
 > `CLAUDE.md` (les conventions).
 >
-> **Verdict** : deux jeux retenus, à des titres très différents. **X-Wines**
-> (§2, `manage.py import_xwines`) est un référentiel à part entière et entre en
-> canal ordinaire. Le **catalogue marchand `elvinrustam`** (§5,
-> `manage.py import_catalogue_marchand`) est retenu *sous réserve*, en canal de
-> **scraping** à confiance basse, pour la seule appellation. Tous les autres sont
-> écartés, et le §3 dit pourquoi : dans la quasi-totalité des cas la donnée est du
-> *scraping* de sites marchands ou communautaires republié sous une licence non
-> commerciale, ce que ce dépôt refuse par ailleurs (stubs Vivino et CellarTracker).
+> **Verdict** : un seul jeu retenu *sans réserve* — **X-Wines** (§2,
+> `manage.py import_xwines`), référentiel à part entière, canal ordinaire. Le
+> reste entre par le **cadre scraping**, à confiance basse et sous arbitrage de
+> toutes les sources légitimes : le catalogue marchand `elvinrustam` (§5) et les
+> exports de notes Vivino / wine.com (§6). Le §3 recense ce qui reste écarté.
+>
+> ⚠️ **Les sources du §6 sont importées sur décision explicite du mainteneur, en
+> écart avec le critère « origine licite » du §1** et avec le refus d'implémenter
+> Vivino comme fournisseur (`enrichment/stubs.py`). Le §6 documente cet écart
+> plutôt que de le taire.
 
 ## 1. Ce qu'on cherche
 
@@ -185,3 +187,81 @@ nom de cuvée imparfait sur 729. Comptez ~5 s.
   occasionnellement un producteur tronqué (« La », « Penfolds Bin A »). La
   confiance basse limite les dégâts, mais un doublon de domaine reste possible.
 - **Millésimes et contenances sont ignorés** : une `Cuvee` en est indépendante.
+
+## 6. Importés sur décision explicite — exports de notes Vivino / wine.com
+
+**Implémenté par `manage.py import_vivino`** (code : `apps/catalog/vivino_import.py`).
+
+Ces quatre exports partagent une même nature — producteur, nom de vin, région,
+note communautaire, prix — sous des en-têtes différents. Une table d'alias suffit
+donc là où quatre lecteurs seraient redondants.
+
+| Source | Lignes | Licence Kaggle | Particularité |
+|---|---|---|---|
+| [`fredericqiu/vivinoallwineexportfrance`](https://www.kaggle.com/datasets/fredericqiu/vivinoallwineexportfrance) | 30 018 | « Other » (non spécifiée) | `Name_domain` / `Product_name` |
+| [`salohiddindev/wine-dataset-scraping-from-wine-com`](https://www.kaggle.com/datasets/salohiddindev/wine-dataset-scraping-from-wine-com) | 15 255 | Apache 2.0 | **UTF-16**, aucune colonne producteur |
+| [`joshuakalobbowles/vivino-wine-data-top-10-countries-exchina`](https://www.kaggle.com/datasets/joshuakalobbowles/vivino-wine-data-top-10-countries-exchina) | 12 205 | CC BY 4.0 | `Winery` / `Wine`, porte un `Wine_ID` |
+| [`mrbridge/vivino-wine-ratings-2026`](https://www.kaggle.com/datasets/mrbridge/vivino-wine-ratings-2026) | 10 344 | **CC BY-SA 4.0** | `winery_name` / `wine_name`, porte un `wine_id` |
+
+Les notebooks `mrbridge/vivino-wine-ratings-2026-eda`,
+`mrbridge/burgundy-wines-getting-started-2000` et
+`mrbridge/bordeaux-wines-eda-2000-ratings-prices` **n'ajoutent pas de source** :
+le premier expose le jeu `vivino-wine-ratings-2026` déjà listé, et les deux
+autres sont, vérification faite, également dérivés de Vivino.
+
+### L'écart assumé
+
+Ces données ne satisfont pas le critère « origine licite » du §1 : elles
+proviennent de Vivino ou de wine.com, dont les conditions d'utilisation
+interdisent l'extraction — c'est précisément le motif pour lequel
+`enrichment/stubs.py` garde `VivinoProvider` désactivé en permanence avec la
+mention « ne pas implémenter ». Le dépôt affirme donc, à ce jour, une règle que
+cet import enfreint. C'est une **décision du mainteneur**, prise en connaissance
+de cause ; ce paragraphe existe pour qu'elle reste visible et réversible
+(`SourceObservation` est append-only : une purge par canal est toujours possible).
+
+Deux clauses méritent d'être gardées en tête :
+
+- **`mrbridge/vivino-wine-ratings-2026` est en CC BY-SA 4.0.** Le partage à
+  l'identique est *viral* : redistribuer un catalogue qui en incorpore les données
+  peut obliger à placer l'ensemble sous la même licence. Rien ne l'impose tant que
+  l'instance reste privée, mais la question se poserait pour une base publiée.
+- **`fredericqiu` n'a pas de licence identifiée** (« Other, specified in
+  description »).
+
+[`budnyak/wine-rating-and-price`](https://www.kaggle.com/datasets/budnyak/wine-rating-and-price)
+reste **exclu** (cf. §3) : sa licence CC BY-NC-**ND** interdit les œuvres
+dérivées, et un import qui remappe les données dans notre schéma en est une.
+
+### Ce qui rend l'import inoffensif pour le reste du référentiel
+
+Le canal est préfixé `scrape:` — la commande le **refuse** sinon. Trois effets en
+découlent, et ce sont eux qui bornent le risque :
+
+1. **Confiance `0.40`** via `ingest._confiance_pour`, sous tous les autres canaux :
+   pour l'identité et le profil, ces données ne peuvent que combler des trous.
+2. **Étage inférieur sur les champs de marché.** Ce point a nécessité un
+   changement de `consolidation._clef_marche`. La règle « le plus récent gagne »
+   suppose des provenances comparables ; un import de scraping date *tous* ses
+   relevés du jour et raflait donc prix et notes à un canal légitime, la confiance
+   basse n'arbitrant qu'à égalité de date. Le scraping forme désormais un étage
+   séparé : il n'alimente prix et notes que là où aucune source légitime ne s'est
+   exprimée. Sans ce correctif, importer des jeux dont les notes sont l'essentiel
+   du contenu aurait dégradé la fiche de chaque vin déjà enrichi par wineapi.
+3. **Ligne sans producteur ni nom → ignorée**, faute de clé de déduplication.
+
+### Particularités traitées
+
+- **UTF-16.** Le fichier wine.com porte un BOM UTF-16 ; lu en UTF-8, il ne lève
+  aucune erreur et produit des en-têtes truffés d'octets nuls. `tabular.encodage`
+  tranche donc sur le BOM.
+- **Producteur absent (wine.com).** Il est tiré du libellé complet, le cépage
+  servant de séparateur (« 00 Wines VGW *Chardonnay* 2017 »).
+- **En-tête `Countrys` trompeur (wine.com).** Il contient « <cépage> from
+  <région> », pas un pays : il est lu comme tel et n'alimente pas `Cuvee.pays`.
+- **Millésime collé au nom.** « Rosado de Lágrima 2020 », « Sweet White N.V. » :
+  retirés, sans quoi chaque millésime créerait une cuvée alors que `Cuvee` en est
+  indépendante. C'est aussi ce qui rend l'empreinte `(producteur, nom)` stable
+  pour les sources dépourvues d'identifiant.
+- **Note à `0.0`** chez wine.com signifie « pas encore notée », pas « nulle » :
+  elle n'est pas affirmée.

@@ -185,6 +185,19 @@ mesures et les réserves.
 docker compose exec app python manage.py import_catalogue_marchand /chemin/WineDataset.csv
 ```
 
+**Exports de notes scrapés (Vivino, wine.com).** `manage.py import_vivino` ingère les exports de
+notes et de prix qui circulent sur Kaggle (~68 000 lignes, quatre schémas différents lus par une même
+table d'alias). Ces données proviennent de sites dont les CGU interdisent l'extraction — le dépôt
+refuse d'ailleurs d'implémenter Vivino comme fournisseur — et sont importées **sur décision explicite**
+du mainteneur : voir [`docs/datasets-kaggle.md`](docs/datasets-kaggle.md) §6, qui documente cet écart,
+les licences de chaque source et les garde-fous. La commande **exige** un canal préfixé `scrape:`.
+
+```bash
+docker compose exec app python manage.py import_vivino /chemin/export.csv
+docker compose exec app python manage.py import_vivino /chemin/vivno_dataset.csv \
+    --canal scrape:winecom --devise USD
+```
+
 L'appariement est **orienté précision** — le catalogue est mutualisé, une erreur se propage à tous —
 donc un doute produit un simple silence, sans gravité. Deux seuils le règlent (`--seuil` pour le nom du
 vin, `--seuil-producteur` pour le domaine) : la graphie des domaines variant d'un dump à l'autre,

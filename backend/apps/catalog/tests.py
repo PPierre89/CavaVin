@@ -35,8 +35,8 @@ from .enrichment.vinou import VinouProvider
 from .enrichment.vinou import _JWT_CACHE_KEY as VINOU_JWT_KEY
 from .enrichment.wineapi import WineApiProvider
 from . import (
-    apogee, appariement, marchand_import, quotas, sommellerie, wine_profile,
-    xwines_import,
+    apogee, appariement, marchand_import, quotas, sommellerie, tabular,
+    vivino_import, wine_profile, xwines_import,
 )
 from .runtime_config import definir_source_activee, set_parametre, source_activee
 from .consolidation import consolider
@@ -445,12 +445,16 @@ class ConsolidationTests(TestCase):
         self.assertEqual(self.cuvee.provenance["region"]["canal"], "lwin")
 
     def test_marche_prend_le_releve_le_plus_recent(self):
-        """Pour un champ de marché, la récence prime (même si moins fiable)."""
+        """Pour un champ de marché, la récence prime (même si moins fiable).
+
+        Entre canaux **légitimes** : le scraping, lui, forme un étage inférieur
+        où la récence ne le fait pas remonter (cf.
+        ``ConsolidationMarcheScrapingTests``)."""
         ancien = enregistrer_observation(
-            self.cuvee, canal="wineapi", champs={"prix_min": 20}, confiance=0.70
+            self.cuvee, canal="claude", champs={"prix_min": 20}, confiance=0.90
         )
-        recent = enregistrer_observation(
-            self.cuvee, canal="scrape:x", champs={"prix_min": 35}, confiance=0.40
+        enregistrer_observation(
+            self.cuvee, canal="wineapi", champs={"prix_min": 35}, confiance=0.50
         )
         # Force un ordre temporel déterministe.
         SourceObservation.objects.filter(pk=ancien.pk).update(
@@ -459,7 +463,7 @@ class ConsolidationTests(TestCase):
         consolider(self.cuvee)
         self.cuvee.refresh_from_db()
         self.assertEqual(self.cuvee.prix_min, 35)
-        self.assertEqual(self.cuvee.provenance["prix_min"]["canal"], "scrape:x")
+        self.assertEqual(self.cuvee.provenance["prix_min"]["canal"], "wineapi")
 
     def test_ne_supprime_pas_une_valeur_qu_aucune_source_ne_contredit(self):
         """Une valeur héritée reste si aucune observation ne l'affirme/contredit."""
@@ -4238,3 +4242,244 @@ class ImportCatalogueMarchandTests(TestCase):
             os.unlink(chemin)
         with self.assertRaises(CommandError):
             call_command("import_catalogue_marchand", "/chemin/inexistant.csv")
+
+
+class VivinoMappingTests(SimpleTestCase):
+    """Mapping pur des exports scrapés — table d'alias, aucune base de données."""
+
+    def test_alias_couvrent_les_quatre_schemas(self):
+        """Un seul lecteur pour quatre en-têtes différents : c'est toute
+        l'astuce du module."""
+        for ligne, producteur, nom in [
+            ({"NAME_DOMAIN": "Premius", "PRODUCT_NAME": "Bordeaux Rosé 2021"},
+             "Premius", "Bordeaux Rosé"),
+            ({"WINERY": "Baron de Ley", "WINE": "Rosado de Lágrima 2020"},
+             "Baron de Ley", "Rosado de Lágrima"),
+            ({"WINERY_NAME": "TerraNoble", "WINE_NAME": "Reserva Especial Carménère"},
+             "TerraNoble", "Reserva Especial Carménère"),
+        ]:
+            with self.subTest(ligne=ligne):
+                self.assertEqual(vivino_import.identite(ligne), (producteur, nom))
+
+    def test_millesime_et_non_millesime_retires_du_nom(self):
+        """Ces exports collent le millésime au nom : sans nettoyage, chaque
+        millésime créerait une cuvée distincte alors que `Cuvee` en est
+        indépendante."""
+        self.assertEqual(vivino_import.nom_de_cuvee("Rosado de Lágrima 2020"), "Rosado de Lágrima")
+        self.assertEqual(vivino_import.nom_de_cuvee("Sweet White N.V."), "Sweet White")
+        self.assertEqual(vivino_import.nom_de_cuvee("Bordeaux 2015"), "Bordeaux")
+
+    def test_producteur_deduit_quand_la_colonne_manque(self):
+        """wine.com n'a pas de colonne producteur : le cépage sépare le
+        producteur du reste du libellé."""
+        ligne = {
+            "NAMES": "00 Wines VGW Chardonnay 2017",
+            "COUNTRYS": "Chardonnay from Willamette Valley, Oregon",
+        }
+        self.assertEqual(vivino_import.identite(ligne), ("00 Wines VGW", "Chardonnay"))
+
+    def test_descripteur_winecom_n_est_pas_un_pays(self):
+        """L'en-tête « Countrys » de wine.com contient en réalité
+        « <cépage> from <région> » : on ne doit pas le lire comme un pays."""
+        ligne = {"NAMES": "00 Wines VGW Chardonnay 2017",
+                 "COUNTRYS": "Chardonnay from Willamette Valley, Oregon"}
+        detail = vivino_import.detail_depuis_ligne(ligne)
+        self.assertEqual(detail["region"]["name"], "Willamette Valley, Oregon")
+        self.assertEqual(detail["region"]["country"], "")
+        self.assertEqual([g["name"] for g in detail["grapes"]], ["Chardonnay"])
+
+    def test_ligne_sans_identite_est_ecartee(self):
+        self.assertIsNone(vivino_import.identite({"PRODUCT_NAME": "Bordeaux 2015"}))
+        self.assertIsNone(vivino_import.identite({"NAME_DOMAIN": "Premius"}))
+
+    def test_couleurs(self):
+        for ligne, attendu in [
+            ({"TYPE": "Red"}, "ROUGE"),
+            ({"WINE_TYPE": "White"}, "BLANC"),
+            ({"COLOR_WINE": "White Wine"}, "BLANC"),   # suffixe « Wine » toléré
+            ({"TYPE": "Rose"}, "ROSE"),
+            # Aucun de ces exports n'a de type « effervescent » : le nom tranche.
+            ({"TYPE": "White", "WINE_NAME": "Brut Champagne"}, "BULLES"),
+        ]:
+            with self.subTest(ligne=ligne):
+                self.assertEqual(vivino_import.couleur_de_ligne(ligne), attendu)
+
+    def test_note_nulle_signifie_non_notee(self):
+        """« 0.0 » chez wine.com veut dire « pas encore notée », pas « nulle »."""
+        base = {"WINERY": "Dom", "WINE": "C"}
+        self.assertNotIn("averageRating", vivino_import.detail_depuis_ligne(
+            dict(base, RATINGS="0.0", RATINGSNUM="0")))
+        detail = vivino_import.detail_depuis_ligne(dict(base, RATING="4.2", REVIEWS="42"))
+        self.assertEqual(detail["averageRating"], 4.2)
+        self.assertEqual(detail["ratingsCount"], 42)
+
+    def test_prix_et_devise(self):
+        detail = vivino_import.detail_depuis_ligne(
+            {"WINERY": "Dom", "WINE": "C", "PRICES": "79.99$"}, devise="USD")
+        self.assertEqual(detail["priceRange"], {"min": 79.99, "max": 79.99, "currency": "USD"})
+
+    def test_canal_hors_scraping_refuse(self):
+        """C'est le préfixe « scrape: » qui garantit la confiance basse : sans
+        lui, ces données arbitreraient à égalité avec wineapi ou Claude."""
+        with self.assertRaises(vivino_import.VivinoImportError):
+            vivino_import.importer_vivino("/peu/importe.csv", canal="vivino")
+
+
+class EncodageTabulaireTests(SimpleTestCase):
+    """Détection d'encodage : un export UTF-16 lu en UTF-8 ne lève rien, il
+    produit silencieusement des en-têtes truffés d'octets nuls."""
+
+    def test_utf16_detecte_par_le_bom(self):
+        contenu = "Winery,Wine\nBaron de Ley,Rosado 2020\n"
+        for encodage, attendu in (("utf-16", "utf-16"), ("utf-8", "utf-8-sig")):
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".csv", delete=False, encoding=encodage
+            ) as f:
+                f.write(contenu)
+                chemin = f.name
+            try:
+                self.assertEqual(tabular.encodage(chemin), attendu)
+                lignes = list(tabular.lignes(chemin))
+                self.assertEqual(lignes[0]["WINERY"], "Baron de Ley")
+            finally:
+                os.unlink(chemin)
+
+
+class ConsolidationMarcheScrapingTests(TestCase):
+    """Le scraping ne prend jamais prix ni notes à une source légitime."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Dom", region="")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.domaine, nom="C", couleur=Cuvee.Couleur.ROUGE
+        )
+
+    def test_scraping_plus_recent_ne_prime_pas_sur_wineapi(self):
+        """Le cœur du garde-fou : « le plus récent gagne » suppose des
+        provenances comparables. Un import de scraping date tous ses relevés du
+        jour et raflerait sinon le marché à un canal légitime."""
+        enregistrer_observation(
+            self.cuvee, canal="wineapi", confiance=0.85,
+            champs={"note_moyenne": 4.5, "prix_min": 30},
+        )
+        enregistrer_observation(  # déposé après, donc plus récent
+            self.cuvee, canal="scrape:vivino", confiance=0.40,
+            champs={"note_moyenne": 2.0, "prix_min": 5},
+        )
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(float(self.cuvee.note_moyenne), 4.5)
+        self.assertEqual(float(self.cuvee.prix_min), 30)
+        self.assertEqual(self.cuvee.provenance["note_moyenne"]["canal"], "wineapi")
+
+    def test_scraping_comble_quand_aucune_source_legitime(self):
+        enregistrer_observation(
+            self.cuvee, canal="scrape:vivino", confiance=0.40,
+            champs={"note_moyenne": 3.8, "prix_min": 12},
+        )
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(float(self.cuvee.note_moyenne), 3.8)
+        self.assertEqual(self.cuvee.provenance["note_moyenne"]["canal"], "scrape:vivino")
+
+    def test_entre_relevés_scrapes_la_recence_reprend_ses_droits(self):
+        enregistrer_observation(
+            self.cuvee, canal="scrape:vivino", confiance=0.40, champs={"prix_min": 12})
+        enregistrer_observation(
+            self.cuvee, canal="scrape:winecom", confiance=0.40, champs={"prix_min": 15})
+
+        consolider(self.cuvee)
+
+        self.cuvee.refresh_from_db()
+        self.assertEqual(float(self.cuvee.prix_min), 15)
+
+
+class ImportVivinoCommandTests(TestCase):
+    """Commande import_vivino : canal de scraping, idempotence, garde-fous."""
+
+    _COLONNES = ["Name_domain", "Product_name", "Region", "Country",
+                 "Average_rating", "Number_of_rates", "Price", "Type"]
+    _PREMIUS = "Premius,Bordeaux Rosé 2021,Bordeaux,France,3.6,228,4.09,Rose\n"
+
+    def _importer(self, lignes: list[str], colonnes=None, encodage="utf-8", **options) -> str:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".csv", delete=False, encoding=encodage
+        ) as f:
+            f.write(",".join(colonnes or self._COLONNES) + "\n" + "".join(lignes))
+            chemin = f.name
+        try:
+            sortie = StringIO()
+            call_command("import_vivino", chemin, stdout=sortie, **options)
+            return sortie.getvalue()
+        finally:
+            os.unlink(chemin)
+
+    def test_import_cree_la_cuvee(self):
+        self._importer([self._PREMIUS])
+
+        cuvee = Cuvee.objects.get()
+        self.assertEqual(cuvee.domaine.nom, "Premius")
+        self.assertEqual(cuvee.nom, "Bordeaux Rosé")  # millésime retiré
+        self.assertEqual(cuvee.couleur, "ROSE")
+        self.assertEqual(cuvee.region, "Bordeaux")
+        self.assertEqual(float(cuvee.note_moyenne), 3.6)
+        self.assertEqual(float(cuvee.prix_min), 4.09)
+        self.assertEqual(cuvee.devise, "EUR")
+
+    def test_canal_de_scraping_a_confiance_basse(self):
+        self._importer([self._PREMIUS])
+
+        observation = SourceObservation.objects.get()
+        self.assertEqual(observation.canal, "scrape:vivino")
+        self.assertEqual(float(observation.confiance), 0.40)
+
+    def test_canal_hors_scraping_refuse(self):
+        with self.assertRaises(CommandError):
+            self._importer([self._PREMIUS], canal="vivino")
+
+    def test_millesimes_multiples_ne_font_qu_une_cuvee(self):
+        """Deux millésimes du même vin sont la même cuvée : c'est ce qui rend
+        l'empreinte (producteur, nom) stable en l'absence d'identifiant."""
+        sortie = self._importer([
+            self._PREMIUS,
+            "Premius,Bordeaux Rosé 2020,Bordeaux,France,3.5,180,3.99,Rose\n",
+        ])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        # Dans un même lot, le raccourci « déjà présente » ne voit pas encore la
+        # ligne précédente (rien n'est écrit avant le vidage) : c'est
+        # `upsert_cuvee` qui fusionne, et la ligne compte comme mise à jour. D'un
+        # lot à l'autre, en revanche, le raccourci joue.
+        self.assertIn("1 cuvées créées, 1 mises à jour", sortie)
+
+    def test_reimport_est_gratuit(self):
+        self._importer([self._PREMIUS])
+        sortie = self._importer([self._PREMIUS])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertEqual(SourceObservation.objects.count(), 1)
+        self.assertIn("1 déjà présentes", sortie)
+
+    def test_fichier_utf16_lu_correctement(self):
+        """Cas réel du fichier wine.com : UTF-16 sans que rien ne le signale."""
+        self._importer([self._PREMIUS], encodage="utf-16")
+
+        self.assertEqual(Cuvee.objects.get().domaine.nom, "Premius")
+
+    def test_ligne_sans_identite_comptee(self):
+        sortie = self._importer([
+            self._PREMIUS, ",Bordeaux Blanc 2019,Bordeaux,France,3.2,10,5.00,White\n",
+        ])
+
+        self.assertEqual(Cuvee.objects.count(), 1)
+        self.assertIn("1 sans identité exploitable", sortie)
+
+    def test_schema_inattendu_et_fichier_absent(self):
+        with self.assertRaises(CommandError):
+            self._importer(["1,2\n"], colonnes=["alpha", "beta"])
+        with self.assertRaises(CommandError):
+            call_command("import_vivino", "/chemin/inexistant.csv", stdout=StringIO())
