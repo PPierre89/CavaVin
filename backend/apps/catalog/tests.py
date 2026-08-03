@@ -42,6 +42,7 @@ from .runtime_config import definir_source_activee, set_parametre, source_active
 from .consolidation import consolider
 from .ingest import (
     enregistrer_observation,
+    identifiant_wineapi,
     enrich_cuvee_from_wineapi,
     synchroniser_wineapi,
     upsert_cuvee,
@@ -4826,3 +4827,66 @@ class ChargerCatalogueAdminTests(APITestCase):
         self.assertEqual(reponse.status_code, status.HTTP_200_OK)
         self.assertEqual(reponse.data[0]["nom_fichier"], "catalogue.sqlite3")
         self.assertEqual(reponse.data[0]["etat"], "TERMINEE")
+
+
+class IdentifiantWineapiTests(TestCase):
+    """`reference_externe_id` est mono-source : tous les canaux n'y écrivent pas
+    un identifiant wineapi, et l'interroger avec le mauvais coûte du quota."""
+
+    def setUp(self):
+        self.domaine = Domaine.objects.create(nom="Dom", region="")
+
+    def _cuvee(self, **kwargs):
+        return Cuvee.objects.create(
+            domaine=self.domaine, couleur=Cuvee.Couleur.ROUGE,
+            **{"nom": "C", **kwargs},
+        )
+
+    def test_reference_wineapi_est_rendue(self):
+        cuvee = self._cuvee(reference_externe_id="300673")
+        self.assertEqual(identifiant_wineapi(cuvee), "300673")
+
+    def test_references_d_import_prefixees_sont_ecartees(self):
+        """`vivino:c9d5…`, `xwines:100062`… ne sont pas des identifiants wineapi :
+        les envoyer ne peut que retourner 400."""
+        for reference in ("vivino:c9d5849e29cb9b6d", "xwines:100062", "marchand:abc123"):
+            with self.subTest(reference=reference):
+                cuvee = self._cuvee(nom=reference, reference_externe_id=reference)
+                self.assertEqual(identifiant_wineapi(cuvee), "")
+
+    def test_code_barres_recopie_par_off_est_ecarte(self):
+        """Open Food Facts recopie le code-barres dans la référence externe."""
+        cuvee = self._cuvee(code_barres="3547102222000", reference_externe_id="3547102222000")
+        self.assertEqual(identifiant_wineapi(cuvee), "")
+
+    def test_reference_vide(self):
+        self.assertEqual(identifiant_wineapi(self._cuvee()), "")
+
+
+class FicheSansAppelWineapiTests(APITestCase):
+    """Une cuvée issue d'un import ne doit déclencher aucun appel wineapi."""
+
+    def setUp(self):
+        self.user = User.objects.create_user("moi", password="x")
+        self.client.force_authenticate(self.user)
+        domaine = Domaine.objects.create(nom="Casa Valduga", region="")
+        self.cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="Origem Merlot", couleur=Cuvee.Couleur.ROUGE,
+            reference_externe_id="xwines:100062",
+        )
+
+    @patch("apps.catalog.views.wineapi_detail")
+    def test_ouverture_de_fiche_n_appelle_pas_wineapi(self, detail):
+        reponse = self.client.get(reverse("cuvee-fiche", args=[self.cuvee.pk]))
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+        detail.assert_not_called()
+        # Le bouton de synchro est masqué : il n'y a rien à synchroniser.
+        self.assertFalse(reponse.data["enrichissable"])
+
+    @patch("apps.catalog.views.refresh_wineapi_detail")
+    def test_synchro_refusee_sans_appel(self, refresh):
+        reponse = self.client.post(reverse("cuvee-rafraichir", args=[self.cuvee.pk]))
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        refresh.assert_not_called()

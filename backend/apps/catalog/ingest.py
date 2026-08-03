@@ -228,6 +228,32 @@ def _completer_identites(cuvee: Cuvee, identites: list[tuple[str, str]]) -> None
         cuvee.save(update_fields=a_ecrire)
 
 
+def identifiant_wineapi(cuvee: Cuvee) -> str:
+    """Référence de la cuvée **utilisable comme identifiant wineapi**, sinon "".
+
+    `Cuvee.reference_externe_id` est mono-source (cf.
+    docs/architecture-referentiel.md §4.1 : le mapping multi-canal reste à
+    faire), mais tous les canaux n'y écrivent pas un identifiant wineapi :
+
+    - les imports en masse y posent une référence **préfixée** du canal
+      (``xwines:``, ``vivino:``, ``marchand:``) pour éviter qu'un identifiant
+      X-Wines et un identifiant wineapi de même valeur se confondent ;
+    - Open Food Facts y recopie le **code-barres** du produit.
+
+    Interroger wineapi avec l'une de ces valeurs ne peut que retourner 400 : cela
+    consomme du quota, ralentit l'ouverture de fiche et pollue les journaux. Sur
+    un catalogue garni par import, c'est le cas de l'écrasante majorité des vins.
+    On ne rend donc la référence que si elle peut *plausiblement* venir de
+    wineapi — ni préfixée, ni égale au code-barres.
+    """
+    reference = cuvee.reference_externe_id or ""
+    if not reference or ":" in reference:
+        return ""
+    if reference == (cuvee.code_barres or ""):
+        return ""
+    return reference
+
+
 def resoudre_identite(
     domaine: Domaine, identites: list[tuple[str, str]], cuvee_nom: str
 ) -> Cuvee | None:

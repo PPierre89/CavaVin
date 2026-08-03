@@ -30,7 +30,12 @@ from .enrichment import (
 from .enrichment.image import recadrer_etiquette, reduire as reduire_image
 from .enrichment.lwin import LwinProvider, evaluer_confiance, rechercher_lwin
 from .enrichment.normalize import guess_couleur, parse_vintage, strip_vintage
-from .ingest import synchroniser_wineapi, upsert_cuvee, upsert_multi
+from .ingest import (
+    identifiant_wineapi,
+    synchroniser_wineapi,
+    upsert_cuvee,
+    upsert_multi,
+)
 from .models import Cepage, Cuvee, Domaine, ReferenceLwin
 from .permissions import LectureOuEcritureSansSuppression
 from .serializers import (
@@ -309,8 +314,10 @@ def _build_fiche(cuvee, user):
         "prix_achat_moyen": str(prix_moyen) if prix_moyen is not None else None,
         "millesimes": millesimes,
         "stock_total": sum(m["quantite"] for m in millesimes),
-        # Le vin a une source externe (wineapi) => le bouton de synchro est utile.
-        "enrichissable": bool(cuvee.reference_externe_id),
+        # Le bouton de synchro n'a de sens que si la référence est bien un
+        # identifiant wineapi — ni une référence d'import préfixée, ni un
+        # code-barres recopié par Open Food Facts (cf. identifiant_wineapi).
+        "enrichissable": bool(identifiant_wineapi(cuvee)),
         "enrichi_le": cuvee.enrichi_le,
     }
 
@@ -362,8 +369,9 @@ class CuveeViewSet(viewsets.ModelViewSet):
         unique depuis wineapi (cache), pour bénéficier des données sans attendre
         une synchro manuelle."""
         cuvee = self.get_object()
-        if cuvee.reference_externe_id and cuvee.enrichi_le is None:
-            detail = wineapi_detail(cuvee.reference_externe_id)
+        reference = identifiant_wineapi(cuvee)
+        if reference and cuvee.enrichi_le is None:
+            detail = wineapi_detail(reference)
             if detail:
                 synchroniser_wineapi(cuvee, detail)
         return Response(_build_fiche(cuvee, request.user))
@@ -377,13 +385,14 @@ class CuveeViewSet(viewsets.ModelViewSet):
         "enrichment" appliqué à cette action.
         """
         cuvee = self.get_object()
-        if not cuvee.reference_externe_id:
+        reference = identifiant_wineapi(cuvee)
+        if not reference:
             return Response(
                 {"detail": "Aucune source externe à synchroniser pour ce vin."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        cle_cooldown = f"wineapi:refresh-cooldown:{cuvee.reference_externe_id}"
+        cle_cooldown = f"wineapi:refresh-cooldown:{reference}"
         if cache.get(cle_cooldown):
             return Response(
                 {"detail": "Fiche déjà synchronisée récemment. Réessaie plus tard."},
@@ -391,7 +400,7 @@ class CuveeViewSet(viewsets.ModelViewSet):
             )
         cache.set(cle_cooldown, True, settings.WINEAPI_REFRESH_COOLDOWN)
 
-        detail = refresh_wineapi_detail(cuvee.reference_externe_id)
+        detail = refresh_wineapi_detail(reference)
         synchroniser_wineapi(cuvee, detail)
         return Response(_build_fiche(cuvee, request.user))
 
