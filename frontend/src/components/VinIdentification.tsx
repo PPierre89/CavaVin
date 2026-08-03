@@ -216,15 +216,17 @@ export function VinIdentification({
       return
     }
     let annule = false
-    const timer = setTimeout(async () => {
-      // Les deux recherches sont indépendantes : l'échec de l'une (référentiel
-      // LWIN non importé, réseau) ne doit pas priver l'autre de ses résultats.
-      const [cat, ref] = await Promise.allSettled([searchCatalogue(q), searchReferentiel(q)])
-      if (annule) return
-      setMatches(cat.status === 'fulfilled' ? cat.value : [])
-      setReferentiel(
-        ref.status === 'fulfilled' ? ref.value : { evaluation: null, resultats: [] },
-      )
+    const timer = setTimeout(() => {
+      // Les deux recherches sont indépendantes et affichées *séparément* : ni
+      // l'échec de l'une (référentiel LWIN non importé, réseau) ni sa lenteur ne
+      // doivent retenir l'autre. Les attendre ensemble faisait patienter tout le
+      // panneau au rythme de la plus lente.
+      searchCatalogue(q)
+        .then((r) => !annule && setMatches(r))
+        .catch(() => !annule && setMatches([]))
+      searchReferentiel(q)
+        .then((r) => !annule && setReferentiel(r))
+        .catch(() => !annule && setReferentiel({ evaluation: null, resultats: [] }))
     }, 300)
     return () => {
       annule = true

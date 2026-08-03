@@ -57,6 +57,10 @@ _TABLES_CATALOGUE = (
 
 _LOT = 500
 
+# Table virtuelle FTS5 de recherche (cf. catalog.recherche) et ses tables
+# fantômes, toutes préfixées de ce nom.
+_PREFIXE_FTS = "catalog_cuvee_fts"
+
 # Champs de fiche recopiés depuis le fichier quand la cuvée cible ne les porte
 # pas encore (cf. _completer_projection). Ce sont ceux que la consolidation
 # projette ; les identités en sont exclues, elles ont leur propre traitement.
@@ -181,7 +185,17 @@ def exporter(
                 continue
             if table == "django_migrations":
                 continue  # nécessaire pour que la cible reconnaisse le schéma.
+            if table.startswith(_PREFIXE_FTS):
+                # FTS5 s'appuie sur des tables *fantômes* (`_data`, `_idx`,
+                # `_docsize`…) : y écrire directement corrompt l'index. On vide
+                # la table virtuelle elle-même, plus bas, et jamais ses annexes.
+                continue
             connexion.execute(f'DELETE FROM "{table}"')  # noqa: S608 - nom issu du schéma
+        # L'index n'a pas à voyager : les triggers de la base cible le
+        # reconstruisent au fur et à mesure des insertions du chargement, et le
+        # transporter alourdirait le fichier pour rien.
+        if _PREFIXE_FTS in tables:
+            connexion.execute(f'DELETE FROM "{_PREFIXE_FTS}"')
         if sans_observations:
             connexion.execute("DELETE FROM catalog_sourceobservation")
         connexion.commit()
