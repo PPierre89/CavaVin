@@ -35,7 +35,7 @@ from .enrichment.vinou import VinouProvider
 from .enrichment.vinou import _JWT_CACHE_KEY as VINOU_JWT_KEY
 from .enrichment.wineapi import WineApiProvider
 from . import (
-    apogee, appariement, marchand_import, quotas, sommellerie, tabular,
+    apogee, appariement, marchand_import, quotas, recherche, sommellerie, tabular,
     vivino_import, wine_profile, xwines_import,
 )
 from .runtime_config import definir_source_activee, set_parametre, source_activee
@@ -4890,3 +4890,140 @@ class FicheSansAppelWineapiTests(APITestCase):
 
         self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
         refresh.assert_not_called()
+
+
+class RechercheFtsTests(TestCase):
+    """Index FTS5 : c'est lui qui rend l'autocomplétion utilisable à l'échelle."""
+
+    def setUp(self):
+        self.margaux = Domaine.objects.create(nom="Château Margaux", region="Bordeaux")
+        self.cuvee = Cuvee.objects.create(
+            domaine=self.margaux, nom="Grand Vin", couleur=Cuvee.Couleur.ROUGE,
+            appellation="Margaux", region="Bordeaux",
+        )
+
+    def test_index_disponible(self):
+        self.assertTrue(recherche.index_disponible())
+
+    def test_expression_neutralise_la_syntaxe_fts(self):
+        """La saisie utilisateur ne doit jamais être interprétée comme une
+        expression FTS : les guillemets l'en empêchent."""
+        self.assertEqual(recherche.expression_fts("margaux"), '"margaux"*')
+        self.assertEqual(recherche.expression_fts("grand vin"), '"grand"* AND "vin"*')
+        # Opérateurs et guillemets de l'utilisateur : réduits à des tokens.
+        self.assertEqual(recherche.expression_fts('a OR b'), '"a"* AND "OR"* AND "b"*')
+        self.assertEqual(recherche.expression_fts('"; DROP'), '"DROP"*')
+        self.assertEqual(recherche.expression_fts("  !? "), "")
+
+    def test_recherche_par_prefixe_et_par_domaine(self):
+        """Le dernier mot est un préfixe, et le nom du producteur est indexé."""
+        self.assertIn(self.cuvee.pk, recherche.identifiants("marg"))
+        self.assertIn(self.cuvee.pk, recherche.identifiants("chateau"))
+        self.assertIn(self.cuvee.pk, recherche.identifiants("grand vin"))
+        self.assertEqual(recherche.identifiants("zzzz"), [])
+
+    def test_accents_ignores(self):
+        """« Château » et « chateau » doivent se rejoindre, comme partout
+        ailleurs dans le catalogue (cf. nom_normalise)."""
+        self.assertIn(self.cuvee.pk, recherche.identifiants("château"))
+        self.assertIn(self.cuvee.pk, recherche.identifiants("chateau"))
+
+    def test_tous_les_termes_sont_exigés(self):
+        """Taper un mot de plus restreint, il n'élargit pas."""
+        self.assertEqual(recherche.identifiants("grand introuvable"), [])
+
+    def test_trigger_sur_creation_et_suppression(self):
+        autre = Cuvee.objects.create(
+            domaine=self.margaux, nom="Pavillon Rouge", couleur=Cuvee.Couleur.ROUGE
+        )
+        self.assertIn(autre.pk, recherche.identifiants("pavillon"))
+
+        autre.delete()
+        self.assertEqual(recherche.identifiants("pavillon"), [])
+
+    def test_trigger_sur_modification(self):
+        self.cuvee.nom = "Second Vin"
+        self.cuvee.save()
+
+        self.assertEqual(recherche.identifiants("grand vin"), [])
+        self.assertIn(self.cuvee.pk, recherche.identifiants("second"))
+
+    def test_renommer_un_domaine_rafraichit_ses_cuvees(self):
+        """Le nom du producteur est dénormalisé dans l'index : sans trigger
+        dédié, la recherche par domaine se périmerait silencieusement.
+
+        Le domaine de ce test porte un nom qu'aucun autre champ ne reprend :
+        « margaux » figure aussi dans l'appellation de `self.cuvee`, et ne
+        disparaîtrait donc pas de l'index même après renommage."""
+        domaine = Domaine.objects.create(nom="Bodegas Zurriaga", region="")
+        cuvee = Cuvee.objects.create(
+            domaine=domaine, nom="Tinto Joven", couleur=Cuvee.Couleur.ROUGE
+        )
+        self.assertIn(cuvee.pk, recherche.identifiants("zurriaga"))
+
+        domaine.nom = "Bodegas Kalimba"
+        domaine.save()
+
+        self.assertEqual(recherche.identifiants("zurriaga"), [])
+        self.assertIn(cuvee.pk, recherche.identifiants("kalimba"))
+
+    def test_les_imports_en_masse_sont_indexes(self):
+        """Le point qui motive des triggers SQLite plutôt que des signaux
+        Django : `bulk_create` ne déclenche aucun signal."""
+        Cuvee.objects.bulk_create([
+            Cuvee(domaine=self.margaux, nom=f"Cuvée Massive {i}",
+                  nom_normalise=f"cuvee massive {i}", couleur=Cuvee.Couleur.ROUGE)
+            for i in range(3)
+        ])
+
+        self.assertEqual(len(recherche.identifiants("massive")), 3)
+
+    def test_reconstruction(self):
+        from django.db import connection
+
+        with connection.cursor() as curseur:
+            curseur.execute("DELETE FROM catalog_cuvee_fts")
+        self.assertEqual(recherche.identifiants("margaux"), [])
+
+        total = recherche.reconstruire()
+
+        self.assertEqual(total, 1)
+        self.assertIn(self.cuvee.pk, recherche.identifiants("margaux"))
+
+
+class RechercheCuveeApiTests(APITestCase):
+    """L'endpoint d'autocomplétion, vu du SPA."""
+
+    def setUp(self):
+        self.client.force_authenticate(User.objects.create_user("moi", password="x"))
+        d1 = Domaine.objects.create(nom="Château Margaux", region="Bordeaux")
+        d2 = Domaine.objects.create(nom="Domaine Leflaive", region="Bourgogne")
+        self.margaux = Cuvee.objects.create(
+            domaine=d1, nom="Grand Vin", couleur=Cuvee.Couleur.ROUGE, appellation="Margaux"
+        )
+        self.leflaive = Cuvee.objects.create(
+            domaine=d2, nom="Puligny-Montrachet", couleur=Cuvee.Couleur.BLANC
+        )
+
+    def _chercher(self, terme):
+        reponse = self.client.get(reverse("cuvee-list"), {"search": terme})
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+        return [c["id"] for c in reponse.data["results"]]
+
+    def test_recherche_par_domaine_par_nom_et_par_appellation(self):
+        self.assertEqual(self._chercher("margaux"), [self.margaux.pk])
+        self.assertEqual(self._chercher("leflaive"), [self.leflaive.pk])
+        self.assertEqual(self._chercher("puligny"), [self.leflaive.pk])
+
+    def test_recherche_sans_resultat(self):
+        self.assertEqual(self._chercher("introuvable"), [])
+
+    def test_sans_recherche_le_catalogue_entier_reste_liste(self):
+        reponse = self.client.get(reverse("cuvee-list"))
+        self.assertEqual(reponse.data["count"], 2)
+
+    def test_les_autres_filtres_restent_actifs(self):
+        """Le filtre de recherche remplace celui de DRF : les filtres par champ
+        et le tri doivent continuer de fonctionner."""
+        reponse = self.client.get(reverse("cuvee-list"), {"couleur": "BLANC"})
+        self.assertEqual([c["id"] for c in reponse.data["results"]], [self.leflaive.pk])

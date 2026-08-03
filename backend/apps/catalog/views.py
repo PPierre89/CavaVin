@@ -10,11 +10,13 @@ from django.db import connection
 from django.db.models import DecimalField, ExpressionWrapper, F, Max, Min, Sum
 from django.http import FileResponse, Http404
 from django.urls import reverse
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.filters import OrderingFilter
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
@@ -37,6 +39,7 @@ from .ingest import (
     upsert_multi,
 )
 from .models import Cepage, Cuvee, Domaine, ReferenceLwin
+from .recherche import RechercheCuvee
 from .permissions import LectureOuEcritureSansSuppression
 from .serializers import (
     CepageSerializer,
@@ -326,6 +329,11 @@ class CuveeViewSet(viewsets.ModelViewSet):
     queryset = Cuvee.objects.select_related("domaine").prefetch_related("cepages")
     serializer_class = CuveeSerializer
     permission_classes = [LectureOuEcritureSansSuppression]
+    # Recherche adossée à l'index FTS5 : `?search=` balayait sinon toute la table
+    # (LIKE '%terme%' n'utilise aucun index), ce qui rendait l'autocomplétion
+    # inutilisable sur un catalogue garni par import. Repli automatique sur le
+    # filtre standard si l'index est absent (cf. catalog.recherche).
+    filter_backends = [RechercheCuvee, DjangoFilterBackend, OrderingFilter]
     # « region » complète la recherche : l'autocomplétion du formulaire d'ajout
     # interroge cet endpoint et cherchait aussi sur la région côté client.
     search_fields = ["nom", "domaine__nom", "appellation", "region", "code_barres"]

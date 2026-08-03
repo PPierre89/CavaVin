@@ -73,6 +73,9 @@ python manage.py import_catalogue_marchand /path/WineDataset.csv
 # Scraped rating/price exports (Vivino, wine.com) — channel MUST be scrape:*
 python manage.py import_vivino /path/export.csv [--canal scrape:winecom] [--devise USD]
 
+# Rebuild the full-text search index (triggers keep it live; this is for restores)
+python manage.py reconstruire_index
+
 # Ship a prebuilt catalog between installs (no private data crosses)
 python manage.py exporter_catalogue /data/catalogue.sqlite3
 python manage.py charger_catalogue /data/catalogue.sqlite3
@@ -308,6 +311,29 @@ prerequisites (key present…) with a runtime toggle `source_activee(name, defau
 is reached (`Parametre QUOTA_<SOURCE>`; default 250 for GrapeMinds, unlimited otherwise; `0` = unlimited).
 Counting/enforcement is best-effort — it never breaks an identification. The staff panel drives all this
 via `GET/PUT /api/admin-panel/sources/` (on/off + cap + usage), alongside the existing API-key overrides.
+
+### Catalog search runs on FTS5, not `LIKE` (`recherche.py`, migration `0018`)
+`?search=` on `CuveeViewSet` feeds the add-flow autocomplete on every keystroke. DRF's `SearchFilter`
+turns it into `LIKE '%term%'` across five fields — a leading wildcard, so **no index can apply** and
+every keystroke full-scanned the table. Harmless at a hundred cuvées; at 127 952 (a 551 MB file) it is
+180 ms warm on NVMe and seconds on a NAS, which reads as "the autocomplete is broken".
+
+`RechercheCuvee` queries the `catalog_cuvee_fts` virtual table instead (4–62 ms end-to-end, and no
+longer proportional to catalog size). Four things to preserve:
+- **Triggers, not Django signals.** Bulk imports write via `bulk_create`/`update()`, which emit no
+  signals; a SQLite trigger cannot be bypassed. A dedicated trigger on `catalog_domaine.nom` refreshes
+  its cuvées, since the producer name is denormalised into the index.
+- **User input is never FTS syntax.** Only `\w+` tokens survive, each quoted and suffixed `*`; an
+  input of `a OR b` searches for three literal words. All terms are required (AND), matching
+  `SearchFilter`'s semantics.
+- **Results are capped** (`_PLAFOND`, 100) — including the pagination `count`. Deliberate: the cost is
+  no longer FTS5 (sub-millisecond) but rebuilding relevance order ORM-side, a `CASE` of that many
+  branches (measured: 300 → 69 ms, 100 → 14 ms).
+- **Silent fallback** to the stock filter when the index is absent (non-SQLite, migration not applied),
+  so search stays correct — merely slow.
+
+`exporter_catalogue` must never `DELETE` from the FTS shadow tables (`_data`, `_idx`…) — that corrupts
+the index; it empties the virtual table itself, and the target's triggers rebuild it on load.
 
 ### Portable catalog (`catalogue_portable.py`, `exporter_catalogue` / `charger_catalogue`)
 Filling the referential costs tens of minutes of imports plus fetching the datasets; a fresh install
