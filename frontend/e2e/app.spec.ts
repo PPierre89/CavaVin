@@ -144,8 +144,6 @@ test('recherche dynamique : une cuvée déjà en base est suggérée sans consom
 
   // L'ajout se lance depuis l'action rapide de l'accueil.
   await page.getByRole('button', { name: 'Ajouter une bouteille' }).click()
-  // La recherche par nom est un repli : on déplie « Autre méthode » d'abord.
-  await page.getByRole('button', { name: /Autre méthode/ }).click()
   // Au fil de la frappe, la cuvée du catalogue mutualisé remonte en suggestion
   // (recherche serveur sur /api/cuvees/, aucune source externe sollicitée).
   await page.getByPlaceholder(/rechercher par nom/).fill('cantemerle')
@@ -196,7 +194,6 @@ test('recherche dynamique : quand l’algorithme hésite, la liste sollicite une
   await page.goto('/')
 
   await page.getByRole('button', { name: 'Ajouter une bouteille' }).click()
-  await page.getByRole('button', { name: /Autre méthode/ }).click()
   await page.getByPlaceholder(/rechercher par nom/).fill('palmer')
 
   // L'hésitation est explicite (après le debounce) et les candidats listés.
@@ -245,7 +242,6 @@ test('saisie guidée : quand l’algorithme est sûr, la fiche pré-remplie est 
   await page.goto('/')
 
   await page.getByRole('button', { name: 'Ajouter une bouteille' }).click()
-  await page.getByRole('button', { name: /Autre méthode/ }).click()
   await page.getByPlaceholder(/rechercher par nom/).fill('petrus 2015')
 
   // La fiche proposée affiche millésime, région et données communautaires.
@@ -267,7 +263,6 @@ test('ajout simplifié : vin identifié, récapitulatif, puis bouteille ajoutée
   await page.goto('/')
 
   await page.getByRole('button', { name: 'Ajouter une bouteille' }).click()
-  await page.getByRole('button', { name: /Autre méthode/ }).click()
   await page.getByPlaceholder(/rechercher par nom/).fill('cantemerle')
   await page.getByText('Grand Cru Classé · Haut-Médoc').click()
 
@@ -290,15 +285,54 @@ test('ajout par recherche texte en ligne pré-remplit le vin identifié', async 
   await page.goto('/')
 
   await page.getByRole('button', { name: 'Ajouter une bouteille' }).click()
-  // La recherche par nom est un repli : on déplie « Autre méthode » d'abord.
-  await page.getByRole('button', { name: /Autre méthode/ }).click()
-  // « Margaux » n'est pas dans le catalogue local : la recherche en ligne est
-  // le seul recours (bouton 🔎), et déclenche l'appel wineapi.
+  // La recherche en ligne (consommatrice de quota) n'est plus un bouton à part :
+  // c'est une ligne explicite en fin de liste de suggestions.
   await page.getByPlaceholder(/rechercher par nom/).fill('Margaux')
-  await page.getByRole('button', { name: '🔎' }).click()
+  await page.getByRole('button', { name: /Rechercher « Margaux » en ligne/ }).click()
 
   // Un toast confirme l'identification en ligne.
   await expect(page.getByText(/Identifié/)).toBeVisible()
+})
+
+test('une seule photo identifie le vin, sans choisir entre étiquette et code-barres', async ({
+  page,
+}) => {
+  await seedAuth(page)
+  await mockApi(page)
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Ajouter une bouteille' }).click()
+  // Aucun code-barres décodable dans l'image : la même photo bascule d'elle-même
+  // sur l'analyse d'étiquette, l'utilisateur n'a rien eu à trancher.
+  await page.locator('input[type=file]:not([capture])').setInputFiles({
+    name: 'bouteille.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    ),
+  })
+
+  await expect(page.getByText(/Identifié à l'étiquette/)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Ajouter à la cave' })).toBeVisible()
+})
+
+test('la saisie manuelle est le fond de la recherche et reprend le texte tapé', async ({ page }) => {
+  await seedAuth(page)
+  await mockApi(page, { 'GET /api/cuvees/': [] })
+  // Filet anti-quota : passer en saisie manuelle ne doit rien appeler dehors.
+  await page.route('**/api/identifier-vin/', (route) => route.abort())
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Ajouter une bouteille' }).click()
+  await page.getByPlaceholder(/rechercher par nom/).fill('Domaine du Pré Vert')
+  await page.getByRole('button', { name: /Saisir « Domaine du Pré Vert » à la main/ }).click()
+
+  // Le formulaire manuel s'ouvre avec le domaine déjà rempli : rien à retaper.
+  await expect(page.getByPlaceholder('Domaine Leflaive')).toHaveValue('Domaine du Pré Vert')
+  await page.getByPlaceholder('Chablis GC').first().fill('Cuvée des Amis')
+  await page.getByRole('button', { name: 'Ajouter à la cave' }).click()
+  await expect(page.getByText(/Bouteille ajoutée à la cave/)).toBeVisible()
 })
 
 test('glisser-déposer range une bouteille dans une case de la grille', async ({ page }) => {

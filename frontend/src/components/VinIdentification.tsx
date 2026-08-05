@@ -3,11 +3,8 @@ import { errMsg } from '../api'
 import { useToast } from '../toast'
 import { ghostCls, inputCls, primaryCls } from '../ui'
 import {
-  decodeBarcodeFromImage,
-  identifyByBarcode,
-  identifyByLabel,
+  identifyByPhoto,
   identifyByText,
-  isValidEan,
   MAX_LABEL_SIZE,
   searchCatalogue,
   searchReferentiel,
@@ -18,93 +15,45 @@ import {
 import { COULEUR_VARS, type Couleur, type Cuvee } from '../types'
 
 /* ------------------------------------------------------------------ *
- *  Module d'identification d'un vin.
+ *  Module d'identification d'un vin — DEUX gestes, pas davantage.
  *
- *  Méthode par défaut : la PHOTO DE L'ÉTIQUETTE. Sur mobile, le bouton
- *  principal ouvre directement l'appareil photo (capture arrière) ; on
- *  propose aussi d'importer une image existante depuis la galerie.
+ *  1. LA PHOTO. Un seul bouton, qui ouvre l'appareil photo (capture
+ *     arrière) ; « importer » pioche la même chose dans la galerie. Le
+ *     tri entre étiquette et code-barres n'est plus demandé à
+ *     l'utilisateur : `identifyByPhoto` décode d'abord le code-barres en
+ *     local (gratuit, exact) et bascule sur l'étiquette sinon. Cette
+ *     capture par input fichier marche partout, y compris hors contexte
+ *     sécurisé (HTTP, iPhone) où le scan « live » getUserMedia échouait —
+ *     c'est ce qui permet de n'avoir plus qu'un seul chemin photo.
  *
- *  Méthodes de repli (dépliables via « Autre méthode ») :
- *    • recherche par nom — dynamique et économe en quota : au fil de la
- *      frappe, on propose les cuvées DÉJÀ en base et les références LWIN
- *      (recherches serveur, sans source externe). L'appel à wineapi.io
- *      (consommateur de quota) n'est
- *      déclenché qu'explicitement, via 🔎 / « Rechercher en ligne », ou
- *      par Entrée quand aucune cuvée locale ne correspond.
- *    • code-barres : scan « live » (caméra, si contexte sécurisé), sinon PHOTO
- *      du code-barres décodée localement (fonctionne en HTTP / sur iPhone),
- *      avec saisie manuelle en dernier secours.
+ *  2. LE NOM. Un champ, toujours visible (plus de repli « autre
+ *     méthode »), qui sert les trois recours par ordre de coût : les
+ *     cuvées DÉJÀ en base et les références LWIN remontent au fil de la
+ *     frappe (recherches serveur, aucune source externe) ; la recherche
+ *     en ligne (consommatrice de quota) reste une ligne explicite de la
+ *     liste ; et la saisie manuelle en est la dernière — c'est ce que
+ *     l'on fait quand rien ne correspond, pas une méthode parallèle.
  *
  *  Découplé du formulaire d'ajout : il remonte le vin identifié via
  *  `onIdentified`, à charge de l'appelant de pré-remplir son formulaire.
  * ------------------------------------------------------------------ */
 
-/**
- * Cycle de vie du scanner caméra (ZXing). Import dynamique pour ne pas alourdir
- * le bundle initial. La caméra est coupée à l'arrêt et au démontage du composant.
- */
-function useBarcodeScanner(onDetected: (ean: string) => void) {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const controlsRef = useRef<{ stop: () => void } | null>(null)
-  const [scanning, setScanning] = useState(false)
-
-  // Réf pour éviter de recréer start() à chaque rendu tout en appelant le dernier handler.
-  const onDetectedRef = useRef(onDetected)
-  onDetectedRef.current = onDetected
-
-  const stop = useCallback(() => {
-    controlsRef.current?.stop()
-    controlsRef.current = null
-    setScanning(false)
-  }, [])
-
-  const start = useCallback(async (): Promise<boolean> => {
-    setScanning(true)
-    try {
-      const { BrowserMultiFormatReader } = await import('@zxing/browser')
-      const reader = new BrowserMultiFormatReader()
-      controlsRef.current = await reader.decodeFromConstraints(
-        { video: { facingMode: 'environment' } },
-        videoRef.current!,
-        (result, _err, controls) => {
-          if (result) {
-            controls.stop()
-            controlsRef.current = null
-            setScanning(false)
-            onDetectedRef.current(result.getText())
-          }
-        },
-      )
-      return true
-    } catch {
-      setScanning(false)
-      return false
-    }
-  }, [])
-
-  // Sécurité : coupe la caméra si le composant est démonté pendant un scan.
-  useEffect(() => stop, [stop])
-
-  return { videoRef, scanning, start, stop }
-}
-
 export function VinIdentification({
   onIdentified,
+  onManuel,
 }: {
   onIdentified: (wine: IdentifiedWine, sourceLabel: string) => void
+  /** Dernier recours : créer la fiche à la main, à partir du texte saisi. */
+  onManuel: (saisie: string) => void
 }) {
   const toast = useToast()
   // Deux entrées fichier distinctes : l'une ouvre l'appareil photo (capture),
   // l'autre pioche dans la galerie (sans capture).
   const cameraRef = useRef<HTMLInputElement>(null)
   const galleryRef = useRef<HTMLInputElement>(null)
-  // Capture d'une photo du code-barres (repli iPhone / HTTP où le scan live échoue).
-  const barcodeCamRef = useRef<HTMLInputElement>(null)
   const [search, setSearch] = useState('')
   // Champ de recherche actif : conditionne l'affichage des suggestions.
   const [focused, setFocused] = useState(false)
-  // Replis (nom / code-barres) masqués par défaut : la photo d'étiquette prime.
-  const [fallbackOpen, setFallbackOpen] = useState(false)
   // Libellé de l'opération d'identification en cours (null = aucune).
   const [pending, setPending] = useState<string | null>(null)
 
@@ -130,70 +79,30 @@ export function VinIdentification({
     [onIdentified, toast],
   )
 
-  /** Identifie un vin à partir d'un code-barres (scan live, photo ou saisie). */
-  const runBarcode = useCallback(
-    (ean: string) =>
-      run(
-        'barcode',
-        () => identifyByBarcode(ean),
-        (w) => (w.source === 'local' ? 'Reconnu (déjà en base)' : 'Reconnu'),
-        "Vin non reconnu. Essaie 🏷️ Photographier l'étiquette.",
-      ),
-    [run],
-  )
-
-  const scanner = useBarcodeScanner(runBarcode)
-
-  async function startScan() {
-    // Le scan « live » (getUserMedia) exige un contexte sécurisé (HTTPS) : sur
-    // iPhone servi en HTTP, il échoue. On invite alors à utiliser la capture
-    // d'une PHOTO du code-barres (bouton dédié), qui fonctionne partout, plutôt
-    // que d'imposer directement la saisie manuelle.
-    if (!(await scanner.start())) {
-      toast('Scan live indisponible — utilise « 🏷️ Photographier le code-barres ».', 'err')
-    }
-  }
-
-  /** Décode localement une photo du code-barres puis lance l'identification. */
-  async function onBarcodePhoto(e: React.ChangeEvent<HTMLInputElement>) {
+  /** Traite une photo de bouteille (appareil photo ou galerie). */
+  function onPhotoFile(e: React.ChangeEvent<HTMLInputElement>) {
     const input = e.currentTarget
     const file = input.files?.[0]
     input.value = ''
     if (!file) return
     if (file.size > MAX_LABEL_SIZE) return toast('Photo trop lourde (10 Mo max).', 'err')
-    setPending('barcode')
-    let ean: string
-    try {
-      ean = (await decodeBarcodeFromImage(file)).trim()
-    } catch {
-      setPending(null)
-      return toast('Code-barres illisible — réessaie ou saisis-le à la main.', 'err')
-    }
-    setPending(null)
-    if (!isValidEan(ean)) return toast('Code-barres invalide.', 'err')
-    runBarcode(ean)
-  }
-
-  function manualEntry() {
-    const raw = window.prompt('Saisis le code-barres (8 à 14 chiffres) :', '')
-    if (raw === null) return
-    const ean = raw.trim()
-    if (!isValidEan(ean)) return toast('Code-barres invalide.', 'err')
-    runBarcode(ean)
-  }
-
-  /** Traite une photo d'étiquette (appareil photo ou galerie). */
-  function onLabelFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const input = e.currentTarget
-    const file = input.files?.[0]
-    input.value = ''
-    if (!file) return
-    if (file.size > MAX_LABEL_SIZE) return toast('Photo trop lourde (10 Mo max).', 'err')
+    // `voie` n'est connue qu'après coup : c'est l'appel qui décide s'il a lu un
+    // code-barres ou l'étiquette. Le toast le dit, l'utilisateur n'a rien choisi.
+    let voie = ''
     run(
-      'label',
-      () => identifyByLabel(file),
-      'Identifié',
-      "Vin non identifié sur l'étiquette. Essaie une photo plus nette.",
+      'photo',
+      async () => {
+        const res = await identifyByPhoto(file)
+        voie = res.voie
+        return res.wine
+      },
+      (w) =>
+        voie === 'code-barres'
+          ? w.source === 'local'
+            ? 'Reconnu au code-barres (déjà en base)'
+            : 'Reconnu au code-barres'
+          : "Identifié à l'étiquette",
+      'Vin non reconnu sur cette photo. Réessaie de plus près, ou cherche-le par son nom.',
     )
   }
 
@@ -262,7 +171,7 @@ export function VinIdentification({
       'text',
       () => identifyByText(q, s.lwin),
       'Identifié (référentiel)',
-      'Vin non identifié. Ajoute-le manuellement.',
+      'Vin non identifié. Saisis-le à la main.',
     )
   }
 
@@ -277,7 +186,13 @@ export function VinIdentification({
   function searchOnline() {
     if (q.length < 2) return toast('Saisis au moins 2 caractères.', 'err')
     setFocused(false)
-    run('text', () => identifyByText(q), 'Identifié', 'Vin non identifié. Ajoute-le manuellement.')
+    run('text', () => identifyByText(q), 'Identifié', 'Vin non identifié. Saisis-le à la main.')
+  }
+
+  /** Dernier recours : la fiche est créée à la main, pré-remplie du texte saisi. */
+  function saisirManuellement() {
+    setFocused(false)
+    onManuel(q)
   }
 
   // Entrée : on privilégie la première suggestion locale (gratuite), puis la
@@ -289,35 +204,22 @@ export function VinIdentification({
     else searchOnline()
   }
 
-  if (scanner.scanning) {
-    return (
-      <div>
-        <video
-          ref={scanner.videoRef}
-          playsInline
-          muted
-          className="w-full rounded-xl bg-black aspect-[4/3] object-cover"
-        />
-        <p className="text-muted text-sm text-center mt-2">Vise le code-barres</p>
-        <button onClick={scanner.stop} className={`${ghostCls} w-full mt-2`}>
-          Annuler
-        </button>
-      </div>
-    )
-  }
-
   const busy = pending !== null
 
   return (
     <>
-      {/* Méthode par défaut : photo de l'étiquette (ouvre l'appareil photo). */}
+      {/* Geste n°1 : la photo. Un seul bouton — étiquette ou code-barres, c'est
+          l'application qui tranche. */}
       <button
         onClick={() => cameraRef.current?.click()}
         disabled={busy}
         className={`${primaryCls.replace('mt-4', 'mt-0')} disabled:opacity-60`}
       >
-        {pending === 'label' ? "🏷️ Identification de l'étiquette…" : "🏷️ Photographier l'étiquette"}
+        {pending === 'photo' ? '📷 Reconnaissance en cours…' : '📷 Photographier la bouteille'}
       </button>
+      <p className="text-muted text-xs text-center mt-2">
+        Étiquette ou code-barres : la photo suffit, on reconnaît les deux.
+      </p>
       <button
         onClick={() => galleryRef.current?.click()}
         disabled={busy}
@@ -334,7 +236,7 @@ export function VinIdentification({
         accept="image/jpeg,image/png"
         capture="environment"
         className="sr-only"
-        onChange={onLabelFile}
+        onChange={onPhotoFile}
       />
       {/* Galerie (sans capture) — importer une photo existante. */}
       <input
@@ -342,188 +244,153 @@ export function VinIdentification({
         type="file"
         accept="image/jpeg,image/png"
         className="sr-only"
-        onChange={onLabelFile}
+        onChange={onPhotoFile}
       />
 
-      {/* Replis : recherche par nom ou code-barres, masqués par défaut. */}
-      <button
-        onClick={() => setFallbackOpen((v) => !v)}
-        className="w-full mt-3 text-xs text-muted flex items-center justify-center gap-1"
-      >
-        <span className="underline">Autre méthode : nom ou code-barres</span>
-        <span className={`transition-transform ${fallbackOpen ? 'rotate-180' : ''}`}>▾</span>
-      </button>
+      <div className="flex items-center gap-3 my-3 text-muted text-[0.68rem] uppercase tracking-[0.14em]">
+        <span className="h-px flex-1 bg-line/60" />
+        ou
+        <span className="h-px flex-1 bg-line/60" />
+      </div>
 
-      {fallbackOpen && (
-        <div className="mt-2">
-          <div className="relative">
-            <div className="flex gap-2">
-              <input
-                className={inputCls}
-                placeholder="rechercher par nom (Petrus 2015)"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onFocus={() => setFocused(true)}
-                // Léger délai : laisse le clic sur une suggestion se déclencher avant
-                // la fermeture du panneau.
-                onBlur={() => setTimeout(() => setFocused(false), 120)}
-                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), onSearchEnter())}
-              />
+      {/* Geste n°2 : le nom. Toujours visible — c'est le recours quand la photo
+          n'est pas possible (bouteille absente, étiquette abîmée). */}
+      <div className="relative">
+        <input
+          className={inputCls}
+          placeholder="rechercher par nom (Petrus 2015)"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onFocus={() => setFocused(true)}
+          // Léger délai : laisse le clic sur une suggestion se déclencher avant
+          // la fermeture du panneau.
+          onBlur={() => setTimeout(() => setFocused(false), 120)}
+          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), onSearchEnter())}
+        />
+
+        {focused && q.length >= 1 && (
+          <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-line-strong bg-surface shadow-[0_10px_30px_rgba(0,0,0,0.5)] overflow-hidden">
+            {matches.map((c) => (
               <button
-                onClick={searchOnline}
-                disabled={busy}
-                className={`${ghostCls} shrink-0 disabled:opacity-60`}
+                key={c.id}
+                // onMouseDown (et non onClick) pour agir avant le blur de l'input.
+                onMouseDown={(e) => (e.preventDefault(), pickLocal(c))}
+                className="w-full text-left px-3.5 py-2.5 border-b border-line/40 last:border-b-0 hover:bg-white/5 transition"
               >
-                {pending === 'text' ? '⏳' : '🔎'}
+                <div className="text-muted text-[0.78rem] truncate">{c.domaine_nom}</div>
+                <div className="text-ink text-sm truncate">
+                  {c.nom}
+                  {c.appellation ? ` · ${c.appellation}` : ''}
+                </div>
               </button>
-            </div>
-
-            {focused && q.length >= 1 && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-line-strong bg-surface shadow-[0_10px_30px_rgba(0,0,0,0.5)] overflow-hidden">
-                {matches.map((c) => (
-                  <button
-                    key={c.id}
-                    // onMouseDown (et non onClick) pour agir avant le blur de l'input.
-                    onMouseDown={(e) => (e.preventDefault(), pickLocal(c))}
-                    className="w-full text-left px-3.5 py-2.5 border-b border-line/40 last:border-b-0 hover:bg-white/5 transition"
-                  >
-                    <div className="text-muted text-[0.78rem] truncate">{c.domaine_nom}</div>
-                    <div className="text-ink text-sm truncate">
-                      {c.nom}
-                      {c.appellation ? ` · ${c.appellation}` : ''}
-                    </div>
-                  </button>
-                ))}
-                {/* Saisie guidée — l'algorithme est sûr : fiche pré-remplie
-                    proposée directement (domaine, cuvée, millésime, région, et
-                    l'enrichissement communautaire quand la cuvée est connue). */}
-                {meilleure && (
-                  <div className="border-t border-line/40">
-                    <div className="px-3.5 pt-2 pb-1 text-[0.68rem] uppercase tracking-wider text-gold">
-                      Meilleure correspondance
-                    </div>
-                    <button
-                      onMouseDown={(e) => (e.preventDefault(), pickReferentiel(meilleure))}
-                      disabled={busy}
-                      className="w-full text-left px-3.5 py-2.5 hover:bg-white/5 transition disabled:opacity-60"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          aria-hidden
-                          className="w-2.5 h-2.5 rounded-full shrink-0"
-                          style={{
-                            background:
-                              COULEUR_VARS[meilleure.couleur as Couleur] ?? 'var(--color-autre)',
-                          }}
-                        />
-                        <span className="text-ink text-sm font-medium truncate">
-                          {meilleure.vin || meilleure.producteur}
-                        </span>
-                        {meilleure.millesime != null && (
-                          <span className="text-muted text-xs shrink-0">{meilleure.millesime}</span>
-                        )}
-                      </div>
-                      <div className="text-muted text-[0.78rem] truncate">
-                        {meilleure.producteur}
-                        {meilleure.appellation ? ` · ${meilleure.appellation}` : ''}
-                        {meilleure.pays ? ` · ${meilleure.pays}` : ''}
-                      </div>
-                      {meilleure.en_base && (
-                        <div className="text-muted text-[0.78rem] truncate mt-0.5">
-                          {[
-                            meilleure.en_base.cepages.join(', '),
-                            meilleure.en_base.note != null
-                              ? `★ ${meilleure.en_base.note.toFixed(1)} (${meilleure.en_base.nb_notes ?? 0} avis)`
-                              : '',
-                            meilleure.en_base.accords
-                              .slice(0, 3)
-                              .map((a) => `${a.emoji} ${a.nom}`)
-                              .join('  '),
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        </div>
-                      )}
-                      <div className="text-gold text-xs mt-1">✓ Utiliser cette fiche</div>
-                    </button>
+            ))}
+            {/* Saisie guidée — l'algorithme est sûr : fiche pré-remplie
+                proposée directement (domaine, cuvée, millésime, région, et
+                l'enrichissement communautaire quand la cuvée est connue). */}
+            {meilleure && (
+              <div className="border-t border-line/40">
+                <div className="px-3.5 pt-2 pb-1 text-[0.68rem] uppercase tracking-wider text-gold">
+                  Meilleure correspondance
+                </div>
+                <button
+                  onMouseDown={(e) => (e.preventDefault(), pickReferentiel(meilleure))}
+                  disabled={busy}
+                  className="w-full text-left px-3.5 py-2.5 hover:bg-white/5 transition disabled:opacity-60"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      aria-hidden
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{
+                        background:
+                          COULEUR_VARS[meilleure.couleur as Couleur] ?? 'var(--color-autre)',
+                      }}
+                    />
+                    <span className="text-ink text-sm font-medium truncate">
+                      {meilleure.vin || meilleure.producteur}
+                    </span>
+                    {meilleure.millesime != null && (
+                      <span className="text-muted text-xs shrink-0">{meilleure.millesime}</span>
+                    )}
                   </div>
-                )}
-                {autresSuggestions.length > 0 && (
-                  <div className="px-3.5 pt-2 pb-1 text-[0.68rem] uppercase tracking-wider text-muted border-t border-line/40">
-                    {meilleure
-                      ? 'Autres propositions'
-                      : referentiel.evaluation === 'hesitant'
-                        ? 'Plusieurs correspondances — vérifie la bonne'
-                        : 'Référentiel'}
+                  <div className="text-muted text-[0.78rem] truncate">
+                    {meilleure.producteur}
+                    {meilleure.appellation ? ` · ${meilleure.appellation}` : ''}
+                    {meilleure.pays ? ` · ${meilleure.pays}` : ''}
                   </div>
-                )}
-                {autresSuggestions.map((s) => (
-                  <button
-                    key={s.lwin}
-                    onMouseDown={(e) => (e.preventDefault(), pickReferentiel(s))}
-                    disabled={busy}
-                    className="w-full text-left px-3.5 py-2.5 border-b border-line/40 last:border-b-0 hover:bg-white/5 transition disabled:opacity-60"
-                  >
-                    <div className="text-muted text-[0.78rem] truncate">
-                      {s.producteur}
-                      {s.pays ? ` · ${s.pays}` : ''}
+                  {meilleure.en_base && (
+                    <div className="text-muted text-[0.78rem] truncate mt-0.5">
+                      {[
+                        meilleure.en_base.cepages.join(', '),
+                        meilleure.en_base.note != null
+                          ? `★ ${meilleure.en_base.note.toFixed(1)} (${meilleure.en_base.nb_notes ?? 0} avis)`
+                          : '',
+                        meilleure.en_base.accords
+                          .slice(0, 3)
+                          .map((a) => `${a.emoji} ${a.nom}`)
+                          .join('  '),
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
                     </div>
-                    <div className="text-ink text-sm truncate">
-                      {s.vin || s.producteur}
-                      {s.appellation ? ` · ${s.appellation}` : ''}
-                      {s.en_base ? ' · déjà enrichi' : ''}
-                    </div>
-                  </button>
-                ))}
-                {q.length >= 2 ? (
-                  <button
-                    onMouseDown={(e) => (e.preventDefault(), searchOnline())}
-                    disabled={busy}
-                    className="w-full text-left px-3.5 py-2.5 text-sm text-gold hover:bg-white/5 transition disabled:opacity-60"
-                  >
-                    🌐 Rechercher « {q} » en ligne
-                  </button>
-                ) : (
-                  matches.length === 0 && (
-                    <div className="px-3.5 py-2.5 text-muted text-sm">Continue à taper…</div>
-                  )
-                )}
+                  )}
+                  <div className="text-gold text-xs mt-1">✓ Utiliser cette fiche</div>
+                </button>
               </div>
             )}
+            {autresSuggestions.length > 0 && (
+              <div className="px-3.5 pt-2 pb-1 text-[0.68rem] uppercase tracking-wider text-muted border-t border-line/40">
+                {meilleure
+                  ? 'Autres propositions'
+                  : referentiel.evaluation === 'hesitant'
+                    ? 'Plusieurs correspondances — vérifie la bonne'
+                    : 'Référentiel'}
+              </div>
+            )}
+            {autresSuggestions.map((s) => (
+              <button
+                key={s.lwin}
+                onMouseDown={(e) => (e.preventDefault(), pickReferentiel(s))}
+                disabled={busy}
+                className="w-full text-left px-3.5 py-2.5 border-b border-line/40 last:border-b-0 hover:bg-white/5 transition disabled:opacity-60"
+              >
+                <div className="text-muted text-[0.78rem] truncate">
+                  {s.producteur}
+                  {s.pays ? ` · ${s.pays}` : ''}
+                </div>
+                <div className="text-ink text-sm truncate">
+                  {s.vin || s.producteur}
+                  {s.appellation ? ` · ${s.appellation}` : ''}
+                  {s.en_base ? ' · déjà enrichi' : ''}
+                </div>
+              </button>
+            ))}
+            {/* Les deux recours de fin de liste, dans l'ordre : d'abord la
+                recherche en ligne (elle peut encore trouver, mais consomme du
+                quota — d'où le geste explicite), puis la saisie manuelle. */}
+            {q.length >= 2 ? (
+              <button
+                onMouseDown={(e) => (e.preventDefault(), searchOnline())}
+                disabled={busy}
+                className="w-full text-left px-3.5 py-2.5 text-sm text-gold hover:bg-white/5 transition disabled:opacity-60 border-t border-line/40"
+              >
+                {pending === 'text' ? '⏳ Recherche en ligne…' : `🌐 Rechercher « ${q} » en ligne`}
+              </button>
+            ) : (
+              matches.length === 0 && (
+                <div className="px-3.5 py-2.5 text-muted text-sm">Continue à taper…</div>
+              )
+            )}
+            <button
+              onMouseDown={(e) => (e.preventDefault(), saisirManuellement())}
+              disabled={busy}
+              className="w-full text-left px-3.5 py-2.5 text-sm text-muted hover:bg-white/5 transition disabled:opacity-60 border-t border-line/40"
+            >
+              ✍️ Saisir « {q} » à la main
+            </button>
           </div>
-
-          <button
-            onClick={startScan}
-            disabled={busy}
-            className={`${ghostCls} w-full mt-2 disabled:opacity-60`}
-          >
-            📷 Scanner le code-barres
-          </button>
-          {/* Repli universel (iPhone / HTTP) : photo du code-barres décodée en local. */}
-          <button
-            onClick={() => barcodeCamRef.current?.click()}
-            disabled={busy}
-            className={`${ghostCls} w-full mt-2 disabled:opacity-60`}
-          >
-            {pending === 'barcode' ? '🏷️ Lecture du code-barres…' : '🏷️ Photographier le code-barres'}
-          </button>
-          <input
-            ref={barcodeCamRef}
-            type="file"
-            accept="image/jpeg,image/png"
-            capture="environment"
-            className="sr-only"
-            onChange={onBarcodePhoto}
-          />
-          <button
-            onClick={manualEntry}
-            disabled={busy}
-            className="w-full mt-2 text-xs text-muted underline"
-          >
-            saisir le code-barres à la main
-          </button>
-        </div>
-      )}
+        )}
+      </div>
     </>
   )
 }

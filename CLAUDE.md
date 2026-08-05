@@ -440,7 +440,19 @@ See `.env.example` for the full list.
   price) are served on each `Bouteille` payload, and the add-flow autocomplete queries
   `/api/cuvees/?search=` server-side. Keep it that way — the mutualised catalog grows with the
   community, so any client-side copy of it is both wasteful and silently truncated by pagination.
-- Default add flow is **label photo** (`VinIdentification`); barcode scan & text search are fallbacks.
+- The add flow (`VinIdentification`) offers **exactly two gestures**, and that is deliberate — it used to
+  expose seven (label photo, gallery import, live barcode scan, barcode photo, manual EAN prompt, name
+  search, manual entry), i.e. it asked the user to pick a *technique* before they could add a bottle:
+  - **A photo.** One button (camera; "importer" is the same path from the gallery). `identifyByPhoto`
+    decodes the barcode **locally first** (free, exact, no quota) and falls back to the label — including
+    when the barcode is valid but unknown (404). The user no longer sorts label from barcode; the app
+    does. The live getUserMedia scanner is gone on purpose: file-input capture works in HTTP contexts
+    (NAS, iPhone) where it did not, so one photo path can cover every device.
+  - **A name.** The search field, always visible, ordered by cost: local catalog + LWIN suggestions while
+    typing (server-side, no quota) → an explicit "🌐 rechercher en ligne" row (quota) → "✍️ saisir à la
+    main" as the last row. **Manual entry is the bottom of the search, not a parallel method**, and it
+    carries the typed text into the domaine field. Keep it there — promoting it back to a top-level
+    button is what made the screen a menu of techniques.
 
 ### Data model summary
 - `Domaine` → `Cuvee` (colour, appellation, cépages M2M, + persisted wineapi enrichment columns and

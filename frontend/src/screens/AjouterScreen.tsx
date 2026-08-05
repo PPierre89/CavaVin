@@ -51,19 +51,20 @@ export default function AjouterScreen({
 
 /* ================= Bouteille ================= */
 
-/** Vin retenu pour la bouteille : une cuvée identifiée (photo, recherche,
- *  code-barres, catalogue) ou une saisie manuelle (repli). */
-type VinChoisi = { mode: 'cuvee'; cuvee: Cuvee } | { mode: 'manuel' }
+/** Vin retenu pour la bouteille : une cuvée identifiée (photo ou recherche) ou
+ *  une saisie manuelle, dernier recours atteint depuis la recherche — `saisie`
+ *  reprend alors le texte tapé pour ne pas le faire retaper. */
+type VinChoisi = { mode: 'cuvee'; cuvee: Cuvee } | { mode: 'manuel'; saisie: string }
 
 function BottleForm({ onDone }: { onDone: () => void }) {
   const { emplacements, caveId, refresh } = useData()
   const toast = useToast()
   const formRef = useRef<HTMLFormElement>(null)
 
-  // L'ajout se fait en deux temps : 1. LE VIN (identification — photo,
-  // recherche guidée, code-barres — ou saisie manuelle) ; 2. LA BOUTEILLE,
-  // réduite à l'essentiel (quantité, millésime, emplacement), les champs
-  // secondaires étant repliés sous « Plus de détails ».
+  // L'ajout se fait en deux temps : 1. LE VIN — deux gestes seulement, la photo
+  // ou le nom (cf. VinIdentification), la saisie manuelle n'étant que le fond de
+  // la recherche ; 2. LA BOUTEILLE, réduite à l'essentiel (quantité, millésime,
+  // emplacement), les champs secondaires étant repliés sous « Plus de détails ».
   const [vin, setVin] = useState<VinChoisi | null>(null)
   const [couleur, setCouleur] = useState<Couleur>('ROUGE')
   const [quantite, setQuantite] = useState(1)
@@ -150,13 +151,10 @@ function BottleForm({ onDone }: { onDone: () => void }) {
     return (
       <Card>
         <CardTitle>Ajouter une bouteille</CardTitle>
-        <VinIdentification onIdentified={applyIdentified} />
-        <button
-          onClick={() => setVin({ mode: 'manuel' })}
-          className="w-full mt-3 text-xs text-muted underline"
-        >
-          ✍️ Saisir le vin à la main
-        </button>
+        <VinIdentification
+          onIdentified={applyIdentified}
+          onManuel={(saisie) => setVin({ mode: 'manuel', saisie })}
+        />
       </Card>
     )
   }
@@ -200,7 +198,14 @@ function BottleForm({ onDone }: { onDone: () => void }) {
           <>
             <div className="grid grid-cols-2 gap-2.5">
               <Field label="Domaine">
-                <input name="domaine_nom" className={inputCls} placeholder="Domaine Leflaive" />
+                {/* Pré-rempli du texte cherché : on tape le plus souvent le
+                    producteur, et rien ne doit être saisi deux fois. */}
+                <input
+                  name="domaine_nom"
+                  className={inputCls}
+                  placeholder="Domaine Leflaive"
+                  defaultValue={vin.saisie}
+                />
               </Field>
               <Field label="Nom de cuvée">
                 <input name="cuvee_nom" className={inputCls} placeholder="Chablis GC" />
