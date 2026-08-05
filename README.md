@@ -13,9 +13,12 @@ un **conteneur Docker unique** (Django REST + SPA React, SQLite).
 
 ## Fonctionnalités
 
-- **Ajout par photo d'étiquette** (méthode par défaut), code-barres ou recherche par nom —
-  identification en cascade : base locale → Open Food Facts (EAN) → **Claude (vision)** →
-  wineapi.io → **OCR local + référentiel LWIN** (repli 100 % gratuit), avec mise en cache.
+- **Ajout en deux gestes, pas plus** : une **photo** de la bouteille — le code-barres est décodé en
+  local et, à défaut, c'est l'étiquette qui est lue : plus rien à choisir — ou le **nom**, dont la
+  recherche propose le catalogue et le référentiel au fil de la frappe, puis la recherche en ligne,
+  et enfin la saisie manuelle. Identification en cascade : base locale → Open Food Facts (EAN) →
+  **Claude (vision)** → wineapi.io → **OCR local + référentiel LWIN** (repli 100 % gratuit), avec
+  mise en cache.
 - **Fiche vin enrichie** : appellation, cépages, conseil de service (température, carafage),
   profil gustatif, accords mets-vins, prix marché et **historique de prix**.
 - **Photo d'étiquette conservée** : la photo prise au scan est recadrée sur l'étiquette et

@@ -81,6 +81,41 @@ export function identifyByLabel(file: File) {
   return api<IdentifiedWine>('POST', '/api/scan-etiquette/', fd)
 }
 
+/** Chemin par lequel une photo a fini par identifier le vin. */
+export type VoiePhoto = 'code-barres' | 'etiquette'
+
+/**
+ * Identification à partir d'UNE photo — la voie unique de reconnaissance.
+ *
+ * L'utilisateur n'a plus à choisir entre « étiquette » et « code-barres » :
+ * il photographie la bouteille, on essaie les deux dans le bon ordre.
+ *  1. le code-barres est décodé EN LOCAL (gratuit, exact, aucun quota) : s'il
+ *     est lisible et connu, c'est la réponse la plus sûre ;
+ *  2. sinon — pas de code-barres dans le cadre, illisible, ou inconnu des
+ *     référentiels (404) — la MÊME image part en analyse d'étiquette.
+ * Un code-barres non reconnu ne condamne donc pas la photo. Les autres erreurs
+ * (quota 429, clé invalide 401) remontent telles quelles : elles doivent être
+ * dites à l'utilisateur, pas masquées par un second appel.
+ */
+export async function identifyByPhoto(
+  file: File,
+): Promise<{ wine: IdentifiedWine; voie: VoiePhoto }> {
+  let ean = ''
+  try {
+    ean = (await decodeBarcodeFromImage(file)).trim()
+  } catch {
+    ean = ''
+  }
+  if (isValidEan(ean)) {
+    try {
+      return { wine: await identifyByBarcode(ean), voie: 'code-barres' }
+    } catch (e) {
+      if ((e as { status?: number }).status !== 404) throw e
+    }
+  }
+  return { wine: await identifyByLabel(file), voie: 'etiquette' }
+}
+
 /**
  * Décode un code-barres présent sur une PHOTO (prise avec l'appareil photo natif).
  * Contrairement au scan « live » (getUserMedia), la capture par input fichier

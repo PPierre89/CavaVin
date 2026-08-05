@@ -120,6 +120,12 @@ function defaultRoutes(): Record<string, unknown> {
     'GET /api/cuvees/5/fiche/': FICHE,
     'GET /api/notes-degustation/': [],
     'POST /api/identifier-vin/': IDENTIFY,
+    'POST /api/scan-etiquette/': IDENTIFY,
+    'POST /api/scan-code-barres/': IDENTIFY,
+    // Création manuelle d'un vin (dernier recours de la recherche).
+    'GET /api/domaines/': [],
+    'POST /api/domaines/': { id: 42, nom: 'Domaine du Pré Vert' },
+    'POST /api/cuvees/': { ...CUVEE, id: 77, domaine: 42 },
     // Recherche dynamique (autocomplétion référentiel) : vide par défaut.
     'GET /api/recherche-vins/': { evaluation: null, resultats: [] },
   }
