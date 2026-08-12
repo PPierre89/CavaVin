@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CavaVin · Architecture</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Manrope:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* Jetons repris de frontend/src/index.css (@theme), convertis d'oklch en sRGB. */
+    :root {
+      --paper:       #090504;  /* --color-bg */
+      --paper-2:     #1d1310;  /* --color-sheet */
+      --surface:     #291c17;  /* --color-surface */
+      --ink:         #f2eae1;  /* --color-ink */
+      --muted:       #978d82;  /* --color-muted */
+      --soft:        #797065;  /* --color-placeholder */
+      --rule:        #443733;  /* --color-line */
+      --rule-solid:  #56423c;  /* --color-line-strong */
+      --accent:      #c3972a;  /* --color-gold */
+      --link:        #c6585d;  /* --color-wine-bright */
+
+      --font-sans:  'Manrope', -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --font-serif: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+      --font-mono:  'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.4rem);
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      line-height: 1.1;
+      color: var(--ink);
+    }
+
+    .lede {
+      font-size: 0.9rem;
+      line-height: 1.6;
+      color: var(--muted);
+      max-width: 62ch;
+      margin-top: 0.75rem;
+      margin-bottom: 2rem;
+    }
+
+    .diagram { overflow-x: auto; }
+    svg.schema { width: 100%; min-width: 940px; display: block; }
+
+    .cards {
+      display: grid;
+      grid-template-columns: 1.1fr 1fr 0.95fr;
+      gap: 1rem;
+      margin-top: 2.5rem;
+    }
+    @media (max-width: 860px) { .cards { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      padding: 1.25rem;
+    }
+    .card .eyebrow { margin-bottom: 0.75rem; }
+    .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .card-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+    .dot-accent { background: var(--accent); }
+    .dot-link   { background: var(--link); }
+    .dot-muted  { background: var(--muted); }
+    .card h3 {
+      font-family: var(--font-serif);
+      font-size: 1.15rem;
+      font-weight: 600;
+      letter-spacing: 0;
+      color: var(--ink);
+    }
+    .card ul { list-style: none; }
+    .card li {
+      font-size: 0.82rem;
+      line-height: 1.55;
+      color: var(--muted);
+      padding-left: 0.9rem;
+      position: relative;
+      margin-bottom: 0.4rem;
+    }
+    .card li::before {
+      content: '·';
+      position: absolute;
+      left: 0.2rem;
+      color: var(--soft);
+    }
+    .card code {
+      font-family: var(--font-mono);
+      font-size: 0.74rem;
+      color: var(--ink);
+    }
+
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--rule);
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      letter-spacing: 0.08em;
+      color: var(--soft);
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">CavaVin · Vue d'ensemble</p>
+    <h1>Une image du système</h1>
+    <p class="lede">
+      Un conteneur unique posé sur le NAS : Django sert l'API et le bundle de la SPA, un seul fichier
+      SQLite porte à la fois le catalogue mutualisé et les caves privées. L'identification d'un vin
+      interroge toutes les sources activées en parallèle, puis arbitre leurs réponses.
+    </p>
+
+    <div class="diagram">
+      <svg class="schema" viewBox="0 96 1200 584" role="img"
+           aria-labelledby="architecture-title architecture-desc"
+           xmlns="http://www.w3.org/2000/svg">
+        <title id="architecture-title">Architecture de CavaVin</title>
+        <desc id="architecture-desc">La SPA React appelle l'API Django servie par le même
+          conteneur ; la cascade d'identification interroge en parallèle Claude, les APIs vin
+          distantes et un repli OCR local adossé au référentiel LWIN, puis la consolidation arbitre
+          les observations avant de les écrire dans l'unique base SQLite, qui sépare le catalogue
+          mutualisé des données privées de chaque utilisateur.</desc>
+
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#978d82"/>
+          </marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#c3972a"/>
+          </marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#c6585d"/>
+          </marker>
+        </defs>
+
+        <rect x="0" y="96" width="1200" height="584" fill="#090504"/>
+
+        <!-- ============ Zones ============ -->
+        <rect x="24" y="120" width="184" height="136" rx="8"
+              fill="rgba(242,234,225,0.02)" stroke="rgba(242,234,225,0.10)" stroke-width="0.8"/>
+        <rect x="40" y="124" width="60" height="12" rx="2" fill="#090504"/>
+        <text x="70" y="133" fill="rgba(242,234,225,0.40)" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.14em">CLIENT</text>
+
+        <rect x="272" y="120" width="576" height="440" rx="8"
+              fill="rgba(242,234,225,0.02)" stroke="rgba(242,234,225,0.10)" stroke-width="0.8"/>
+        <rect x="288" y="124" width="152" height="12" rx="2" fill="#090504"/>
+        <text x="364" y="133" fill="rgba(242,234,225,0.40)" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.14em">CONTENEUR UNIQUE · NAS</text>
+
+        <rect x="896" y="120" width="272" height="232" rx="8"
+              fill="rgba(242,234,225,0.02)" stroke="rgba(242,234,225,0.10)" stroke-width="0.8"/>
+        <rect x="912" y="124" width="144" height="12" rx="2" fill="#090504"/>
+        <text x="984" y="133" fill="rgba(242,234,225,0.40)" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.14em">SOURCES DISTANTES</text>
+
+        <!-- ============ Connecteurs (avant les boîtes) ============ -->
+
+        <!-- SPA -> API -->
+        <line x1="188" y1="176" x2="304" y2="176" stroke="#c6585d" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+        <rect x="212" y="156" width="56" height="12" rx="2" fill="#090504"/>
+        <text x="240" y="165" fill="#c6585d" font-size="8" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.06em">REST · JWT</text>
+
+        <!-- API -> SPA (bundle servi par WhiteNoise) -->
+        <line x1="304" y1="200" x2="188" y2="200" stroke="#c6585d" stroke-width="1"
+              stroke-dasharray="5,4" marker-end="url(#arrow-link)"/>
+        <rect x="212" y="208" width="56" height="12" rx="2" fill="#090504"/>
+        <text x="240" y="217" fill="#c6585d" font-size="8" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.06em">WHITENOISE</text>
+
+        <!-- API -> Cascade -->
+        <line x1="472" y1="176" x2="584" y2="176" stroke="#978d82" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <rect x="496" y="156" width="64" height="12" rx="2" fill="#090504"/>
+        <text x="528" y="165" fill="#978d82" font-size="8" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.06em">IDENTIFIER</text>
+
+        <!-- API -> SQLite -->
+        <path d="M 472,208 H 512 Q 520,208 520,216 V 432"
+              fill="none" stroke="#978d82" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <rect x="528" y="372" width="44" height="12" rx="2" fill="#090504"/>
+        <text x="550" y="381" fill="#978d82" font-size="8" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.06em">CRUD</text>
+
+        <!-- Cascade -> repli OCR local (pont au croisement x=520) -->
+        <path d="M 584,200 H 552 Q 544,200 544,208 V 312 Q 544,320 536,320 H 528 a 8,8 0 0,0 -16,0 H 472"
+              fill="none" stroke="#978d82" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+
+        <!-- Cascade -> Claude -->
+        <path d="M 784,176 H 844 Q 852,176 852,184 V 200 Q 852,208 860,208 H 920"
+              fill="none" stroke="#c6585d" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+
+        <!-- Cascade -> APIs vin distantes -->
+        <path d="M 784,200 H 868 Q 876,200 876,208 V 288 Q 876,296 884,296 H 920"
+              fill="none" stroke="#c6585d" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+
+        <!-- Cascade -> Consolidation -->
+        <line x1="684" y1="224" x2="684" y2="288" stroke="#c3972a" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+        <rect x="692" y="244" width="80" height="12" rx="2" fill="#090504"/>
+        <text x="732" y="253" fill="#c3972a" font-size="8" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.06em">OBSERVATIONS</text>
+
+        <!-- Consolidation -> SQLite -->
+        <line x1="684" y1="352" x2="684" y2="432" stroke="#978d82" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <rect x="692" y="384" width="68" height="12" rx="2" fill="#090504"/>
+        <text x="726" y="393" fill="#978d82" font-size="8" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.06em">ARBITRAGE</text>
+
+        <!-- Imports hors-ligne -> SQLite -->
+        <line x1="448" y1="480" x2="496" y2="480" stroke="#978d82" stroke-width="1"
+              stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+        <rect x="440" y="456" width="52" height="12" rx="2" fill="#090504"/>
+        <text x="466" y="465" fill="#978d82" font-size="8" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.06em">BULK</text>
+
+        <!-- ============ Nœuds ============ -->
+
+        <!-- SPA React -->
+        <rect x="44" y="152" width="144" height="72" rx="6" fill="#1d1310"
+              stroke="rgba(242,234,225,0.30)" stroke-width="1"/>
+        <rect x="52" y="158" width="32" height="12" rx="2" fill="none"
+              stroke="rgba(242,234,225,0.30)" stroke-width="0.8"/>
+        <text x="68" y="167" fill="#978d82" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.08em">SPA</text>
+        <text x="116" y="190" fill="#f2eae1" font-size="12" font-weight="600"
+              font-family="'Manrope', sans-serif" text-anchor="middle">SPA React</text>
+        <text x="116" y="206" fill="#978d82" font-size="9"
+              font-family="'Geist Mono', monospace" text-anchor="middle">mobile-first · Vite</text>
+
+        <!-- API Django + DRF -->
+        <rect x="304" y="152" width="168" height="72" rx="6" fill="#291c17"
+              stroke="#56423c" stroke-width="1"/>
+        <rect x="312" y="158" width="32" height="12" rx="2" fill="none"
+              stroke="rgba(242,234,225,0.35)" stroke-width="0.8"/>
+        <text x="328" y="167" fill="#978d82" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.08em">API</text>
+        <text x="388" y="190" fill="#f2eae1" font-size="12" font-weight="600"
+              font-family="'Manrope', sans-serif" text-anchor="middle">API Django + DRF</text>
+        <text x="388" y="206" fill="#978d82" font-size="9"
+              font-family="'Geist Mono', monospace" text-anchor="middle">JWT · throttles · /api/</text>
+
+        <!-- Cascade d'identification (focal) -->
+        <rect x="584" y="152" width="200" height="72" rx="6" fill="#090504"/>
+        <rect x="584" y="152" width="200" height="72" rx="6" fill="rgba(195,151,42,0.12)"
+              stroke="#c3972a" stroke-width="1"/>
+        <rect x="592" y="158" width="36" height="12" rx="2" fill="none"
+              stroke="rgba(195,151,42,0.40)" stroke-width="0.8"/>
+        <text x="610" y="167" fill="#c3972a" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.08em">SCAN</text>
+        <text x="684" y="190" fill="#f2eae1" font-size="12" font-weight="600"
+              font-family="'Manrope', sans-serif" text-anchor="middle">Cascade d'identification</text>
+        <text x="684" y="206" fill="#f2eae1" font-size="9"
+              font-family="'Geist Mono', monospace" text-anchor="middle">parallèle · toutes sources</text>
+
+        <!-- Repli OCR + LWIN -->
+        <rect x="304" y="288" width="168" height="64" rx="6" fill="#1d1310"
+              stroke="rgba(242,234,225,0.30)" stroke-width="1"/>
+        <rect x="312" y="294" width="40" height="12" rx="2" fill="none"
+              stroke="rgba(242,234,225,0.30)" stroke-width="0.8"/>
+        <text x="332" y="303" fill="#978d82" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.08em">LOCAL</text>
+        <text x="388" y="322" fill="#f2eae1" font-size="12" font-weight="600"
+              font-family="'Manrope', sans-serif" text-anchor="middle">Repli OCR + LWIN</text>
+        <text x="388" y="338" fill="#978d82" font-size="9"
+              font-family="'Geist Mono', monospace" text-anchor="middle">tesseract · rapidfuzz</text>
+
+        <!-- Consolidation -->
+        <rect x="584" y="288" width="200" height="64" rx="6" fill="#291c17"
+              stroke="#56423c" stroke-width="1"/>
+        <rect x="592" y="294" width="40" height="12" rx="2" fill="none"
+              stroke="rgba(242,234,225,0.35)" stroke-width="0.8"/>
+        <text x="612" y="303" fill="#978d82" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.08em">MERGE</text>
+        <text x="684" y="322" fill="#f2eae1" font-size="12" font-weight="600"
+              font-family="'Manrope', sans-serif" text-anchor="middle">Consolidation</text>
+        <text x="684" y="338" fill="#978d82" font-size="9"
+              font-family="'Geist Mono', monospace" text-anchor="middle">confiance puis récence</text>
+
+        <!-- Imports hors-ligne -->
+        <rect x="304" y="448" width="144" height="64" rx="6" fill="#1d1310"
+              stroke="rgba(242,234,225,0.30)" stroke-width="1"/>
+        <rect x="312" y="454" width="28" height="12" rx="2" fill="none"
+              stroke="rgba(242,234,225,0.30)" stroke-width="0.8"/>
+        <text x="326" y="463" fill="#978d82" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.08em">CLI</text>
+        <text x="376" y="482" fill="#f2eae1" font-size="12" font-weight="600"
+              font-family="'Manrope', sans-serif" text-anchor="middle">Imports hors-ligne</text>
+        <text x="376" y="498" fill="#978d82" font-size="9"
+              font-family="'Geist Mono', monospace" text-anchor="middle">X-Wines · LWIN</text>
+
+        <!-- SQLite (focal) — un seul fichier, deux étages de confidentialité -->
+        <rect x="496" y="432" width="288" height="96" rx="6" fill="#090504"/>
+        <rect x="496" y="432" width="288" height="96" rx="6" fill="rgba(195,151,42,0.12)"
+              stroke="#c3972a" stroke-width="1"/>
+        <rect x="504" y="438" width="36" height="12" rx="2" fill="none"
+              stroke="rgba(195,151,42,0.40)" stroke-width="0.8"/>
+        <text x="522" y="447" fill="#c3972a" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.08em">DATA</text>
+        <rect x="548" y="438" width="36" height="12" rx="2" fill="none"
+              stroke="rgba(195,151,42,0.40)" stroke-width="0.8"/>
+        <text x="566" y="447" fill="#c3972a" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.08em">FTS5</text>
+        <text x="640" y="464" fill="#f2eae1" font-size="12" font-weight="600"
+              font-family="'Manrope', sans-serif" text-anchor="middle">SQLite · fichier unique</text>
+        <line x1="512" y1="476" x2="768" y2="476" stroke="rgba(195,151,42,0.30)" stroke-width="0.8"/>
+        <line x1="640" y1="480" x2="640" y2="520" stroke="rgba(195,151,42,0.30)" stroke-width="0.8"/>
+        <text x="568" y="496" fill="#f2eae1" font-size="9"
+              font-family="'Geist Mono', monospace" text-anchor="middle">catalog</text>
+        <text x="568" y="512" fill="#978d82" font-size="8"
+              font-family="'Geist Mono', monospace" text-anchor="middle">mutualisé</text>
+        <text x="712" y="496" fill="#f2eae1" font-size="9"
+              font-family="'Geist Mono', monospace" text-anchor="middle">cellars · inventory</text>
+        <text x="712" y="512" fill="#978d82" font-size="8"
+              font-family="'Geist Mono', monospace" text-anchor="middle">privé, par utilisateur</text>
+
+        <!-- Claude -->
+        <rect x="920" y="176" width="224" height="64" rx="6" fill="#1d1310"
+              stroke="rgba(242,234,225,0.30)" stroke-width="1"/>
+        <rect x="928" y="182" width="28" height="12" rx="2" fill="none"
+              stroke="rgba(242,234,225,0.30)" stroke-width="0.8"/>
+        <text x="942" y="191" fill="#978d82" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.08em">LLM</text>
+        <text x="1032" y="210" fill="#f2eae1" font-size="12" font-weight="600"
+              font-family="'Manrope', sans-serif" text-anchor="middle">Claude (Anthropic)</text>
+        <text x="1032" y="226" fill="#978d82" font-size="9"
+              font-family="'Geist Mono', monospace" text-anchor="middle">vision · sortie structurée</text>
+
+        <!-- APIs vin distantes -->
+        <rect x="920" y="264" width="224" height="64" rx="6" fill="#1d1310"
+              stroke="rgba(242,234,225,0.30)" stroke-width="1"/>
+        <rect x="928" y="270" width="28" height="12" rx="2" fill="none"
+              stroke="rgba(242,234,225,0.30)" stroke-width="0.8"/>
+        <text x="942" y="279" fill="#978d82" font-size="7" font-family="'Geist Mono', monospace"
+              text-anchor="middle" letter-spacing="0.08em">API</text>
+        <text x="1032" y="298" fill="#f2eae1" font-size="12" font-weight="600"
+              font-family="'Manrope', sans-serif" text-anchor="middle">APIs vin distantes</text>
+        <text x="1032" y="314" fill="#978d82" font-size="9"
+              font-family="'Geist Mono', monospace" text-anchor="middle">wineapi · OFF · GrapeMinds</text>
+
+        <!-- ============ Légende ============ -->
+        <line x1="32" y1="616" x2="1168" y2="616" stroke="rgba(242,234,225,0.10)" stroke-width="0.8"/>
+        <text x="32" y="640" fill="#797065" font-size="8" font-family="'Geist Mono', monospace"
+              letter-spacing="0.14em">LÉGENDE</text>
+
+        <rect x="136" y="628" width="16" height="12" rx="2" fill="rgba(195,151,42,0.12)"
+              stroke="#c3972a" stroke-width="1"/>
+        <text x="160" y="640" fill="#978d82" font-size="8" font-family="'Geist Mono', monospace">Point focal</text>
+
+        <rect x="300" y="628" width="16" height="12" rx="2" fill="#291c17" stroke="#56423c" stroke-width="1"/>
+        <text x="324" y="640" fill="#978d82" font-size="8" font-family="'Geist Mono', monospace">Service Django</text>
+
+        <rect x="484" y="628" width="16" height="12" rx="2" fill="#1d1310"
+              stroke="rgba(242,234,225,0.30)" stroke-width="1"/>
+        <text x="508" y="640" fill="#978d82" font-size="8" font-family="'Geist Mono', monospace">Client &amp; sources</text>
+
+        <line x1="668" y1="636" x2="688" y2="636" stroke="#c6585d" stroke-width="1.2"/>
+        <text x="696" y="640" fill="#978d82" font-size="8" font-family="'Geist Mono', monospace">Appel réseau</text>
+
+        <line x1="856" y1="636" x2="876" y2="636" stroke="#978d82" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="884" y="640" fill="#978d82" font-size="8" font-family="'Geist Mono', monospace">Flux secondaire</text>
+      </svg>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <p class="eyebrow">Déploiement</p>
+        <div class="card-header"><span class="card-dot dot-accent"></span><h3>Un seul conteneur</h3></div>
+        <ul>
+          <li>Django sert l'API <em>et</em> le bundle de la SPA via WhiteNoise — pas de reverse proxy à côté.</li>
+          <li>Gunicorn, timeout <code>120 s</code> : les appels vision doivent tenir sous ce plafond.</li>
+          <li>Image publiée sur GHCR, tirée par <code>docker compose</code> sur le NAS.</li>
+          <li>Sauvegarde = copier le dossier <code>data/</code> (base + photos d'étiquettes).</li>
+        </ul>
+      </div>
+      <div class="card">
+        <p class="eyebrow">Confidentialité</p>
+        <div class="card-header"><span class="card-dot dot-muted"></span><h3>Un fichier, deux étages</h3></div>
+        <ul>
+          <li><code>catalog</code> — domaines, cuvées, cépages : lisible par tous, alimenté par la communauté.</li>
+          <li><code>cellars</code> + <code>inventory</code> — caves, bouteilles, dégustations : filtrés par <code>request.user</code>, <code>.none()</code> pour l'anonyme.</li>
+          <li>L'export du catalogue portable purge tout le reste — aucune donnée privée ne circule.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <p class="eyebrow">Identification</p>
+        <div class="card-header"><span class="card-dot dot-link"></span><h3>Toutes les sources</h3></div>
+        <ul>
+          <li>Photo ou nom : la cascade interroge chaque source activée en parallèle.</li>
+          <li>Chaque réponse devient une observation par canal ; la consolidation arbitre champ par champ.</li>
+          <li>Le repli OCR + LWIN tourne dans le conteneur : utilisable sans aucune clé d'API.</li>
+        </ul>
+      </div>
+    </div>
+
+    <footer>
+      CavaVin · docs/architecture.html<br>
+      Palette et typographie reprises de frontend/src/index.css (@theme) — gold en accent, lie-de-vin sur les appels réseau.
+    </footer>
+  </div>
+</body>
+</html>
