@@ -43,6 +43,12 @@ un **conteneur Docker unique** (Django REST + SPA React, SQLite).
 Django 6 + DRF · React 19 + Vite + Tailwind v4 · SQLite · Docker (mono-conteneur, Django sert le
 SPA via WhiteNoise). Docs API : **Swagger** sur `/api/docs/`.
 
+![Architecture de CavaVin](docs/images/architecture.png)
+
+Conteneur unique, cloisonnement du catalogue mutualisé et des données privées, cascade
+d'identification multi-sources. Version détaillée (fiches de synthèse) :
+[`docs/architecture.html`](docs/architecture.html).
+
 ## Démarrage rapide (Docker)
 
 ```bash
