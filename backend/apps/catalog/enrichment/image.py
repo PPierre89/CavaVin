@@ -32,6 +32,40 @@ TAILLE_MAX = 1568
 # est nul et le poids repart à la hausse.
 QUALITE_JPEG = 85
 
+# Seuls formats que Pillow est autorisé à décoder. Sans cette liste, ``Image.open``
+# essaie tous ses greffons (TIFF, BMP, GIF, EPS, PDF…) : une photo déclarée
+# « image/jpeg » mais contenant un TIFF ou un BMP piégé atteindrait alors des
+# décodeurs historiquement vulnérables (débordements de tas, bombes de
+# décompression). L'upload n'accepte que JPEG/PNG : le décodeur aussi.
+FORMATS_ACCEPTES = ("JPEG", "PNG")
+
+
+def ouvrir(data: bytes):
+    """Ouvre des octets d'image en n'autorisant que ``FORMATS_ACCEPTES``.
+
+    Point d'entrée unique de tout décodage d'image du catalogue. Lève
+    ``PIL.UnidentifiedImageError`` pour tout autre format, quel que soit le
+    ``content_type`` annoncé par le client.
+    """
+    from PIL import Image
+
+    return Image.open(BytesIO(data), formats=FORMATS_ACCEPTES)
+
+
+def format_reel(data: bytes) -> str | None:
+    """Format réellement contenu dans les octets (``"JPEG"``/``"PNG"``), ou None.
+
+    Lit l'en-tête puis ``verify()`` la structure, sans décoder les pixels :
+    c'est le contrôle de l'upload, indépendant de l'extension et du
+    ``content_type`` déclarés.
+    """
+    try:
+        image = ouvrir(data)
+        image.verify()
+        return image.format
+    except Exception:
+        return None
+
 
 def reduire(data: bytes, content_type: str = "") -> tuple[bytes, str]:
     """Photo réduite pour un envoi distant -> ``(octets, content_type)``.
@@ -44,7 +78,7 @@ def reduire(data: bytes, content_type: str = "") -> tuple[bytes, str]:
     try:
         from PIL import Image, ImageOps
 
-        image = Image.open(BytesIO(data))
+        image = ouvrir(data)
         grand_cote = max(image.size)
         if grand_cote <= TAILLE_MAX and (content_type or "").endswith("jpeg"):
             # Déjà au gabarit et déjà en JPEG : ré-encoder ne ferait que dégrader.
@@ -114,7 +148,7 @@ def recadrer_etiquette(data: bytes) -> tuple[bytes, str]:
     try:
         from PIL import Image, ImageOps
 
-        image = ImageOps.exif_transpose(Image.open(BytesIO(reduite))).convert("RGB")
+        image = ImageOps.exif_transpose(ouvrir(reduite)).convert("RGB")
         if zone:
             gauche, haut, droite, bas = zone
             marge_l = round(image.width * _MARGE)

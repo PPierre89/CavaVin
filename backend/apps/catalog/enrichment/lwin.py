@@ -119,7 +119,9 @@ def _variantes(data: bytes, rotation: int = 0, zone: tuple | None = None) -> lis
     try:
         from PIL import Image, ImageOps, ImageStat
 
-        image = Image.open(BytesIO(data))
+        from .image import ouvrir
+
+        image = ouvrir(data)
         image = ImageOps.exif_transpose(image)
         if rotation:
             # « Rotate » OSD = rotation horaire à appliquer ; PIL tourne en
@@ -164,9 +166,9 @@ def _pivoter(image: bytes, degres: int) -> bytes:
     """Pivote une variante PNG (sens horaire) — force brute d'orientation sur
     un recadrage quand l'OSD n'a rien détecté. Octets illisibles : inchangés."""
     try:
-        from PIL import Image
+        from .image import ouvrir
 
-        pivotee = Image.open(BytesIO(image)).rotate(-degres, expand=True)
+        pivotee = ouvrir(image).rotate(-degres, expand=True)
         tampon = BytesIO()
         pivotee.save(tampon, "PNG")
         return tampon.getvalue()

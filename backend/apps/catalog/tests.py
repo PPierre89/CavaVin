@@ -923,8 +923,14 @@ class ScanEtiquetteViewTests(APITestCase):
         self.url = reverse("scan-etiquette")
         self.client.force_authenticate(User.objects.create_user("alice", password="x"))
 
-    def _photo(self, name="etiquette.jpg", content_type="image/jpeg", size=1024):
-        return SimpleUploadedFile(name, b"x" * size, content_type=content_type)
+    def _photo(self, name="etiquette.jpg", content_type="image/jpeg", size=None, format="JPEG"):
+        if size is not None:
+            return SimpleUploadedFile(name, b"x" * size, content_type=content_type)
+        from PIL import Image
+
+        tampon = BytesIO()
+        Image.new("RGB", (40, 30), (120, 20, 30)).save(tampon, format)
+        return SimpleUploadedFile(name, tampon.getvalue(), content_type=content_type)
 
     @patch("apps.catalog.views.get_enabled_providers")
     def test_hit_identifie_et_met_en_cache(self, mock_providers):
@@ -970,6 +976,67 @@ class ScanEtiquetteViewTests(APITestCase):
     def test_sans_fichier_400(self):
         resp = self.client.post(self.url, {}, format="multipart")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_png_accepte(self, mock_providers):
+        mock_providers.return_value = [_FakeProvider(wine=None)]
+        resp = self.client.post(
+            self.url, {"image": self._photo("e.png", "image/png", format="PNG")}, format="multipart"
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_format_deguise_400(self, mock_providers):
+        """Un BMP, un GIF ou un TIFF annoncé « image/jpeg » est refusé sur son contenu,
+        sans qu'aucune source ne soit interrogée."""
+        mock_providers.return_value = [_FakeProvider(wine=None)]
+        for fmt in ("BMP", "GIF", "TIFF"):
+            with self.subTest(fmt=fmt):
+                resp = self.client.post(
+                    self.url, {"image": self._photo(format=fmt)}, format="multipart"
+                )
+                self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("image", resp.data)
+        mock_providers.assert_not_called()
+
+    def test_octets_quelconques_400(self):
+        resp = self.client.post(self.url, {"image": self._photo(size=1024)}, format="multipart")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class OuvertureImageTests(SimpleTestCase):
+    """Le décodeur n'accepte que JPEG/PNG, quel que soit le chemin d'appel."""
+
+    def _octets(self, fmt):
+        from PIL import Image
+
+        tampon = BytesIO()
+        Image.new("RGB", (10, 10)).save(tampon, fmt)
+        return tampon.getvalue()
+
+    def test_formats_acceptes(self):
+        from .enrichment.image import format_reel
+
+        self.assertEqual(format_reel(self._octets("JPEG")), "JPEG")
+        self.assertEqual(format_reel(self._octets("PNG")), "PNG")
+
+    def test_autres_formats_refuses(self):
+        from PIL import UnidentifiedImageError
+
+        from .enrichment.image import format_reel, ouvrir
+
+        for fmt in ("BMP", "GIF", "TIFF"):
+            with self.subTest(fmt=fmt):
+                self.assertIsNone(format_reel(self._octets(fmt)))
+                with self.assertRaises(UnidentifiedImageError):
+                    ouvrir(self._octets(fmt))
+
+    def test_reduire_laisse_un_format_refuse_intact(self):
+        """Best-effort conservé : un format refusé n'est pas décodé, l'original est rendu."""
+        from .enrichment.image import reduire
+
+        bmp = self._octets("BMP")
+        self.assertEqual(reduire(bmp, "image/bmp"), (bmp, "image/bmp"))
 
 
 class EnrichmentThrottleTests(APITestCase):
