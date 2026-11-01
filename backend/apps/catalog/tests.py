@@ -923,8 +923,14 @@ class ScanEtiquetteViewTests(APITestCase):
         self.url = reverse("scan-etiquette")
         self.client.force_authenticate(User.objects.create_user("alice", password="x"))
 
-    def _photo(self, name="etiquette.jpg", content_type="image/jpeg", size=1024):
-        return SimpleUploadedFile(name, b"x" * size, content_type=content_type)
+    def _photo(self, name="etiquette.jpg", content_type="image/jpeg", size=None, format="JPEG"):
+        if size is not None:
+            return SimpleUploadedFile(name, b"x" * size, content_type=content_type)
+        from PIL import Image
+
+        tampon = BytesIO()
+        Image.new("RGB", (40, 30), (120, 20, 30)).save(tampon, format)
+        return SimpleUploadedFile(name, tampon.getvalue(), content_type=content_type)
 
     @patch("apps.catalog.views.get_enabled_providers")
     def test_hit_identifie_et_met_en_cache(self, mock_providers):
@@ -970,6 +976,67 @@ class ScanEtiquetteViewTests(APITestCase):
     def test_sans_fichier_400(self):
         resp = self.client.post(self.url, {}, format="multipart")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_png_accepte(self, mock_providers):
+        mock_providers.return_value = [_FakeProvider(wine=None)]
+        resp = self.client.post(
+            self.url, {"image": self._photo("e.png", "image/png", format="PNG")}, format="multipart"
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    @patch("apps.catalog.views.get_enabled_providers")
+    def test_format_deguise_400(self, mock_providers):
+        """Un BMP, un GIF ou un TIFF annoncé « image/jpeg » est refusé sur son contenu,
+        sans qu'aucune source ne soit interrogée."""
+        mock_providers.return_value = [_FakeProvider(wine=None)]
+        for fmt in ("BMP", "GIF", "TIFF"):
+            with self.subTest(fmt=fmt):
+                resp = self.client.post(
+                    self.url, {"image": self._photo(format=fmt)}, format="multipart"
+                )
+                self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("image", resp.data)
+        mock_providers.assert_not_called()
+
+    def test_octets_quelconques_400(self):
+        resp = self.client.post(self.url, {"image": self._photo(size=1024)}, format="multipart")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class OuvertureImageTests(SimpleTestCase):
+    """Le décodeur n'accepte que JPEG/PNG, quel que soit le chemin d'appel."""
+
+    def _octets(self, fmt):
+        from PIL import Image
+
+        tampon = BytesIO()
+        Image.new("RGB", (10, 10)).save(tampon, fmt)
+        return tampon.getvalue()
+
+    def test_formats_acceptes(self):
+        from .enrichment.image import format_reel
+
+        self.assertEqual(format_reel(self._octets("JPEG")), "JPEG")
+        self.assertEqual(format_reel(self._octets("PNG")), "PNG")
+
+    def test_autres_formats_refuses(self):
+        from PIL import UnidentifiedImageError
+
+        from .enrichment.image import format_reel, ouvrir
+
+        for fmt in ("BMP", "GIF", "TIFF"):
+            with self.subTest(fmt=fmt):
+                self.assertIsNone(format_reel(self._octets(fmt)))
+                with self.assertRaises(UnidentifiedImageError):
+                    ouvrir(self._octets(fmt))
+
+    def test_reduire_laisse_un_format_refuse_intact(self):
+        """Best-effort conservé : un format refusé n'est pas décodé, l'original est rendu."""
+        from .enrichment.image import reduire
+
+        bmp = self._octets("BMP")
+        self.assertEqual(reduire(bmp, "image/bmp"), (bmp, "image/bmp"))
 
 
 class EnrichmentThrottleTests(APITestCase):
@@ -2599,6 +2666,8 @@ class FicheEnrichmentTests(APITestCase):
             reference_externe_id="abc-123",
         )
         self.url = reverse("cuvee-fiche", args=[self.cuvee.pk])
+        # L'enrichissement paresseux n'a lieu que pour un compte connecté.
+        self.client.force_authenticate(User.objects.create_user("lecteur", password="x"))
 
     @patch("apps.catalog.views.wineapi_detail")
     def test_fiche_enrichie_par_wineapi(self, mock_detail):
@@ -2870,7 +2939,20 @@ class FicheDepuisBaseTests(APITestCase):
         self.assertEqual(resp.data["cuvee"]["classification"], "Grand Cru Classé")
 
     @patch("apps.catalog.views.wineapi_detail")
+    def test_anonyme_ne_declenche_pas_d_enrichissement(self, mock_detail):
+        """La fiche est publique, mais un visiteur ne consomme pas le quota wineapi."""
+        neuf = Cuvee.objects.create(
+            domaine=self.domaine, nom="Neuf", couleur="ROUGE", reference_externe_id="w9"
+        )
+        resp = self.client.get(reverse("cuvee-fiche", args=[neuf.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_detail.assert_not_called()
+        neuf.refresh_from_db()
+        self.assertIsNone(neuf.enrichi_le)
+
+    @patch("apps.catalog.views.wineapi_detail")
     def test_enrichissement_paresseux_au_premier_acces(self, mock_detail):
+        self.client.force_authenticate(User.objects.create_user("lecteur", password="x"))
         neuf = Cuvee.objects.create(
             domaine=self.domaine, nom="Neuf", couleur="ROUGE", reference_externe_id="w9"
         )
@@ -2899,9 +2981,37 @@ class CatalogueSuppressionPermissionTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
         self.assertTrue(Cuvee.objects.filter(pk=self.cuvee.pk).exists())
 
-    def test_utilisateur_lambda_peut_toujours_editer_le_catalogue(self):
-        # L'écriture (catalogue communautaire) reste ouverte aux authentifiés.
+    def test_utilisateur_lambda_ne_peut_pas_modifier_une_entree_partagee(self):
+        # Réécrire une cuvée existante change la fiche de tous : staff seulement.
         self.client.force_authenticate(User.objects.create_user("alice", password="x"))
+        for methode in (self.client.patch, self.client.put):
+            with self.subTest(methode=methode.__name__):
+                resp = methode(
+                    reverse("cuvee-detail", args=[self.cuvee.pk]),
+                    {"appellation": "Médoc", "nom": "Autre", "domaine": self.domaine.pk},
+                )
+                self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        resp = self.client.patch(
+            reverse("domaine-detail", args=[self.domaine.pk]), {"nom": "Renommé"}
+        )
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.appellation, "")
+
+    def test_utilisateur_lambda_peut_toujours_creer(self):
+        # La saisie manuelle d'un vin inconnu crée domaine + cuvée : reste ouverte.
+        self.client.force_authenticate(User.objects.create_user("alice", password="x"))
+        resp = self.client.post(reverse("domaine-list"), {"nom": "Domaine Neuf"})
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        resp = self.client.post(
+            reverse("cuvee-list"),
+            {"domaine": resp.data["id"], "nom": "Cuvée Neuve", "couleur": "BLANC"},
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+
+    def test_staff_peut_editer_le_catalogue(self):
+        staff = User.objects.create_user("admin", password="x", is_staff=True)
+        self.client.force_authenticate(staff)
         resp = self.client.patch(
             reverse("cuvee-detail", args=[self.cuvee.pk]), {"appellation": "Médoc"}
         )

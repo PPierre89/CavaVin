@@ -1,6 +1,7 @@
 from django.urls import reverse
 from rest_framework import serializers
 
+from .enrichment.image import format_reel
 from .enrichment.normalize import normaliser_nom
 from .models import Cepage, Cuvee, Domaine
 
@@ -62,6 +63,12 @@ class ScanEtiquetteSerializer(serializers.Serializer):
             raise serializers.ValidationError("Image trop lourde (10 Mo maximum).")
         if (f.content_type or "").lower() not in self.CONTENT_TYPES:
             raise serializers.ValidationError("Format non supporté (JPEG ou PNG attendu).")
+        # Le content_type et l'extension sont déclarés par le client : seul le
+        # contenu fait foi. Un TIFF ou un BMP renommé en .jpg est refusé ici,
+        # avant d'atteindre Pillow, Tesseract ou une API de vision.
+        if format_reel(f.read()) is None:
+            raise serializers.ValidationError("Fichier illisible : ce n'est pas une image JPEG ou PNG.")
+        f.seek(0)
         return f
 
 

@@ -19,6 +19,7 @@ from django.conf import settings
 from django.db import connection
 from django.utils import timezone
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 from django.db.models import Count, Sum
 from rest_framework import serializers, status, viewsets
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -129,6 +130,31 @@ class UtilisateurSerializer(serializers.ModelSerializer):
         ]
 
 
+class CreationUtilisateurSerializer(serializers.ModelSerializer):
+    """Création d'un compte par le staff (l'inscription publique étant fermée par défaut)."""
+
+    password = serializers.CharField(write_only=True, validators=[validate_password])
+
+    class Meta:
+        model = User
+        fields = ["username", "email", "password", "is_staff"]
+        extra_kwargs = {"email": {"required": False}, "is_staff": {"required": False}}
+
+    def validate_username(self, value):
+        # Même règle que l'inscription : unicité insensible à la casse.
+        if User.objects.filter(username__iexact=value).exists():
+            raise serializers.ValidationError("Un compte existe déjà avec cet identifiant.")
+        return value
+
+    def create(self, validated_data):
+        return User.objects.create_user(
+            username=validated_data["username"],
+            email=validated_data.get("email", ""),
+            password=validated_data["password"],
+            is_staff=validated_data.get("is_staff", False),
+        )
+
+
 class UtilisateurViewSet(viewsets.ModelViewSet):
     """Gestion des comptes utilisateurs (staff uniquement).
 
@@ -139,8 +165,9 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
 
     permission_classes = [IsAdminUser]
     serializer_class = UtilisateurSerializer
-    # Pas de création de compte ici (elle passe par l'inscription publique).
-    http_method_names = ["get", "patch", "delete", "head", "options"]
+    # Création possible ici : c'est le chemin normal quand l'inscription
+    # publique est fermée (DJANGO_INSCRIPTION_OUVERTE, défaut False).
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
     search_fields = ["username", "email"]
     ordering_fields = ["date_joined", "username", "last_login"]
 
@@ -150,6 +177,21 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
             nb_caves=Count("caves", distinct=True),
             nb_degustations=Count("degustations", distinct=True),
         ).order_by("-date_joined")
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return CreationUtilisateurSerializer
+        return UtilisateurSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if serializer.validated_data.get("is_staff") and not request.user.is_superuser:
+            raise PermissionDenied("Seul un super-utilisateur peut créer un compte staff.")
+        user = serializer.save()
+        # Réponse au format de la liste (compteurs à zéro pour un compte neuf).
+        cree = self.get_queryset().get(pk=user.pk)
+        return Response(UtilisateurSerializer(cree).data, status=status.HTTP_201_CREATED)
 
     def _verifier_cible(self, instance):
         """Refuse les actions dangereuses : sur soi-même, ou sur un super-utilisateur

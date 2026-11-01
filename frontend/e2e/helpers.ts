@@ -111,6 +111,8 @@ function defaultRoutes(): Record<string, unknown> {
   return {
     'POST /api/auth/token/': { access: TOKEN, refresh: 'r' },
     'POST /api/auth/register/': { access: TOKEN, refresh: 'r', username: 'tester' },
+    // Inscription en libre-service : fermée par défaut, comme le serveur.
+    'GET /api/auth/register/': { ouverte: false },
     'GET /api/auth/me/': { username: 'tester', is_staff: false, is_superuser: false },
     'GET /api/caves/': [CAVE],
     'GET /api/emplacements/': [EMPLACEMENT],

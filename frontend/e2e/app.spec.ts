@@ -520,3 +520,66 @@ test("le panneau d'administration est réservé au staff et liste les comptes", 
   await expect(page.getByText('bob', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Promouvoir staff' })).toBeVisible()
 })
+
+test("inscription fermée (défaut) : l'écran de connexion ne propose pas de créer un compte", async ({
+  page,
+}) => {
+  await mockApi(page)
+  await page.goto('/')
+
+  await expect(page.getByRole('heading', { name: 'Connexion' })).toBeVisible()
+  await expect(page.getByText("Demandez-en un à l'administrateur")).toBeVisible()
+  await expect(page.getByText('Créer un compte')).toHaveCount(0)
+})
+
+test("inscription ouverte : le lien « Créer un compte » mène au formulaire", async ({ page }) => {
+  await mockApi(page, { 'GET /api/auth/register/': { ouverte: true } })
+  await page.goto('/')
+
+  await page.getByText('Créer un compte').click()
+  await expect(page.getByRole('heading', { name: 'Créer un compte' })).toBeVisible()
+  await expect(page.getByPlaceholder('E-mail (facultatif)')).toBeVisible()
+})
+
+test("le staff crée un compte depuis le panneau d'administration", async ({ page }) => {
+  await seedAuth(page)
+  let envoye: unknown = null
+  await mockApi(page, {
+    'GET /api/auth/me/': { username: 'tester', is_staff: true, is_superuser: true },
+    'GET /api/admin-panel/apercu/': {
+      utilisateurs: { total: 1, actifs: 1, staff: 1 },
+      catalogue: { domaines: 0, cepages: 0, cuvees: 0, references_lwin: 0 },
+      stock: { lignes: 0, unites: 0, caves: 0, emplacements: 0 },
+      activite: { notes_degustation: 0, mouvements: 0 },
+      systeme: { version: '1.2.3', debug: false, providers: [] },
+    },
+    'GET /api/admin-panel/configuration/': { parametres: [] },
+    'GET /api/admin-panel/sources/': { sources: [] },
+    'GET /api/admin-panel/utilisateurs/': [],
+  })
+  // Route plus spécifique enregistrée après mockApi : elle passe en premier.
+  await page.route('**/api/admin-panel/utilisateurs/', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    envoye = route.request().postDataJSON()
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 9, username: 'claire', email: '', is_active: true, is_staff: false,
+        is_superuser: false, date_joined: '2026-11-01T10:00:00Z', last_login: null,
+        nb_bouteilles: 0, nb_caves: 0, nb_degustations: 0,
+      }),
+    })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Mon compte' }).click()
+  await page.getByRole('button', { name: "Panneau d'administration" }).click()
+
+  await page.getByLabel('Identifiant du nouveau compte').fill('claire')
+  await page.getByLabel('Mot de passe initial').fill('un-mot-de-passe-costaud')
+  await page.getByRole('button', { name: 'Créer le compte' }).click()
+
+  await expect(page.getByText('Compte « claire » créé.')).toBeVisible()
+  await expect(page.getByText('claire', { exact: true })).toBeVisible()
+  expect(envoye).toEqual({ username: 'claire', email: '', password: 'un-mot-de-passe-costaud' })
+})

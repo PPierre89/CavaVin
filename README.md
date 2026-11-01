@@ -52,18 +52,22 @@ d'identification multi-sources. Version détaillée (fiches de synthèse) :
 ## Démarrage rapide (Docker)
 
 ```bash
-cp .env.example .env      # renseignez au moins DJANGO_SECRET_KEY (et ANTHROPIC_API_KEY si dispo)
+cp .env.example .env      # renseignez DJANGO_SECRET_KEY (obligatoire) et ANTHROPIC_API_KEY si dispo
 docker compose up         # tire ghcr.io/ppierre89/cavavin:latest — aucun build local
 ```
 
 L'app est sur http://localhost:8000/. Le conteneur applique les migrations et sert les statiques
-tout seul. Créez un compte : `docker compose exec app python manage.py createsuperuser` (ou via
-l'écran d'inscription).
+tout seul. Créez le compte administrateur : `docker compose exec app python manage.py createsuperuser`
+(ou `DJANGO_SUPERUSER_*` dans `.env`). L'inscription en libre-service est **fermée par défaut** :
+l'administrateur crée les autres comptes depuis le panneau d'administration, ou rouvre l'inscription
+avec `DJANGO_INSCRIPTION_OUVERTE=True`.
 
 ## Développement local
 
 ```bash
-# Backend — Django sur :8000
+# Backend — Django sur :8000 (DEBUG doit être activé explicitement en local :
+# hors DEBUG, l'app exige une vraie DJANGO_SECRET_KEY)
+export DJANGO_DEBUG=True
 cd backend && pip install -r requirements.txt
 python manage.py migrate && python manage.py runserver
 
@@ -329,7 +333,7 @@ vin distinct.
 
 Trois workflows GitHub Actions sur chaque PR vers `main` et sur `main` :
 
-- **`ci.yml`** — tests Django + couverture (seuil 85 %, ~92 % actuel), lint + build front, E2E
+- **`ci.yml`** — tests Django + couverture (seuil 85 %, ~89 % actuel), lint + build front, E2E
   Playwright (API mockée).
 - **`release.yml`** — [semantic-release](https://semantic-release.gitbook.io/) : la version découle
   des **commits conventionnels** (`feat` → mineur, `fix`/`refactor` → patch, `BREAKING CHANGE` →
@@ -350,7 +354,12 @@ L'image est publiée automatiquement ; le NAS n'a besoin que de `docker-compose.
 **Mises à jour** : `docker compose pull && docker compose up -d`.
 
 > Sert du HTTP simple (accès LAN). Pour une exposition Internet, terminez le TLS via un reverse
-> proxy et activez `SECURE_SSL_REDIRECT` / `*_COOKIE_SECURE` dans `settings.py`.
+> proxy et mettez `DJANGO_TRUST_PROXY_SSL=True` (cookies sécurisés, et identification des clients
+> par l'en-tête `X-Forwarded-For` du proxy : `DJANGO_NUM_PROXIES`, 1 par défaut dans ce cas).
+
+**Sécurité au démarrage** : hors `DJANGO_DEBUG=True`, l'app refuse de démarrer si
+`DJANGO_SECRET_KEY` est absente ou vaut une valeur d'exemple publique. Le cache (limites anti-abus,
+cooldowns, quotas) est un cache fichier dans `data/cache/`, partagé par les workers gunicorn.
 
 ## Roadmap
 

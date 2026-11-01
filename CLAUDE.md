@@ -104,9 +104,10 @@ cp .env.example .env && docker compose up   # single all-in-one container on :80
 
 ### Privacy split (RGPD) — enforce this in every change
 Data is split into two strict tiers; keep them separate:
-- **Shared reference data** (`catalog`: Domaine, Cepage, Cuvee) — world-readable, writable by any
-  authenticated user. This is the community-fed "mutualised" catalog. Permission:
-  `IsAuthenticatedOrReadOnly`.
+- **Shared reference data** (`catalog`: Domaine, Cepage, Cuvee) — world-readable; any
+  authenticated user may **create** entries (manual entry, identification), but **modifying or
+  deleting** an existing entry is staff-only, since it changes the fiche for everyone. This is the
+  community-fed "mutualised" catalog. Permission: `catalog.permissions.LectureOuEcritureSansSuppression`.
 - **Private data** (`cellars` + `inventory`: Cave, Emplacement, Bouteille, MouvementStock,
   NoteDegustation) — strictly partitioned per owner. **Every private viewset filters its queryset
   by `request.user`** and returns `.none()` for anonymous users. When adding a private endpoint,
@@ -126,7 +127,26 @@ Data is split into two strict tiers; keep them separate:
 ### Authentication
 Two mechanisms coexist: **JWT** (`/api/auth/token/`, `refresh`, `verify`; 60 min access / 7 day
 refresh; used by the SPA via `Authorization: Bearer`) and **Session** (Django admin login, reused
-by Swagger's Authorize). Registration: `/api/auth/register/`.
+by Swagger's Authorize). Registration: `/api/auth/register/` — **closed by default**
+(`settings.INSCRIPTION_OUVERTE` ← `DJANGO_INSCRIPTION_OUVERTE`); `GET` on it tells the login screen
+whether to offer sign-up, and staff create accounts via `POST /api/admin-panel/utilisateurs/`
+(creating a *staff* account requires a superuser).
+
+### Startup & request-identity guards (security)
+- **No `DEBUG` without asking**: `DJANGO_DEBUG` defaults to `False`. Outside DEBUG, `settings.py`
+  raises `ImproperlyConfigured` if `DJANGO_SECRET_KEY` is empty or one of the public example values
+  (`_CLES_PUBLIQUES`, `django-insecure*`) — a known key lets anyone forge a staff JWT. CI generates
+  a throwaway key; local dev sets `DJANGO_DEBUG=True`.
+- **Throttle identity**: `REST_FRAMEWORK["NUM_PROXIES"]` comes from `DJANGO_NUM_PROXIES` (default
+  1 behind `DJANGO_TRUST_PROXY_SSL`, else 0). Never leave it unset: DRF would then trust a
+  client-supplied `X-Forwarded-For` and every throttle becomes bypassable.
+- **Shared cache**: in the container (`SQLITE_PATH` set) the cache is file-based in `<data>/cache`
+  so throttles, cooldowns, quotas and `runtime_config` overrides are shared by all gunicorn
+  workers; LocMem elsewhere (dev, tests).
+- **Images are decoded as JPEG/PNG only**: always go through `enrichment.image.ouvrir` (never a bare
+  `Image.open`), and the upload serializer checks the *content* with `format_reel`, not the
+  declared `content_type`.
+- The fiche's lazy wineapi enrichment only runs for authenticated users (the fiche is public).
 
 ### Pure business logic (keep it DB-free and tested)
 Three modules hold the domain rules as pure functions — no DB access, unit-tested directly:

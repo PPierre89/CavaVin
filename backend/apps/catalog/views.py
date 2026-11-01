@@ -375,10 +375,15 @@ class CuveeViewSet(viewsets.ModelViewSet):
         """Fiche vin consolidée, lue depuis les données persistées (aucun appel
         réseau). Premier accès à un vin jamais enrichi : enrichissement paresseux
         unique depuis wineapi (cache), pour bénéficier des données sans attendre
-        une synchro manuelle."""
+        une synchro manuelle.
+
+        L'enrichissement paresseux est réservé aux comptes connectés : la fiche
+        est publique, et un visiteur anonyme pourrait sinon parcourir les cuvées
+        jamais enrichies pour consommer le quota wineapi de l'instance.
+        """
         cuvee = self.get_object()
         reference = identifiant_wineapi(cuvee)
-        if reference and cuvee.enrichi_le is None:
+        if reference and cuvee.enrichi_le is None and request.user.is_authenticated:
             detail = wineapi_detail(reference)
             if detail:
                 synchroniser_wineapi(cuvee, detail)
