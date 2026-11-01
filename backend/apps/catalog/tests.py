@@ -2666,6 +2666,8 @@ class FicheEnrichmentTests(APITestCase):
             reference_externe_id="abc-123",
         )
         self.url = reverse("cuvee-fiche", args=[self.cuvee.pk])
+        # L'enrichissement paresseux n'a lieu que pour un compte connecté.
+        self.client.force_authenticate(User.objects.create_user("lecteur", password="x"))
 
     @patch("apps.catalog.views.wineapi_detail")
     def test_fiche_enrichie_par_wineapi(self, mock_detail):
@@ -2937,7 +2939,20 @@ class FicheDepuisBaseTests(APITestCase):
         self.assertEqual(resp.data["cuvee"]["classification"], "Grand Cru Classé")
 
     @patch("apps.catalog.views.wineapi_detail")
+    def test_anonyme_ne_declenche_pas_d_enrichissement(self, mock_detail):
+        """La fiche est publique, mais un visiteur ne consomme pas le quota wineapi."""
+        neuf = Cuvee.objects.create(
+            domaine=self.domaine, nom="Neuf", couleur="ROUGE", reference_externe_id="w9"
+        )
+        resp = self.client.get(reverse("cuvee-fiche", args=[neuf.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_detail.assert_not_called()
+        neuf.refresh_from_db()
+        self.assertIsNone(neuf.enrichi_le)
+
+    @patch("apps.catalog.views.wineapi_detail")
     def test_enrichissement_paresseux_au_premier_acces(self, mock_detail):
+        self.client.force_authenticate(User.objects.create_user("lecteur", password="x"))
         neuf = Cuvee.objects.create(
             domaine=self.domaine, nom="Neuf", couleur="ROUGE", reference_externe_id="w9"
         )
@@ -2966,9 +2981,37 @@ class CatalogueSuppressionPermissionTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
         self.assertTrue(Cuvee.objects.filter(pk=self.cuvee.pk).exists())
 
-    def test_utilisateur_lambda_peut_toujours_editer_le_catalogue(self):
-        # L'écriture (catalogue communautaire) reste ouverte aux authentifiés.
+    def test_utilisateur_lambda_ne_peut_pas_modifier_une_entree_partagee(self):
+        # Réécrire une cuvée existante change la fiche de tous : staff seulement.
         self.client.force_authenticate(User.objects.create_user("alice", password="x"))
+        for methode in (self.client.patch, self.client.put):
+            with self.subTest(methode=methode.__name__):
+                resp = methode(
+                    reverse("cuvee-detail", args=[self.cuvee.pk]),
+                    {"appellation": "Médoc", "nom": "Autre", "domaine": self.domaine.pk},
+                )
+                self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        resp = self.client.patch(
+            reverse("domaine-detail", args=[self.domaine.pk]), {"nom": "Renommé"}
+        )
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.cuvee.refresh_from_db()
+        self.assertEqual(self.cuvee.appellation, "")
+
+    def test_utilisateur_lambda_peut_toujours_creer(self):
+        # La saisie manuelle d'un vin inconnu crée domaine + cuvée : reste ouverte.
+        self.client.force_authenticate(User.objects.create_user("alice", password="x"))
+        resp = self.client.post(reverse("domaine-list"), {"nom": "Domaine Neuf"})
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        resp = self.client.post(
+            reverse("cuvee-list"),
+            {"domaine": resp.data["id"], "nom": "Cuvée Neuve", "couleur": "BLANC"},
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+
+    def test_staff_peut_editer_le_catalogue(self):
+        staff = User.objects.create_user("admin", password="x", is_staff=True)
+        self.client.force_authenticate(staff)
         resp = self.client.patch(
             reverse("cuvee-detail", args=[self.cuvee.pk]), {"appellation": "Médoc"}
         )
