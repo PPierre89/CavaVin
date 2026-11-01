@@ -11,18 +11,34 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR.parent / ".env")
 
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-dev-key-change-me")
+DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
 
-DEBUG = os.getenv("DJANGO_DEBUG", "True") == "True"
+# Clé de développement : utilisée uniquement quand DEBUG=True et qu'aucune clé
+# n'est fournie (runserver local, sans .env).
+_CLE_DEV = "django-insecure-dev-key-change-me"
+# Valeurs d'exemple publiées dans le dépôt (docker-compose.yml, .env.example,
+# anciennes versions) : connues de tous, donc équivalentes à aucune clé.
+_CLES_PUBLIQUES = {
+    _CLE_DEV,
+    "change-me-please-generate-a-real-secret",
+    "change-me-in-production",
+    "change-me",
+}
 
-# Garde-fou : la clé de dev ne doit jamais tourner en production (signature des
-# sessions/tokens prévisible). On avertit sans bloquer le démarrage.
-if not DEBUG and SECRET_KEY == "django-insecure-dev-key-change-me":
-    import logging
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "").strip() or (_CLE_DEV if DEBUG else "")
 
-    logging.getLogger(__name__).warning(
-        "DJANGO_SECRET_KEY n'est pas définie : la clé de développement est utilisée "
-        "en production. Définis une vraie valeur dans .env."
+# Garde-fou bloquant : SECRET_KEY signe les JWT. Une clé connue permet de
+# forger un jeton pour n'importe quel compte, staff compris — le serveur refuse
+# donc de démarrer plutôt que de tourner exposé.
+if not DEBUG and (
+    not SECRET_KEY or SECRET_KEY in _CLES_PUBLIQUES or SECRET_KEY.startswith("django-insecure")
+):
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY est absente ou vaut une valeur d'exemple publique. Générez-en "
+        "une dans .env : python -c \"import secrets; print(secrets.token_urlsafe(50))\" "
+        "(ou DJANGO_DEBUG=True pour le développement local)."
     )
 
 ALLOWED_HOSTS = [
@@ -40,7 +56,11 @@ CSRF_TRUSTED_ORIGINS = [
 # Derrière un reverse proxy qui termine le TLS, se fier à l'en-tête X-Forwarded-Proto
 # pour que Django sache que la requête d'origine est en HTTPS. Activer via
 # DJANGO_TRUST_PROXY_SSL=True.
-if os.getenv("DJANGO_TRUST_PROXY_SSL", "False") == "True":
+_DERRIERE_PROXY = os.getenv("DJANGO_TRUST_PROXY_SSL", "False") == "True"
+# Derrière un proxy TLS, un proxy par défaut ; surchargeable (chaîne CDN + proxy…).
+_NUM_PROXIES = int(os.getenv("DJANGO_NUM_PROXIES") or (1 if _DERRIERE_PROXY else 0))
+
+if _DERRIERE_PROXY:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     # L'accès se fait alors en HTTPS : on n'expose plus les cookies sensibles
     # (session admin, jeton CSRF) sur une éventuelle connexion en clair.
@@ -199,6 +219,12 @@ REST_FRAMEWORK = {
         # (BasicAuthentication retirée : inutilisée, et enverrait les identifiants
         # en clair à chaque requête sur un déploiement LAN en HTTP.)
     ],
+    # Nombre de reverse proxies de confiance devant l'app. Les throttles
+    # identifient le client par son IP : sans ce réglage, DRF prend l'en-tête
+    # X-Forwarded-For *tel que fourni par le client*, qui peut donc en changer à
+    # chaque requête et échapper à toute limite (brute-force du login compris).
+    # 0 = accès direct (IP de la socket) ; 1 = un proxy (UGREEN, nginx…).
+    "NUM_PROXIES": _NUM_PROXIES,
     # Limite les endpoints qui consomment le quota wineapi / Open Food Facts
     # (scan code-barres, identification texte, scan d'étiquette).
     "DEFAULT_THROTTLE_RATES": {
@@ -209,6 +235,33 @@ REST_FRAMEWORK = {
         "recherche": "120/min",
     },
 }
+
+# Cache partagé entre les workers gunicorn. Le cache par défaut de Django
+# (LocMemCache) vit dans chaque process : avec 3 workers, chaque throttle, le
+# cooldown de synchro wineapi et les quotas valaient en pratique ×3, et une clé
+# d'API modifiée dans le panneau d'admin restait périmée dans les autres workers.
+# Un cache fichier dans le volume de données est partagé sans service en plus.
+# En conteneur, il suit la base SQLite ; ailleurs (dev, tests), mémoire locale.
+_CACHE_DIR = os.getenv("DJANGO_CACHE_DIR") or (
+    str(Path(_sqlite).parent / "cache") if _sqlite else ""
+)
+CACHES = {
+    "default": (
+        {
+            "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+            "LOCATION": _CACHE_DIR,
+            "OPTIONS": {"MAX_ENTRIES": 5000},
+        }
+        if _CACHE_DIR
+        else {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
+    )
+}
+
+# Inscription en libre-service. Fermée par défaut : un compte peut modifier le
+# catalogue mutualisé et déclenche des identifications payantes (clé Claude de
+# l'instance). Le staff crée les comptes depuis le panneau d'administration ;
+# DJANGO_INSCRIPTION_OUVERTE=True rouvre l'écran d'inscription.
+INSCRIPTION_OUVERTE = os.getenv("DJANGO_INSCRIPTION_OUVERTE", "False") == "True"
 
 # Version de l'app : source de vérité unique = le tag de release (semver),
 # injecté par la CI dans l'environnement (APP_VERSION) et baké dans l'image

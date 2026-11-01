@@ -39,6 +39,11 @@ jobs:
       # Pas de POSTGRES_HOST -> Django bascule sur SQLite (voir config/settings.py),
       # aucun service externe requis. WINEAPI_KEY vide -> provider wineapi désactivé.
       # La config de couverture (source, omit, seuil) vient de backend/.coveragerc.
+      # Hors DEBUG, le serveur refuse de démarrer sans vraie SECRET_KEY : on en
+      # génère une jetable pour le job.
+      - name: Generate throwaway SECRET_KEY
+        run: echo "DJANGO_SECRET_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(50))')" >> "$GITHUB_ENV"
+
       - name: Run tests with coverage
         run: coverage run manage.py test --verbosity=2
 

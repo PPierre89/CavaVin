@@ -24,8 +24,10 @@ class WineapiTimeoutInvariantTests(SimpleTestCase):
         self.assertLess(settings.WINEAPI_IMAGE_TIMEOUT, 30)
 
 
+@override_settings(INSCRIPTION_OUVERTE=True)
 class RegisterViewTests(APITestCase):
-    """POST /api/auth/register/ : création de compte + tokens JWT immédiats."""
+    """POST /api/auth/register/ : création de compte + tokens JWT immédiats
+    (instance dont l'inscription est ouverte)."""
 
     def setUp(self):
         cache.clear()  # compteur de throttle "auth"
@@ -62,6 +64,105 @@ class RegisterViewTests(APITestCase):
         resp = self.client.post(self.url, {"username": "alice", "password": "123"})
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertNotIn("access", resp.data)
+
+
+class InscriptionFermeeTests(APITestCase):
+    """Par défaut, l'inscription en libre-service est fermée."""
+
+    def setUp(self):
+        cache.clear()
+        self.url = reverse("register")
+
+    def test_fermee_par_defaut(self):
+        self.assertFalse(settings.INSCRIPTION_OUVERTE)
+
+    def test_post_refuse_403(self):
+        resp = self.client.post(
+            self.url, {"username": "bob", "password": "un-mot-de-passe-costaud"}
+        )
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(User.objects.filter(username="bob").exists())
+
+    def test_get_expose_l_etat(self):
+        self.assertEqual(self.client.get(self.url).data, {"ouverte": False})
+        with override_settings(INSCRIPTION_OUVERTE=True):
+            self.assertEqual(self.client.get(self.url).data, {"ouverte": True})
+
+    @patch.dict(
+        "rest_framework.throttling.SimpleRateThrottle.THROTTLE_RATES", {"auth": "1/min"}
+    )
+    def test_get_ne_consomme_pas_le_throttle_auth(self):
+        for _ in range(3):
+            self.assertEqual(self.client.get(self.url).status_code, status.HTTP_200_OK)
+
+
+class DemarrageSecuriseTests(SimpleTestCase):
+    """Hors DEBUG, le serveur refuse de démarrer avec une SECRET_KEY absente ou publique.
+
+    Le réglage est évalué à l'import de ``config.settings`` : on le vérifie dans
+    un process séparé, avec un environnement contrôlé (sans .env)."""
+
+    def _demarrer(self, **env):
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        racine = Path(settings.BASE_DIR)
+        environnement = {
+            k: v for k, v in os.environ.items() if not k.startswith("DJANGO_")
+        }
+        environnement.update(env)
+        # Sans .env : load_dotenv ne surcharge rien, mais on isole quand même le
+        # process en le lançant hors du dépôt avec le backend en PYTHONPATH.
+        environnement["PYTHONPATH"] = str(racine)
+        environnement["DJANGO_SETTINGS_MODULE"] = "config.settings"
+        return subprocess.run(
+            [sys.executable, "-c", "import django; django.setup()"],
+            env=environnement, cwd=str(racine), capture_output=True, text=True, timeout=60,
+        )
+
+    def test_cle_absente_refusee(self):
+        res = self._demarrer(DJANGO_DEBUG="False", DJANGO_SECRET_KEY="")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("DJANGO_SECRET_KEY", res.stderr)
+
+    def test_cles_d_exemple_refusees(self):
+        for cle in (
+            "change-me-please-generate-a-real-secret",
+            "change-me-in-production",
+            "django-insecure-dev-key-change-me",
+            "django-insecure-abc",
+        ):
+            with self.subTest(cle=cle):
+                res = self._demarrer(DJANGO_DEBUG="False", DJANGO_SECRET_KEY=cle)
+                self.assertNotEqual(res.returncode, 0)
+
+    def test_vraie_cle_acceptee(self):
+        res = self._demarrer(DJANGO_DEBUG="False", DJANGO_SECRET_KEY="x" * 20 + "une-vraie-cle-aleatoire-0123456789")
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_debug_sans_cle_accepte(self):
+        res = self._demarrer(DJANGO_DEBUG="True")
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+
+class ReglagesProxyCacheTests(SimpleTestCase):
+    def test_x_forwarded_for_ignore_par_defaut(self):
+        """Accès direct : l'identité du throttle est l'IP de la socket, pas
+        l'en-tête X-Forwarded-For que le client choisit librement."""
+        from rest_framework.test import APIRequestFactory
+        from rest_framework.throttling import ScopedRateThrottle
+        from rest_framework.views import APIView
+
+        factory = APIRequestFactory()
+        ids = set()
+        for faux in ("1.1.1.1", "2.2.2.2"):
+            requete = APIView().initialize_request(
+                factory.get("/", HTTP_X_FORWARDED_FOR=faux, REMOTE_ADDR="10.0.0.5")
+            )
+            ids.add(ScopedRateThrottle().get_ident(requete))
+        self.assertEqual(ids, {"10.0.0.5"})
 
 
 class LoginThrottleTests(APITestCase):
@@ -220,10 +321,58 @@ class AdminUtilisateurTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(User.objects.filter(pk=self.cible.pk).exists())
 
-    def test_pas_de_creation_de_compte(self):
+    def test_staff_cree_un_compte(self):
         self.client.force_authenticate(user=self.staff)
-        resp = self.client.post(self.liste, {"username": "nouveau", "password": "x"})
-        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        resp = self.client.post(
+            self.liste,
+            {"username": "nouveau", "email": "n@example.com", "password": "un-mot-de-passe-costaud"},
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp.data["username"], "nouveau")
+        self.assertEqual(resp.data["nb_bouteilles"], 0)
+        self.assertNotIn("password", resp.data)
+        cree = User.objects.get(username="nouveau")
+        self.assertTrue(cree.check_password("un-mot-de-passe-costaud"))
+        self.assertFalse(cree.is_staff)
+
+    def test_creation_refuse_un_mot_de_passe_faible(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.post(self.liste, {"username": "nouveau", "password": "123"})
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(username="nouveau").exists())
+
+    def test_creation_refuse_un_doublon_de_casse(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.post(
+            self.liste, {"username": "CIBLE", "password": "un-mot-de-passe-costaud"}
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_staff_simple_ne_cree_pas_de_compte_staff(self):
+        self.client.force_authenticate(user=self.staff)
+        resp = self.client.post(
+            self.liste,
+            {"username": "adjoint", "password": "un-mot-de-passe-costaud", "is_staff": True},
+        )
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(User.objects.filter(username="adjoint").exists())
+
+    def test_superuser_cree_un_compte_staff(self):
+        boss = User.objects.create_superuser(username="boss", password="x")
+        self.client.force_authenticate(user=boss)
+        resp = self.client.post(
+            self.liste,
+            {"username": "adjoint", "password": "un-mot-de-passe-costaud", "is_staff": True},
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(User.objects.get(username="adjoint").is_staff)
+
+    def test_non_staff_ne_cree_pas_de_compte(self):
+        self.client.force_authenticate(user=self.cible)
+        resp = self.client.post(
+            self.liste, {"username": "intrus", "password": "un-mot-de-passe-costaud"}
+        )
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class AdminConfigurationTests(APITestCase):

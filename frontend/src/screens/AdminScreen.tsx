@@ -485,6 +485,82 @@ function ChargerCatalogue({ onCharge }: { onCharge: () => void }) {
   )
 }
 
+/** Création d'un compte par le staff — le chemin normal quand l'inscription
+ *  publique est fermée (réglage serveur DJANGO_INSCRIPTION_OUVERTE). */
+function NouveauCompte({ onCree }: { onCree: (u: Utilisateur) => void }) {
+  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [enCours, setEnCours] = useState(false)
+  const [message, setMessage] = useState<{ ok: boolean; texte: string } | null>(null)
+
+  const creer = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (enCours) return
+    setEnCours(true)
+    setMessage(null)
+    try {
+      const u = await api<Utilisateur>('POST', '/api/admin-panel/utilisateurs/', {
+        username: username.trim(),
+        email: email.trim(),
+        password,
+      })
+      onCree(u)
+      setMessage({ ok: true, texte: `Compte « ${u.username} » créé. Transmettez-lui son mot de passe.` })
+      setUsername('')
+      setEmail('')
+      setPassword('')
+    } catch (err) {
+      setMessage({ ok: false, texte: errMsg(err, 'Création impossible.') })
+    } finally {
+      setEnCours(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardTitle>Nouveau compte</CardTitle>
+      <form onSubmit={creer}>
+        <input
+          className={inputCls}
+          placeholder="Identifiant"
+          aria-label="Identifiant du nouveau compte"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          required
+        />
+        <input
+          className={`${inputCls} mt-2.5`}
+          type="email"
+          placeholder="E-mail (facultatif)"
+          aria-label="E-mail du nouveau compte"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <input
+          className={`${inputCls} mt-2.5`}
+          type="password"
+          placeholder="Mot de passe initial"
+          aria-label="Mot de passe initial"
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+        />
+        <button className={`${primaryCls} disabled:opacity-40`} disabled={enCours}>
+          {enCours ? 'Création…' : 'Créer le compte'}
+        </button>
+      </form>
+      {message && (
+        <p className={`text-sm mt-2.5 ${message.ok ? 'text-gold' : 'text-alerte'}`}>{message.texte}</p>
+      )}
+    </Card>
+  )
+}
+
 export default function AdminScreen() {
   const { username } = useAuth()
   const [apercu, setApercu] = useState<Apercu | null>(null)
@@ -644,6 +720,13 @@ export default function AdminScreen() {
           />
 
           <ChargerCatalogue onCharge={rafraichirApercu} />
+
+          <NouveauCompte
+            onCree={(u) => {
+              setUsers((prev) => [u, ...prev])
+              rafraichirApercu()
+            }}
+          />
 
           <Card>
             <CardTitle>Utilisateurs</CardTitle>

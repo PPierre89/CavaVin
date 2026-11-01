@@ -1,6 +1,8 @@
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
-from rest_framework import generics, permissions, serializers
+from rest_framework import generics, permissions, serializers, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -69,13 +71,36 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class RegisterView(generics.CreateAPIView):
+    """Inscription en libre-service, soumise à ``settings.INSCRIPTION_OUVERTE``.
+
+    Fermée par défaut : un compte peut écrire dans le catalogue mutualisé et
+    déclenche des identifications facturées sur la clé de l'instance. Le staff
+    crée alors les comptes depuis le panneau d'administration. ``GET`` indique
+    à l'écran de connexion s'il doit proposer l'inscription.
+    """
+
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
     # Limite les tentatives de création de compte (anti-abus).
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "auth"
 
+    def get_throttles(self):
+        # La simple lecture de l'état (affichage de l'écran de connexion) ne
+        # consomme pas le budget anti-brute-force du scope « auth ».
+        if self.request.method == "GET":
+            return []
+        return super().get_throttles()
+
+    def get(self, request, *args, **kwargs):
+        return Response({"ouverte": settings.INSCRIPTION_OUVERTE})
+
     def create(self, request, *args, **kwargs):
+        if not settings.INSCRIPTION_OUVERTE:
+            raise PermissionDenied(
+                "Les inscriptions sont fermées sur cette instance : demandez un compte "
+                "à son administrateur."
+            )
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
@@ -86,5 +111,5 @@ class RegisterView(generics.CreateAPIView):
                 "access": str(refresh.access_token),
                 "refresh": str(refresh),
             },
-            status=201,
+            status=status.HTTP_201_CREATED,
         )

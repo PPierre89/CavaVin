@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useAuth } from '../auth'
-import { errMsg } from '../api'
+import { api, errMsg } from '../api'
 import { useToast } from '../toast'
 import { Logo, inputCls, primaryCls } from '../ui'
 import { APP_VERSION } from '../version'
@@ -13,6 +13,20 @@ export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
+  // L'inscription en libre-service est fermée par défaut côté serveur
+  // (DJANGO_INSCRIPTION_OUVERTE) : on ne propose le formulaire que si elle est
+  // ouverte. En cas d'erreur, on reste prudent et on ne la propose pas.
+  const [inscriptionOuverte, setInscriptionOuverte] = useState(false)
+
+  useEffect(() => {
+    let actif = true
+    api<{ ouverte?: boolean }>('GET', '/api/auth/register/')
+      .then((r) => actif && setInscriptionOuverte(!!r?.ouverte))
+      .catch(() => {})
+    return () => {
+      actif = false
+    }
+  }, [])
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -86,6 +100,11 @@ export default function Login() {
           {busy ? '…' : mode === 'login' ? 'Entrer' : 'Créer mon compte'}
         </button>
 
+        {!inscriptionOuverte && mode === 'login' ? (
+          <p className="w-full mt-3.5 text-sm text-muted text-center">
+            Pas encore de compte ? Demandez-en un à l'administrateur de cette cave.
+          </p>
+        ) : (
         <button
           type="button"
           className="w-full mt-3.5 text-sm text-muted"
@@ -101,6 +120,7 @@ export default function Login() {
             </>
           )}
         </button>
+        )}
       </form>
 
       <div className="text-[0.62rem] text-muted/60 mt-6 tabular-nums">v{APP_VERSION}</div>
